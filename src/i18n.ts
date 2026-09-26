@@ -22,8 +22,10 @@ export const en = {
 	"setting-server-url": "Model server URL",
 	"setting-server-url-desc":
 		"Address of the OpenAI-compatible model server, including the /v1 suffix.",
+	"setting-server-url-placeholder": "http://localhost:1234/v1",
 	"setting-api-key": "API key",
 	"setting-api-key-desc": "Optional. Sent as a Bearer token when set.",
+	"setting-api-key-placeholder": "sk-…",
 	"setting-model": "Model",
 	"setting-model-desc": "Name of the model to chat with.",
 	"setting-model-placeholder": "gpt-4o-mini",
@@ -43,8 +45,10 @@ export const ru = {
 	"setting-server-url": "Адрес модель-сервера",
 	"setting-server-url-desc":
 		"Адрес OpenAI-совместимого модель-сервера, включая суффикс /v1.",
+	"setting-server-url-placeholder": "http://localhost:1234/v1",
 	"setting-api-key": "API-ключ",
 	"setting-api-key-desc": "Необязательно. Отправляется как Bearer-токен, если задан.",
+	"setting-api-key-placeholder": "sk-…",
 	"setting-model": "Модель",
 	"setting-model-desc": "Название модели, с которой ведётся чат.",
 	"setting-model-placeholder": "gpt-4o-mini",
@@ -52,9 +56,7 @@ export const ru = {
 
 export type LocaleKey = keyof typeof en;
 
-type Dict = Record<LocaleKey, string>;
-
-const dictionaries: Record<Locale, Dict> = { en: en as Dict, ru: ru as Dict };
+const dictionaries: Record<Locale, Record<LocaleKey, string>> = { en, ru };
 
 let current: Locale = DEFAULT_LOCALE;
 

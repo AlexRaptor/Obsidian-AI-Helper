@@ -2,8 +2,30 @@
 	padding: 8px;
 }
 
-.ai-helper-view .view-header .view-header-icon {
-	display: none;
+.ai-helper-messages {
+	flex: 1;
+	overflow-y: auto;
+	margin-bottom: 8px;
+}
+
+.ai-helper-message {
+	margin: 6px 0;
+}
+
+.ai-helper-message-user {
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.ai-helper-message-model {
+	padding: 6px 8px;
+	border-radius: 6px;
+}
+
+.ai-helper-thinking {
+	opacity: 0.7;
+	font-style: italic;
 }
 
 .ai-helper-input-row {

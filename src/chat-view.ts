@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, MarkdownRenderer, Component } from "obsidian";
+import { ItemView, WorkspaceLeaf } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { LocaleKey } from "./i18n";
 
@@ -34,7 +34,7 @@ export class ChatView extends ItemView {
 			cls: "ai-helper-header",
 			attr: { style: "display:flex;justify-content:space-between;align-items:center;" },
 		});
-		header.createSpan({ text: this.t("view-title") });
+		header.createSpan({ cls: "ai-helper-header-title", text: this.t("view-title") });
 
 		const clearBtn = header.createEl("button", {
 			cls: "ai-helper-clear-btn",
@@ -55,15 +55,17 @@ export class ChatView extends ItemView {
 		});
 
 		this.inputEl = input;
-
-		const submit = () => this.handleSend();
-		sendBtn.addEventListener("click", submit);
+		sendBtn.addEventListener("click", () => this.handleSend());
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
-				submit();
+				this.handleSend();
 			}
 		});
+	}
+
+	async refreshLocale(): Promise<void> {
+		await this.onOpen();
 	}
 
 	private clearConversation(): void {
@@ -73,6 +75,7 @@ export class ChatView extends ItemView {
 	private async handleSend(): Promise<void> {
 		const text = this.inputEl?.value.trim() ?? "";
 		if (!text) return;
+		this.inputEl!.value = "";
 
 		const messagesEl = this.contentEl.querySelector(".ai-helper-messages");
 		if (!messagesEl) return;
@@ -81,12 +84,9 @@ export class ChatView extends ItemView {
 			cls: "ai-helper-message ai-helper-message-user",
 			text,
 		});
-
-		this.inputEl!.value = "";
-
-		const thinking = messagesEl.createEl("div", {
-			cls: "ai-helper-message ai-helper-message-model",
+		messagesEl.createEl("div", {
+			cls: "ai-helper-message ai-helper-message-model ai-helper-thinking",
+			text: this.t("thinking"),
 		});
-		thinking.createSpan({ cls: "ai-helper-thinking", text: this.t("thinking") });
 	}
 }

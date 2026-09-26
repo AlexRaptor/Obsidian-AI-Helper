@@ -40,8 +40,13 @@ export class AiHelperPlugin extends Plugin {
 		return t(key);
 	}
 
-	refreshLocale(): void {
+	async refreshLocale(): Promise<void> {
 		this.applyLanguage();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+			if (leaf.view instanceof ChatView) {
+				await leaf.view.refreshLocale();
+			}
+		}
 	}
 
 	applyLanguage(): void {
@@ -55,8 +60,6 @@ export class AiHelperPlugin extends Plugin {
 			await workspace.revealLeaf(existing);
 			return;
 		}
-		const leaf = workspace.getLeaf("tab");
-		await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
-		await workspace.revealLeaf(leaf);
+		await workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
 	}
 }

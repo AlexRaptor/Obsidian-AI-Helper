@@ -1,23 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { en, ru, LOCALES, LocaleKey, setLanguage, t } from "../src/i18n";
+import { en, ru, LOCALES, type LocaleKey, setLanguage, t } from "../src/i18n";
 
 describe("locale completeness", () => {
-	it("resolves every dictionary key in every locale", () => {
-		const dictionaries = { en, ru };
-		for (const [code, dict] of Object.entries(dictionaries)) {
-			for (const key of Object.keys(dict) as LocaleKey[]) {
-				expect(dict[key], `${code}/${key}`).toBeTypeOf("string");
-				expect(dict[key]!.length, `${code}/${key}`).toBeGreaterThan(0);
-			}
+	it("has the same set of keys in every locale", () => {
+		for (const locale of LOCALES) {
+			const dict = locale === "en" ? en : ru;
+			expect(Object.keys(dict).sort()).toEqual(Object.keys(en).sort());
 		}
 	});
 
-	it("resolves every key at runtime through t() in every locale", () => {
+	it("resolves every key in every locale with a non-empty value", () => {
 		for (const locale of LOCALES) {
 			setLanguage(locale);
 			for (const key of Object.keys(en) as LocaleKey[]) {
 				expect(t(key), `${locale}/${key}`).toBeTypeOf("string");
-				expect(t(key)!.length, `${locale}/${key}`).toBeGreaterThan(0);
+				expect((t(key) ?? "").length, `${locale}/${key}`).toBeGreaterThan(0);
 			}
 		}
 	});

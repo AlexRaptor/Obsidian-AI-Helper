@@ -58,7 +58,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			.setDesc(this.t("setting-server-url-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder("http://localhost:1234/v1")
+					.setPlaceholder(this.t("setting-server-url-placeholder"))
 					.setValue(this.plugin.settings.serverUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.serverUrl = value.trim();
@@ -71,7 +71,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			.setDesc(this.t("setting-api-key-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder("sk-...")
+					.setPlaceholder(this.t("setting-api-key-placeholder"))
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.apiKey = value.trim();
