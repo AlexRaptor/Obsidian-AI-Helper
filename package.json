@@ -1,0 +1,31 @@
+{
+	"name": "obsidian-ai-helper",
+	"version": "0.1.0",
+	"description": "A chat with an LLM in your Obsidian vault, served by any OpenAI-compatible model server.",
+	"main": "main.js",
+	"types": "src/main.d.ts",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production && node version-bump.mjs",
+		"version-bump": "node version-bump.mjs",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"keywords": [
+		"obsidian",
+		"obsidian-plugin",
+		"ai",
+		"llm"
+	],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "0.21.5",
+		"obsidian": "latest",
+		"tslib": "2.6.2",
+		"typescript": "5.4.5",
+		"vitest": "^1.6.0"
+	}
+}

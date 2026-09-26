@@ -1,0 +1,71 @@
+export type Locale = "en" | "ru";
+
+export const LOCALES: readonly Locale[] = ["en", "ru"];
+export const DEFAULT_LOCALE: Locale = "en";
+
+export const LOCALE_NAMES: Record<Locale, string> = {
+	en: "English",
+	ru: "Русский",
+};
+
+export const en = {
+	"view-title": "AI Helper",
+	"command": "Toggle AI Helper chat",
+	"ribbon": "Toggle AI Helper chat",
+	"input-placeholder": "Ask the model…",
+	"send": "Send",
+	"thinking": "Thinking…",
+	"clear-conversation": "Clear",
+	"settings-title": "Obsidian AI Helper",
+	"setting-language": "Language",
+	"setting-language-desc": "Interface language.",
+	"setting-server-url": "Model server URL",
+	"setting-server-url-desc":
+		"Address of the OpenAI-compatible model server, including the /v1 suffix.",
+	"setting-api-key": "API key",
+	"setting-api-key-desc": "Optional. Sent as a Bearer token when set.",
+	"setting-model": "Model",
+	"setting-model-desc": "Name of the model to chat with.",
+	"setting-model-placeholder": "gpt-4o-mini",
+} as const;
+
+export const ru = {
+	"view-title": "AI-ассистент",
+	"command": "Показать/скрыть чат с ИИ",
+	"ribbon": "Показать/скрыть чат с ИИ",
+	"input-placeholder": "Спросите модель…",
+	"send": "Отправить",
+	"thinking": "Думаю…",
+	"clear-conversation": "Очистить",
+	"settings-title": "Obsidian AI Helper",
+	"setting-language": "Язык",
+	"setting-language-desc": "Язык интерфейса.",
+	"setting-server-url": "Адрес модель-сервера",
+	"setting-server-url-desc":
+		"Адрес OpenAI-совместимого модель-сервера, включая суффикс /v1.",
+	"setting-api-key": "API-ключ",
+	"setting-api-key-desc": "Необязательно. Отправляется как Bearer-токен, если задан.",
+	"setting-model": "Модель",
+	"setting-model-desc": "Название модели, с которой ведётся чат.",
+	"setting-model-placeholder": "gpt-4o-mini",
+} as const;
+
+export type LocaleKey = keyof typeof en;
+
+type Dict = Record<LocaleKey, string>;
+
+const dictionaries: Record<Locale, Dict> = { en: en as Dict, ru: ru as Dict };
+
+let current: Locale = DEFAULT_LOCALE;
+
+export function setLanguage(locale: Locale): void {
+	current = LOCALES.includes(locale) ? locale : DEFAULT_LOCALE;
+}
+
+export function getLanguage(): Locale {
+	return current;
+}
+
+export function t(key: LocaleKey): string {
+	return dictionaries[current][key];
+}

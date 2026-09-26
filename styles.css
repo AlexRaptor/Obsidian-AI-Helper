@@ -1,0 +1,18 @@
+.ai-helper {
+	padding: 8px;
+}
+
+.ai-helper-view .view-header .view-header-icon {
+	display: none;
+}
+
+.ai-helper-input-row {
+	display: flex;
+	gap: 8px;
+}
+
+.ai-helper-input-row textarea {
+	flex: 1;
+	resize: none;
+	font-family: inherit;
+}
