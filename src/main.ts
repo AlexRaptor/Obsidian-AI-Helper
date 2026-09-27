@@ -63,3 +63,5 @@ export class AiHelperPlugin extends Plugin {
 		await workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
 	}
 }
+
+export default AiHelperPlugin;
