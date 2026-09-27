@@ -27,8 +27,6 @@ export type ModelStatus = "idle" | "loaded" | "empty" | "error";
 export class AiHelperSettingsTab extends PluginSettingTab {
 	plugin: AiHelperPlugin;
 
-	private modelsEl: HTMLDivElement | null = null;
-
 	constructor(app: App, plugin: AiHelperPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
@@ -41,7 +39,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		this.modelsEl = null;
 
 		const title = containerEl.createEl("h2", { text: this.t("settings-title") });
 		title.addClass("ai-helper-settings-title");
@@ -74,6 +71,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.serverUrl = value.trim();
 						await this.plugin.saveSettings();
+						await this.refreshModels();
 					});
 			});
 
@@ -93,7 +91,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const modelSetting = new Setting(containerEl)
 			.setName(this.t("setting-model"))
 			.setDesc(this.t("setting-model-desc"));
-		this.modelsEl = modelSetting.controlEl.createDiv({ cls: "ai-helper-models" });
 		this.renderModels(modelSetting);
 
 		new Setting(containerEl)
@@ -103,19 +100,18 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				button
 					.setButtonText(this.t("setting-refresh-models"))
 					.onClick(async () => {
-						button.setDisabled(true);
-						await this.plugin.refreshModels();
-						button.setDisabled(false);
-						this.renderModels(modelSetting);
+						await this.refreshModels();
 					});
 			});
 	}
 
+	private async refreshModels(): Promise<void> {
+		await this.plugin.refreshModels();
+		this.display();
+	}
+
 	private renderModels(modelSetting: Setting): void {
-		if (!this.modelsEl) return;
-		this.modelsEl.empty();
 		modelSetting.controlEl.empty();
-		this.modelsEl = modelSetting.controlEl.createDiv({ cls: "ai-helper-models" });
 
 		const { models, modelStatus } = this.plugin;
 		const selected = this.plugin.settings.model;
@@ -125,13 +121,11 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				for (const id of models) {
 					dropdown.addOption(id, id);
 				}
-				if (selected && !models.includes(selected)) {
-					dropdown.addOption(selected, selected);
-				}
 				dropdown
 					.setValue(selected)
 					.onChange(async (value: string) => {
-						await this.plugin.saveModel(value);
+						this.plugin.settings.model = value;
+						await this.plugin.saveSettings();
 					});
 			});
 		} else {
@@ -140,7 +134,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.setPlaceholder(this.t("setting-model-placeholder"))
 					.setValue(selected)
 					.onChange(async (value) => {
-						await this.plugin.saveModel(value.trim());
+						this.plugin.settings.model = value.trim();
+						await this.plugin.saveSettings();
 					});
 			});
 

@@ -48,11 +48,6 @@ export class AiHelperPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	async saveModel(model: string): Promise<void> {
-		this.settings.model = model;
-		await this.saveSettings();
-	}
-
 	async refreshModels(): Promise<void> {
 		const url = this.settings.serverUrl.trim();
 		if (!url) {
@@ -61,10 +56,7 @@ export class AiHelperPlugin extends Plugin {
 			return;
 		}
 
-		const result = await this.serverClient.listModels({
-			serverUrl: url,
-			apiKey: this.settings.apiKey,
-		});
+		const result = await this.serverClient.listModels(url, this.settings.apiKey);
 
 		if (result.ok) {
 			this.models = result.value;
