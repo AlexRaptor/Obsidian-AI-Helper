@@ -1,14 +1,26 @@
 import { Plugin } from "obsidian";
-import { AiHelperSettings, DEFAULT_SETTINGS, AiHelperSettingsTab } from "./settings";
+import {
+	AiHelperSettings,
+	DEFAULT_SETTINGS,
+	AiHelperSettingsTab,
+	type ModelStatus,
+} from "./settings";
 import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
+import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
 
 export class AiHelperPlugin extends Plugin {
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
+	models: string[] = [];
+	modelStatus: ModelStatus = "idle";
+	serverClient: ServerClient = createServerClient(
+		(input, init) => globalThis.fetch(input, init)
+	);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.applyLanguage();
+		await this.refreshModels();
 
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
@@ -34,6 +46,33 @@ export class AiHelperPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	async saveModel(model: string): Promise<void> {
+		this.settings.model = model;
+		await this.saveSettings();
+	}
+
+	async refreshModels(): Promise<void> {
+		const url = this.settings.serverUrl.trim();
+		if (!url) {
+			this.models = [];
+			this.modelStatus = "idle";
+			return;
+		}
+
+		const result = await this.serverClient.listModels({
+			serverUrl: url,
+			apiKey: this.settings.apiKey,
+		});
+
+		if (result.ok) {
+			this.models = result.value;
+			this.modelStatus = result.value.length > 0 ? "loaded" : "empty";
+		} else {
+			this.models = [];
+			this.modelStatus = "error";
+		}
 	}
 
 	t(key: LocaleKey): string {

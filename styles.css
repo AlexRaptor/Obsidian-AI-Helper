@@ -38,3 +38,9 @@
 	resize: none;
 	font-family: inherit;
 }
+
+.ai-helper-models-hint {
+	margin-top: 6px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}

@@ -29,6 +29,12 @@ export const en = {
 	"setting-model": "Model",
 	"setting-model-desc": "Name of the model to chat with.",
 	"setting-model-placeholder": "gpt-4o-mini",
+	"setting-refresh-models": "Refresh models",
+	"setting-refresh-models-desc": "Fetch the model list from the model server.",
+	"setting-models-load-error":
+		"Could not fetch the model list. Enter the model name manually.",
+	"setting-models-empty":
+		"The server returned no models. Enter the model name manually.",
 } as const;
 
 export const ru = {
@@ -52,6 +58,12 @@ export const ru = {
 	"setting-model": "Модель",
 	"setting-model-desc": "Название модели, с которой ведётся чат.",
 	"setting-model-placeholder": "gpt-4o-mini",
+	"setting-refresh-models": "Обновить список моделей",
+	"setting-refresh-models-desc": "Загрузить список моделей с модель-сервера.",
+	"setting-models-load-error":
+		"Не удалось получить список моделей. Введите название модели вручную.",
+	"setting-models-empty":
+		"Сервер не отдал список моделей. Введите название модели вручную.",
 } as const;
 
 export type LocaleKey = keyof typeof en;
