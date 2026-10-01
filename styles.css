@@ -44,3 +44,7 @@
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
 }
+
+.ai-helper-models-hint-error {
+	color: var(--text-error);
+}

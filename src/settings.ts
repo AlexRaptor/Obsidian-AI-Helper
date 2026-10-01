@@ -144,7 +144,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					modelStatus === "empty" ? "setting-models-empty" : "setting-models-load-error"
 				);
 				modelSetting.controlEl.createDiv({
-					cls: "ai-helper-models-hint",
+					cls: `ai-helper-models-hint ai-helper-models-hint-${modelStatus}`,
 					text: desc,
 				});
 			}
