@@ -43,9 +43,17 @@ export const en = {
 	"setting-generation-desc":
 		"Optional. Leave blank to use the server's defaults.",
 	"setting-temperature": "Temperature",
+	"setting-temperature-desc": "Sampling randomness. Lower is more deterministic.",
+	"setting-temperature-placeholder": "0.7",
 	"setting-max-tokens": "Max tokens",
+	"setting-max-tokens-desc": "Maximum length of the answer, in tokens.",
+	"setting-max-tokens-placeholder": "1024",
 	"setting-top-p": "Top P",
+	"setting-top-p-desc": "Nucleus sampling: only consider tokens within this probability mass.",
+	"setting-top-p-placeholder": "0.9",
 	"chat-error-prefix": "Request failed",
+	"chat-invalid-params":
+		"Generation parameters must be numbers. The request was sent without them.",
 } as const;
 
 export const ru = {
@@ -83,9 +91,17 @@ export const ru = {
 	"setting-generation-desc":
 		"Необязательно. Оставьте пустым, чтобы использовать значения по умолчанию сервера.",
 	"setting-temperature": "Температура",
+	"setting-temperature-desc": "Случайность выборки. Ниже — более детерминированно.",
+	"setting-temperature-placeholder": "0.7",
 	"setting-max-tokens": "Макс. токенов",
+	"setting-max-tokens-desc": "Максимальная длина ответа в токенах.",
+	"setting-max-tokens-placeholder": "1024",
 	"setting-top-p": "Top P",
+	"setting-top-p-desc": "Nucleus-выборка: учитывать токены только в пределах этой массы вероятности.",
+	"setting-top-p-placeholder": "0.9",
 	"chat-error-prefix": "Ошибка запроса",
+	"chat-invalid-params":
+		"Параметры генерации должны быть числами. Запрос отправлен без них.",
 } as const;
 
 export type LocaleKey = keyof typeof en;

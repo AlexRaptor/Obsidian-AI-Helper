@@ -161,6 +161,22 @@ describe("server client: chat", () => {
 		expect(body).not.toHaveProperty("top_p");
 	});
 
+	it("returns an error naming non-numeric params instead of sending the request", async () => {
+		const fetchImpl = makeFetch(async () => ok("hi"));
+		const client = createServerClient(fetchImpl);
+
+		const result = await client.chat("http://s", "m", [{ role: "user", content: "q" }], {
+			temperature: "abc",
+			topP: "0.5",
+		});
+
+		expect(fetchImpl).not.toHaveBeenCalled();
+		expect(result).toEqual({
+			ok: false,
+			error: { message: "Invalid generation parameters: temperature" },
+		});
+	});
+
 	it("sends an Authorization header only when the key is set", async () => {
 		const fetchImpl = makeFetch(async () => ok("hi"));
 		const client = createServerClient(fetchImpl);

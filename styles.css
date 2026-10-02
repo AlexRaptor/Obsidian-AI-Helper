@@ -35,7 +35,8 @@
 	border-radius: 6px;
 }
 
-.ai-helper-message-thinking {
+.ai-helper-message-thinking,
+.ai-helper-thinking {
 	opacity: 0.7;
 	font-style: italic;
 }

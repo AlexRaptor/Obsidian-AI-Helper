@@ -65,10 +65,18 @@ async function readErrorMessage(response: Response): Promise<string> {
 	return message;
 }
 
-function numericParam(raw: string | undefined): number | undefined {
+function numericParam(
+	raw: string | undefined,
+	invalid: string[],
+	name: string
+): number | undefined {
 	if (raw === undefined || raw.trim() === "") return undefined;
 	const value = Number(raw);
-	return Number.isFinite(value) ? value : undefined;
+	if (!Number.isFinite(value)) {
+		invalid.push(name);
+		return undefined;
+	}
+	return value;
 }
 
 export function createServerClient(fetchImpl: ClientFetch): ServerClient {
@@ -118,12 +126,22 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			stream: false,
 		};
 
-		const temperature = numericParam(params?.temperature);
+		const invalidParams: string[] = [];
+		const temperature = numericParam(params?.temperature, invalidParams, "temperature");
 		if (temperature !== undefined) body.temperature = temperature;
-		const maxTokens = numericParam(params?.maxTokens);
+		const maxTokens = numericParam(params?.maxTokens, invalidParams, "max_tokens");
 		if (maxTokens !== undefined) body.max_tokens = maxTokens;
-		const topP = numericParam(params?.topP);
+		const topP = numericParam(params?.topP, invalidParams, "top_p");
 		if (topP !== undefined) body.top_p = topP;
+
+		if (invalidParams.length > 0) {
+			return {
+				ok: false,
+				error: {
+					message: `Invalid generation parameters: ${invalidParams.join(", ")}`,
+				},
+			};
+		}
 
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json",

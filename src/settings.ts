@@ -131,9 +131,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName(this.t("setting-temperature"))
+			.setDesc(this.t("setting-temperature-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder("0.7")
+					.setPlaceholder(this.t("setting-temperature-placeholder"))
 					.setValue(this.plugin.settings.temperature)
 					.onChange(async (value) => {
 						this.plugin.settings.temperature = value.trim();
@@ -143,9 +144,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName(this.t("setting-max-tokens"))
+			.setDesc(this.t("setting-max-tokens-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder("1024")
+					.setPlaceholder(this.t("setting-max-tokens-placeholder"))
 					.setValue(this.plugin.settings.maxTokens)
 					.onChange(async (value) => {
 						this.plugin.settings.maxTokens = value.trim();
@@ -155,9 +157,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName(this.t("setting-top-p"))
+			.setDesc(this.t("setting-top-p-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder("0.9")
+					.setPlaceholder(this.t("setting-top-p-placeholder"))
 					.setValue(this.plugin.settings.topP)
 					.onChange(async (value) => {
 						this.plugin.settings.topP = value.trim();

@@ -112,16 +112,14 @@ export class ChatView extends ItemView {
 				}`,
 			});
 
-			if (message.kind === "text" || message.kind === "thinking") {
-				div.createSpan({ text: message.content });
-			} else {
+			if (message.kind === "error") {
 				const prefix = div.createSpan({ cls: "ai-helper-error-prefix" });
 				prefix.setText(this.t("chat-error-prefix"));
 				const detail = div.createSpan({ cls: "ai-helper-error-detail" });
 				detail.setText(message.content);
-			}
-
-			if (message.role === "model" && message.kind === "text") {
+			} else if (message.role !== "model" || message.kind === "thinking") {
+				div.createSpan({ text: message.content });
+			} else {
 				const body = div.createEl("div", { cls: "ai-helper-markdown" });
 				const component = new Component();
 				component.load();
