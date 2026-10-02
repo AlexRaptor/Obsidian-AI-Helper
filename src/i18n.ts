@@ -35,6 +35,17 @@ export const en = {
 		"Could not fetch the model list. Enter the model name manually.",
 	"setting-models-empty":
 		"The server returned no models. Enter the model name manually.",
+	"setting-system-prompt": "System prompt",
+	"setting-system-prompt-desc":
+		"Optional. Prepended to the conversation to steer the model.",
+	"setting-system-prompt-placeholder": "You are a helpful assistant.",
+	"setting-generation": "Generation parameters",
+	"setting-generation-desc":
+		"Optional. Leave blank to use the server's defaults.",
+	"setting-temperature": "Temperature",
+	"setting-max-tokens": "Max tokens",
+	"setting-top-p": "Top P",
+	"chat-error-prefix": "Request failed",
 } as const;
 
 export const ru = {
@@ -64,6 +75,17 @@ export const ru = {
 		"Не удалось получить список моделей. Введите название модели вручную.",
 	"setting-models-empty":
 		"Сервер не отдал список моделей. Введите название модели вручную.",
+	"setting-system-prompt": "System-промпт",
+	"setting-system-prompt-desc":
+		"Необязательно. Добавляется в начало диалога, чтобы управлять моделью.",
+	"setting-system-prompt-placeholder": "Ты — полезный ассистент.",
+	"setting-generation": "Параметры генерации",
+	"setting-generation-desc":
+		"Необязательно. Оставьте пустым, чтобы использовать значения по умолчанию сервера.",
+	"setting-temperature": "Температура",
+	"setting-max-tokens": "Макс. токенов",
+	"setting-top-p": "Top P",
+	"chat-error-prefix": "Ошибка запроса",
 } as const;
 
 export type LocaleKey = keyof typeof en;

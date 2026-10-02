@@ -12,6 +12,10 @@ export interface AiHelperSettings {
 	serverUrl: string;
 	apiKey: string;
 	model: string;
+	systemPrompt: string;
+	temperature: string;
+	maxTokens: string;
+	topP: string;
 	language: Locale;
 }
 
@@ -19,6 +23,10 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	serverUrl: "",
 	apiKey: "",
 	model: "",
+	systemPrompt: "",
+	temperature: "",
+	maxTokens: "",
+	topP: "",
 	language: "en",
 };
 
@@ -101,6 +109,59 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.setButtonText(this.t("setting-refresh-models"))
 					.onClick(async () => {
 						await this.refreshModels();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName(this.t("setting-system-prompt"))
+			.setDesc(this.t("setting-system-prompt-desc"))
+			.addTextArea((textarea) => {
+				textarea
+					.setPlaceholder(this.t("setting-system-prompt-placeholder"))
+					.setValue(this.plugin.settings.systemPrompt)
+					.onChange(async (value) => {
+						this.plugin.settings.systemPrompt = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName(this.t("setting-generation"))
+			.setDesc(this.t("setting-generation-desc"));
+
+		new Setting(containerEl)
+			.setName(this.t("setting-temperature"))
+			.addText((text) => {
+				text
+					.setPlaceholder("0.7")
+					.setValue(this.plugin.settings.temperature)
+					.onChange(async (value) => {
+						this.plugin.settings.temperature = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName(this.t("setting-max-tokens"))
+			.addText((text) => {
+				text
+					.setPlaceholder("1024")
+					.setValue(this.plugin.settings.maxTokens)
+					.onChange(async (value) => {
+						this.plugin.settings.maxTokens = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName(this.t("setting-top-p"))
+			.addText((text) => {
+				text
+					.setPlaceholder("0.9")
+					.setValue(this.plugin.settings.topP)
+					.onChange(async (value) => {
+						this.plugin.settings.topP = value.trim();
+						await this.plugin.saveSettings();
 					});
 			});
 	}
