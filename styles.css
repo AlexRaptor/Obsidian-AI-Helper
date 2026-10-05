@@ -1,8 +1,13 @@
 .ai-helper {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
 	padding: 8px;
+	box-sizing: border-box;
 }
 
 .ai-helper-header {
+	flex: 0 0 auto;
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
@@ -14,36 +19,48 @@
 }
 
 .ai-helper-messages {
-	flex: 1;
+	flex: 1 1 auto;
+	min-height: 0;
 	overflow-y: auto;
 	margin-bottom: 8px;
 }
 
 .ai-helper-message {
+	display: flex;
+	align-items: stretch;
 	margin: 6px 0;
 }
 
-.ai-helper-message-user {
+.ai-helper-message-branch {
+	flex: 0 0 3px;
+	width: 3px;
+	border-radius: 2px;
+	background: var(--text-muted);
+}
+
+.ai-helper-message-user .ai-helper-message-branch {
+	background: var(--interactive-accent);
+}
+
+.ai-helper-message-kind-error .ai-helper-message-branch {
+	background: var(--text-error);
+}
+
+.ai-helper-message-body {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin-left: 8px;
 	padding: 6px 8px;
 	border-radius: 6px;
-	background: var(--background-secondary);
 	white-space: pre-wrap;
+	word-wrap: break-word;
 }
 
-.ai-helper-message-model {
-	padding: 6px 8px;
-	border-radius: 6px;
+.ai-helper-message-user .ai-helper-message-body {
+	background: var(--background-secondary);
 }
 
-.ai-helper-message-thinking,
-.ai-helper-thinking {
-	opacity: 0.7;
-	font-style: italic;
-}
-
-.ai-helper-message-error {
-	padding: 6px 8px;
-	border-radius: 6px;
+.ai-helper-message-kind-error .ai-helper-message-body {
 	background: color-mix(in srgb, var(--background-modifier-error) 8%, var(--background));
 	color: var(--text-error);
 }
@@ -51,6 +68,28 @@
 .ai-helper-error-prefix {
 	font-weight: 600;
 	margin-right: 6px;
+}
+
+.ai-helper-thinking {
+	font-style: italic;
+	opacity: 0.7;
+	animation: ai-helper-thinking-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ai-helper-thinking-pulse {
+	0%,
+	100% {
+		opacity: 0.4;
+	}
+	50% {
+		opacity: 0.9;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ai-helper-thinking {
+		animation: none;
+	}
 }
 
 .ai-helper-markdown {
@@ -63,15 +102,18 @@
 
 .ai-helper-markdown pre {
 	overflow-x: auto;
+	border-radius: 6px;
 }
 
 .ai-helper-input-row {
+	flex: 0 0 auto;
 	display: flex;
 	gap: 8px;
 }
 
 .ai-helper-input-row textarea {
-	flex: 1;
+	flex: 1 1 auto;
+	min-width: 0;
 	resize: none;
 	font-family: inherit;
 }

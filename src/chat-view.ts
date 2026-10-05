@@ -14,6 +14,7 @@ export class ChatView extends ItemView {
 	private messagesEl: HTMLElement | null = null;
 	private inputEl: HTMLTextAreaElement | null = null;
 	private sendBtn: HTMLButtonElement | null = null;
+	private clearBtn: HTMLButtonElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
 	private markdownComponents: Component[] = [];
@@ -36,39 +37,8 @@ export class ChatView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
-		const container = this.contentEl;
-		container.empty();
-		container.addClass("ai-helper");
-
-		const header = container.createDiv({ cls: "ai-helper-header" });
-		header.createSpan({ cls: "ai-helper-header-title", text: this.t("view-title") });
-
-		const clearBtn = header.createEl("button", {
-			cls: "ai-helper-clear-btn",
-			text: this.t("clear-conversation"),
-		});
-		clearBtn.addEventListener("click", () => this.clearConversation());
-
-		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
-
-		const inputRow = container.createDiv({ cls: "ai-helper-input-row" });
-		this.inputEl = inputRow.createEl("textarea", {
-			cls: "ai-helper-input",
-			attr: { rows: "2", placeholder: this.t("input-placeholder") },
-		});
-		this.sendBtn = inputRow.createEl("button", {
-			cls: "ai-helper-send",
-			text: this.t("send"),
-		});
-
-		this.sendBtn.addEventListener("click", () => void this.handleSend());
-		this.inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter" && !e.shiftKey) {
-				e.preventDefault();
-				void this.handleSend();
-			}
-		});
-
+		this.buildStructure();
+		this.bindEvents();
 		this.setThinking(false);
 		await this.renderMessages();
 	}
@@ -87,6 +57,42 @@ export class ChatView extends ItemView {
 		void this.renderMessages();
 	}
 
+	private buildStructure(): void {
+		const container = this.contentEl;
+		container.empty();
+		container.addClass("ai-helper");
+
+		const header = container.createDiv({ cls: "ai-helper-header" });
+		header.createSpan({ cls: "ai-helper-header-title", text: this.t("view-title") });
+		this.clearBtn = header.createEl("button", {
+			cls: "ai-helper-clear-btn",
+			text: this.t("clear-conversation"),
+		});
+
+		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
+
+		const inputRow = container.createDiv({ cls: "ai-helper-input-row" });
+		this.inputEl = inputRow.createEl("textarea", {
+			cls: "ai-helper-input",
+			attr: { rows: "2", placeholder: this.t("input-placeholder") },
+		});
+		this.sendBtn = inputRow.createEl("button", {
+			cls: "ai-helper-send",
+			text: this.t("send"),
+		});
+	}
+
+	private bindEvents(): void {
+		this.clearBtn?.addEventListener("click", () => this.clearConversation());
+		this.sendBtn?.addEventListener("click", () => void this.handleSend());
+		this.inputEl?.addEventListener("keydown", (e) => {
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault();
+				void this.handleSend();
+			}
+		});
+	}
+
 	private toRequestMessages(): ChatMessage[] {
 		return this.conversation
 			.getMessages()
@@ -96,31 +102,41 @@ export class ChatView extends ItemView {
 			}));
 	}
 
-	private async renderMessages(): Promise<void> {
-		const el = this.messagesEl;
-		if (!el) return;
-		el.empty();
-		const md = this.markdownComponents.splice(0);
-		for (const child of md) {
+	private detachMarkdown(): void {
+		for (const child of this.markdownComponents.splice(0)) {
 			this.removeChild(child);
 		}
+	}
+
+	async renderMessages(): Promise<void> {
+		const el = this.messagesEl;
+		if (!el) return;
+		this.detachMarkdown();
+		el.empty();
 
 		for (const message of this.messages) {
 			const div = el.createEl("div", {
-				cls: `ai-helper-message ai-helper-message-${message.role}${
-					message.kind !== "text" ? ` ai-helper-message-${message.kind}` : ""
-				}`,
+				cls: `ai-helper-message ai-helper-message-${message.role}`,
 			});
+			div.addClass(`ai-helper-message-kind-${message.kind}`);
+
+			const branch = div.createEl("div", { cls: "ai-helper-message-branch" });
+			const body = div.createEl("div", { cls: "ai-helper-message-body" });
 
 			if (message.kind === "error") {
-				const prefix = div.createSpan({ cls: "ai-helper-error-prefix" });
+				branch.addClass("ai-helper-branch-error");
+				const prefix = body.createSpan({ cls: "ai-helper-error-prefix" });
 				prefix.setText(this.t("chat-error-prefix"));
-				const detail = div.createSpan({ cls: "ai-helper-error-detail" });
-				detail.setText(message.content);
+				body.createSpan({ text: ` ${message.content}` });
 			} else if (message.role !== "model" || message.kind === "thinking") {
-				div.createSpan({ text: message.content });
+				if (message.kind === "thinking") {
+					branch.addClass("ai-helper-branch-thinking");
+					body.createSpan({ cls: "ai-helper-thinking", text: message.content });
+				} else {
+					body.createSpan({ text: message.content });
+				}
 			} else {
-				const body = div.createEl("div", { cls: "ai-helper-markdown" });
+				const markdown = body.createEl("div", { cls: "ai-helper-markdown" });
 				const component = new Component();
 				component.load();
 				this.addChild(component);
@@ -129,12 +145,12 @@ export class ChatView extends ItemView {
 					await MarkdownRenderer.render(
 						this.app,
 						message.content,
-						body,
+						markdown,
 						"",
 						component
 					);
 				} catch {
-					body.createEl("pre", { text: message.content });
+					markdown.createEl("pre", { text: message.content });
 				}
 			}
 		}
