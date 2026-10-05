@@ -51,7 +51,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const title = containerEl.createEl("h2", { text: this.t("settings-title") });
 		title.addClass("ai-helper-settings-title");
 
-		new Setting(containerEl)
+		const general = this.createGroup(containerEl, "settings-group-general");
+		const server = this.createGroup(containerEl, "settings-group-connection");
+		const model = this.createGroup(containerEl, "settings-group-model");
+		const generation = this.createGroup(containerEl, "settings-group-generation");
+
+		new Setting(general)
 			.setName(this.t("setting-language"))
 			.setDesc(this.t("setting-language-desc"))
 			.addDropdown((dropdown) => {
@@ -69,7 +74,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
+		new Setting(server)
 			.setName(this.t("setting-server-url"))
 			.setDesc(this.t("setting-server-url-desc"))
 			.addText((text) => {
@@ -83,7 +88,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
+		new Setting(server)
 			.setName(this.t("setting-api-key"))
 			.setDesc(this.t("setting-api-key-desc"))
 			.addText((text) => {
@@ -96,12 +101,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		const modelSetting = new Setting(containerEl)
+		const modelSetting = new Setting(model)
 			.setName(this.t("setting-model"))
 			.setDesc(this.t("setting-model-desc"));
 		this.renderModels(modelSetting);
 
-		new Setting(containerEl)
+		new Setting(model)
 			.setName(this.t("setting-refresh-models"))
 			.setDesc(this.t("setting-refresh-models-desc"))
 			.addButton((button) => {
@@ -112,7 +117,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
+		new Setting(generation)
 			.setName(this.t("setting-system-prompt"))
 			.setDesc(this.t("setting-system-prompt-desc"))
 			.addTextArea((textarea) => {
@@ -125,11 +130,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
-			.setName(this.t("setting-generation"))
-			.setDesc(this.t("setting-generation-desc"));
-
-		new Setting(containerEl)
+		new Setting(generation)
 			.setName(this.t("setting-temperature"))
 			.setDesc(this.t("setting-temperature-desc"))
 			.addText((text) => {
@@ -142,7 +143,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
+		new Setting(generation)
 			.setName(this.t("setting-max-tokens"))
 			.setDesc(this.t("setting-max-tokens-desc"))
 			.addText((text) => {
@@ -155,7 +156,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
+		new Setting(generation)
 			.setName(this.t("setting-top-p"))
 			.setDesc(this.t("setting-top-p-desc"))
 			.addText((text) => {
@@ -167,6 +168,14 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+	}
+
+	private createGroup(parent: HTMLElement, headingKey: LocaleKey): HTMLElement {
+		const group = parent.createEl("div", { cls: "ai-helper-settings-group" });
+		group.createEl("h3", { text: this.t(headingKey) }).addClass(
+			"ai-helper-settings-group-heading"
+		);
+		return group;
 	}
 
 	private async refreshModels(): Promise<void> {

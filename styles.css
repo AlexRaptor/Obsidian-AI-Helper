@@ -118,6 +118,23 @@
 	font-family: inherit;
 }
 
+.ai-helper-settings-group {
+	margin: 16px 0;
+}
+
+.ai-helper-settings-group:first-of-type {
+	margin-top: 8px;
+}
+
+.ai-helper-settings-group-heading {
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+	margin: 0 0 8px;
+}
+
 .ai-helper-models-hint {
 	margin-top: 6px;
 	font-size: var(--font-ui-small);

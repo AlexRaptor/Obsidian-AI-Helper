@@ -17,6 +17,10 @@ export const en = {
 	"thinking": "Thinking…",
 	"clear-conversation": "Clear conversation",
 	"settings-title": "Obsidian AI Helper",
+	"settings-group-general": "General",
+	"settings-group-connection": "Model server",
+	"settings-group-model": "Model",
+	"settings-group-generation": "Generation parameters",
 	"setting-language": "Language",
 	"setting-language-desc": "Interface language.",
 	"setting-server-url": "Model server URL",
@@ -39,9 +43,6 @@ export const en = {
 	"setting-system-prompt-desc":
 		"Optional. Prepended to the conversation to steer the model.",
 	"setting-system-prompt-placeholder": "You are a helpful assistant.",
-	"setting-generation": "Generation parameters",
-	"setting-generation-desc":
-		"Optional. Leave blank to use the server's defaults.",
 	"setting-temperature": "Temperature",
 	"setting-temperature-desc": "Sampling randomness. Lower is more deterministic.",
 	"setting-temperature-placeholder": "0.7",
@@ -65,6 +66,10 @@ export const ru = {
 	"thinking": "Думаю…",
 	"clear-conversation": "Очистить диалог",
 	"settings-title": "Obsidian AI Helper",
+	"settings-group-general": "Общие",
+	"settings-group-connection": "Модель-сервер",
+	"settings-group-model": "Модель",
+	"settings-group-generation": "Параметры генерации",
 	"setting-language": "Язык",
 	"setting-language-desc": "Язык интерфейса.",
 	"setting-server-url": "Адрес модель-сервера",
@@ -87,9 +92,6 @@ export const ru = {
 	"setting-system-prompt-desc":
 		"Необязательно. Добавляется в начало диалога, чтобы управлять моделью.",
 	"setting-system-prompt-placeholder": "Ты — полезный ассистент.",
-	"setting-generation": "Параметры генерации",
-	"setting-generation-desc":
-		"Необязательно. Оставьте пустым, чтобы использовать значения по умолчанию сервера.",
 	"setting-temperature": "Температура",
 	"setting-temperature-desc": "Случайность выборки. Ниже — более детерминированно.",
 	"setting-temperature-placeholder": "0.7",
