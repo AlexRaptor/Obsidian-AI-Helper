@@ -52,9 +52,15 @@ export const en = {
 	"setting-top-p": "Top P",
 	"setting-top-p-desc": "Nucleus sampling: only consider tokens within this probability mass.",
 	"setting-top-p-placeholder": "0.9",
+	"setting-context-window": "Context window",
+	"setting-context-window-desc":
+		"Model context window size, in tokens. Used for the usage indicator in the chat header. Leave empty if unknown.",
+	"setting-context-window-placeholder": "254000",
 	"chat-error-prefix": "Request failed",
 	"chat-invalid-params":
 		"Generation parameters must be numbers. The request was sent without them.",
+	"header-context": "Context window",
+	"header-context-empty": "0 / 0 tokens",
 } as const;
 
 export const ru = {
@@ -101,9 +107,15 @@ export const ru = {
 	"setting-top-p": "Top P",
 	"setting-top-p-desc": "Nucleus-выборка: учитывать токены только в пределах этой массы вероятности.",
 	"setting-top-p-placeholder": "0.9",
+	"setting-context-window": "Окно контекста",
+	"setting-context-window-desc":
+		"Размер окна контекста модели в токенах. Используется для индикатора заполнения в шапке чата. Оставьте пустым, если неизвестно.",
+	"setting-context-window-placeholder": "254000",
 	"chat-error-prefix": "Ошибка запроса",
 	"chat-invalid-params":
 		"Параметры генерации должны быть числами. Запрос отправлен без них.",
+	"header-context": "Окно контекста",
+	"header-context-empty": "0 / 0 токенов",
 } as const;
 
 export type LocaleKey = keyof typeof en;

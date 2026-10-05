@@ -11,11 +11,38 @@
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	gap: 8px;
 	margin-bottom: 8px;
 }
 
 .ai-helper-header-title {
 	font-weight: 600;
+	white-space: nowrap;
+}
+
+.ai-helper-context-bar {
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+}
+
+.ai-helper-context-bar-fill {
+	height: 100%;
+	width: 0;
+	border-radius: 3px;
+	background: var(--interactive-accent);
+	transition: width 200ms ease;
+}
+
+.ai-helper-context-label {
+	flex: 0 0 auto;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 .ai-helper-messages {

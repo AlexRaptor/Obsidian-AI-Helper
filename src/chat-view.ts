@@ -6,12 +6,19 @@ import type { ChatMessage } from "./server-client";
 
 export const VIEW_TYPE_CHAT = "ai-helper-chat";
 
+function formatNumber(value: number): string {
+	return value.toLocaleString("en-US");
+}
+
 type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error" };
 
 export class ChatView extends ItemView {
 	plugin: AiHelperPlugin;
 	conversation = new Conversation();
 	private messagesEl: HTMLElement | null = null;
+	private headerTitleEl: HTMLElement | null = null;
+	private contextBarEl: HTMLElement | null = null;
+	private contextLabelEl: HTMLElement | null = null;
 	private inputEl: HTMLTextAreaElement | null = null;
 	private sendBtn: HTMLButtonElement | null = null;
 	private clearBtn: HTMLButtonElement | null = null;
@@ -36,10 +43,36 @@ export class ChatView extends ItemView {
 		return this.plugin.t(key);
 	}
 
+	updateContextIndicators(): void {
+		const used = this.conversation.getTokensUsed();
+		const raw = this.plugin.settings.contextWindow;
+		const limit = raw ? Number(raw) : NaN;
+
+		if (this.contextLabelEl) {
+			if (!Number.isFinite(limit) || limit <= 0) {
+				this.contextLabelEl.setText(this.t("header-context-empty"));
+			} else {
+				const pct = Math.min(100, Math.round((used / limit) * 100));
+				this.contextLabelEl.setText(
+					`${pct}% - ${formatNumber(used)} / ${formatNumber(limit)}`
+				);
+			}
+		}
+
+		if (this.contextBarEl) {
+			const fill =
+				Number.isFinite(limit) && limit > 0
+					? Math.min(100, (used / limit) * 100)
+					: 0;
+			this.contextBarEl.style.width = `${fill}%`;
+		}
+	}
+
 	async onOpen(): Promise<void> {
 		this.buildStructure();
 		this.bindEvents();
 		this.setThinking(false);
+		this.updateContextIndicators();
 		await this.renderMessages();
 	}
 
@@ -54,6 +87,7 @@ export class ChatView extends ItemView {
 	clearConversation(): void {
 		this.conversation.clear();
 		this.messages = [];
+		this.updateContextIndicators();
 		void this.renderMessages();
 	}
 
@@ -63,7 +97,13 @@ export class ChatView extends ItemView {
 		container.addClass("ai-helper");
 
 		const header = container.createDiv({ cls: "ai-helper-header" });
-		header.createSpan({ cls: "ai-helper-header-title", text: this.t("view-title") });
+		this.headerTitleEl = header.createSpan({
+			cls: "ai-helper-header-title",
+			text: this.t("view-title"),
+		});
+		const contextBar = header.createDiv({ cls: "ai-helper-context-bar" });
+		this.contextBarEl = contextBar.createDiv({ cls: "ai-helper-context-bar-fill" });
+		this.contextLabelEl = header.createSpan({ cls: "ai-helper-context-label" });
 		this.clearBtn = header.createEl("button", {
 			cls: "ai-helper-clear-btn",
 			text: this.t("clear-conversation"),
@@ -195,10 +235,14 @@ export class ChatView extends ItemView {
 		);
 
 		if (result.ok) {
-			this.conversation.addMessage({ role: "model", content: result.value });
+			const { content, usage } = result.value;
+			this.conversation.addMessage({ role: "model", content });
+			if (usage) {
+				this.conversation.recordUsage(usage);
+			}
 			this.messages[thinkingIndex] = {
 				role: "model",
-				content: result.value,
+				content,
 				kind: "text",
 			};
 		} else {
@@ -213,6 +257,7 @@ export class ChatView extends ItemView {
 		}
 
 		this.setThinking(false);
+		this.updateContextIndicators();
 		await this.renderMessages();
 	}
 }

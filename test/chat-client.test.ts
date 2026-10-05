@@ -214,7 +214,58 @@ describe("server client: chat", () => {
 
 		const result = await client.chat("http://s", "m", [{ role: "user", content: "q" }]);
 
-		expect(result).toEqual({ ok: true, value: "the answer" });
+		expect(result).toEqual({
+			ok: true,
+			value: { content: "the answer", usage: undefined },
+		});
+	});
+
+	it("maps the usage block to camelCase token counts", async () => {
+		const fetchImpl = makeFetch(async () =>
+			({
+				ok: true,
+				status: 200,
+				json: async () => ({
+					id: "chatcmpl-1",
+					choices: [{ index: 0, message: { role: "assistant", content: "hi" } }],
+					usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+				}),
+			}) as unknown as Response
+		);
+		const client = createServerClient(fetchImpl);
+
+		const result = await client.chat("http://s", "m", [{ role: "user", content: "q" }]);
+
+		expect(result).toEqual({
+			ok: true,
+			value: {
+				content: "hi",
+				usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+			},
+		});
+	});
+
+	it("derives total tokens from prompt + completion when absent", async () => {
+		const fetchImpl = makeFetch(async () =>
+			({
+				ok: true,
+				status: 200,
+				json: async () => ({
+					id: "chatcmpl-1",
+					choices: [{ index: 0, message: { role: "assistant", content: "hi" } }],
+					usage: { prompt_tokens: 10, completion_tokens: 5 },
+				}),
+			}) as unknown as Response
+		);
+		const client = createServerClient(fetchImpl);
+
+		const result = await client.chat("http://s", "m", [{ role: "user", content: "q" }]);
+
+		if (result.ok) {
+			expect(result.value.usage?.totalTokens).toBe(15);
+		} else {
+			throw new Error("expected success");
+		}
 	});
 
 	it("maps a non-2xx response with an error body to the body error message", async () => {

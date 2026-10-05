@@ -30,8 +30,26 @@ export interface ChatParams {
 	topP?: string;
 }
 
+export interface ChatCompletionUsage {
+	prompt_tokens?: number;
+	completion_tokens?: number;
+	total_tokens?: number;
+}
+
 export interface ChatCompletionBody {
 	choices?: Array<{ message?: { content?: string } }>;
+	usage?: ChatCompletionUsage;
+}
+
+export interface ChatCompletionResult {
+	content: string;
+	usage?: TokenUsage;
+}
+
+export interface TokenUsage {
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
 }
 
 export interface ServerClient {
@@ -41,7 +59,7 @@ export interface ServerClient {
 		model: string,
 		messages: ChatMessage[],
 		params?: ChatParams
-	): Promise<ServerClientResult<string>>;
+	): Promise<ServerClientResult<ChatCompletionResult>>;
 }
 
 function bearerHeaders(apiKey?: string): Record<string, string> {
@@ -63,6 +81,14 @@ async function readErrorMessage(response: Response): Promise<string> {
 		// non-JSON error body: keep the status message
 	}
 	return message;
+}
+
+function parseUsage(raw: ChatCompletionUsage | undefined): TokenUsage | undefined {
+	if (!raw) return undefined;
+	const promptTokens = Math.max(0, raw.prompt_tokens ?? 0);
+	const completionTokens = Math.max(0, raw.completion_tokens ?? 0);
+	const totalTokens = Math.max(0, raw.total_tokens ?? promptTokens + completionTokens);
+	return { promptTokens, completionTokens, totalTokens };
 }
 
 function numericParam(
@@ -109,12 +135,12 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		return { ok: true, value: ids };
 	}
 
-	async function chat(
+	async 	function chat(
 		serverUrl: string,
 		model: string,
 		messages: ChatMessage[],
 		params?: ChatParams
-	): Promise<ServerClientResult<string>> {
+	): Promise<ServerClientResult<ChatCompletionResult>> {
 		const url = `${serverUrl}/chat/completions`;
 
 		const body: Record<string, unknown> = {
@@ -181,7 +207,9 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				error: { message: "Model server returned an empty response." },
 			};
 		}
-		return { ok: true, value: content };
+
+		const usage = parseUsage(data.usage);
+		return { ok: true, value: { content, usage } };
 	}
 
 	return { listModels, chat };
