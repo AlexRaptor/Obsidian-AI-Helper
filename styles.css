@@ -89,7 +89,6 @@
 
 .ai-helper-message-kind-error .ai-helper-message-body {
 	background: color-mix(in srgb, var(--background-modifier-error) 8%, var(--background));
-	color: var(--text-error);
 }
 
 .ai-helper-error-prefix {
@@ -168,6 +167,8 @@
 	color: var(--text-muted);
 }
 
-.ai-helper-models-hint-error {
+.ai-helper-message-kind-error .ai-helper-message-body,
+.ai-helper-models-hint-error,
+.ai-helper-models-hint-empty {
 	color: var(--text-error);
 }
