@@ -25,6 +25,8 @@ export class ChatView extends ItemView {
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
 	private markdownComponents: Component[] = [];
+	private activeRequest: AbortController | null = null;
+	private renderRevision = 0;
 
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
@@ -71,13 +73,34 @@ export class ChatView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.buildStructure();
 		this.bindEvents();
-		this.setThinking(false);
+		this.setThinking(this.thinking);
 		this.updateContextIndicators();
 		await this.renderMessages();
 	}
 
 	async refreshLocale(): Promise<void> {
-		await this.onOpen();
+		this.headerTitleEl?.setText(this.t("view-title"));
+		this.clearBtn?.setText(this.t("clear-conversation"));
+		this.inputEl?.setAttribute("placeholder", this.t("input-placeholder"));
+		for (const message of this.messages) {
+			if (message.kind === "thinking") message.content = this.t("thinking");
+		}
+		this.setThinking(this.thinking);
+		this.updateContextIndicators();
+		await this.renderMessages();
+	}
+
+	async onClose(): Promise<void> {
+		this.cancelRequest();
+		this.renderRevision++;
+		this.detachMarkdown();
+		this.messagesEl = null;
+		this.inputEl = null;
+		this.sendBtn = null;
+		this.clearBtn = null;
+		this.headerTitleEl = null;
+		this.contextBarEl = null;
+		this.contextLabelEl = null;
 	}
 
 	getMessages(): Message[] {
@@ -85,6 +108,7 @@ export class ChatView extends ItemView {
 	}
 
 	clearConversation(): void {
+		this.cancelRequest();
 		this.conversation.clear();
 		this.messages = [];
 		this.updateContextIndicators();
@@ -149,12 +173,14 @@ export class ChatView extends ItemView {
 	}
 
 	async renderMessages(): Promise<void> {
+		const revision = ++this.renderRevision;
 		const el = this.messagesEl;
 		if (!el) return;
 		this.detachMarkdown();
 		el.empty();
 
-		for (const message of this.messages) {
+		for (const message of [...this.messages]) {
+			if (revision !== this.renderRevision) return;
 			const div = el.createEl("div", {
 				cls: `ai-helper-message ai-helper-message-${message.role}`,
 			});
@@ -190,11 +216,12 @@ export class ChatView extends ItemView {
 						component
 					);
 				} catch {
+					if (revision !== this.renderRevision) return;
 					markdown.createEl("pre", { text: message.content });
 				}
 			}
 		}
-		el.scrollTop = el.scrollHeight;
+		if (revision === this.renderRevision) el.scrollTop = el.scrollHeight;
 	}
 
 	private setThinking(thinking: boolean): void {
@@ -205,59 +232,72 @@ export class ChatView extends ItemView {
 		}
 	}
 
+	private cancelRequest(): void {
+		const request = this.activeRequest;
+		this.activeRequest = null;
+		request?.abort();
+		this.messages = this.messages.filter((message) => message.kind !== "thinking");
+		this.setThinking(false);
+	}
+
 	private async handleSend(): Promise<void> {
 		if (this.thinking) return;
 		const text = this.inputEl?.value.trim() ?? "";
 		if (!text) return;
 
 		this.inputEl!.value = "";
-		this.conversation.addMessage({ role: "user", content: text });
 		this.messages.push({ role: "user", content: text, kind: "text" });
-		this.messages.push({ role: "model", content: this.t("thinking"), kind: "thinking" });
+		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
+		this.messages.push(pending);
+		const request = new AbortController();
+		this.activeRequest = request;
+		const { settings, serverClient } = this.plugin;
+		const requestMessages: ChatMessage[] = [
+			...this.toRequestMessages(), { role: "user", content: text },
+		];
+		const params = {
+			apiKey: settings.apiKey,
+			systemPrompt: settings.systemPrompt,
+			temperature: settings.temperature,
+			maxTokens: settings.maxTokens,
+			topP: settings.topP,
+			signal: request.signal,
+		};
+		const serverUrl = settings.serverUrl.trim();
+		const model = settings.model;
 
 		this.setThinking(true);
-		await this.renderMessages();
+		try {
+			await this.renderMessages();
+			if (this.activeRequest !== request) return;
+			const result = await serverClient.chat(serverUrl, model, requestMessages, params);
+			if (this.activeRequest !== request) return;
 
-		const { settings, serverClient } = this.plugin;
-		const thinkingIndex = this.messages.length - 1;
-
-		const result = await serverClient.chat(
-			settings.serverUrl.trim(),
-			settings.model,
-			this.toRequestMessages(),
-			{
-				apiKey: settings.apiKey,
-				systemPrompt: settings.systemPrompt,
-				temperature: settings.temperature,
-				maxTokens: settings.maxTokens,
-				topP: settings.topP,
+			if (result.ok) {
+				const { content, usage } = result.value;
+				// Commit the turn together so failed attempts never enter request history.
+				this.conversation.addMessage({ role: "user", content: text });
+				this.conversation.addMessage({ role: "model", content });
+				if (usage) this.conversation.recordUsage(usage);
+				pending.content = content;
+				pending.kind = "text";
+			} else {
+				pending.content = result.error.message;
+				pending.kind = "error";
+				if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
 			}
-		);
-
-		if (result.ok) {
-			const { content, usage } = result.value;
-			this.conversation.addMessage({ role: "model", content });
-			if (usage) {
-				this.conversation.recordUsage(usage);
-			}
-			this.messages[thinkingIndex] = {
-				role: "model",
-				content,
-				kind: "text",
-			};
-		} else {
-			this.messages[thinkingIndex] = {
-				role: "model",
-				content: result.error.message,
-				kind: "error",
-			};
-			if (this.inputEl) {
-				this.inputEl.value = text;
+		} catch (error) {
+			if (this.activeRequest !== request) return;
+			pending.content = error instanceof Error ? error.message : String(error);
+			pending.kind = "error";
+			if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
+		} finally {
+			if (this.activeRequest === request) {
+				this.activeRequest = null;
+				this.setThinking(false);
+				this.updateContextIndicators();
+				await this.renderMessages();
 			}
 		}
-
-		this.setThinking(false);
-		this.updateContextIndicators();
-		await this.renderMessages();
 	}
 }

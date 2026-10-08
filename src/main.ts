@@ -13,6 +13,7 @@ export class AiHelperPlugin extends Plugin {
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
 	models: string[] = [];
 	modelStatus: ModelStatus = "idle";
+	private modelRequest: AbortController | null = null;
 	serverClient: ServerClient = createServerClient(
 		(input, init) => globalThis.fetch(input, init)
 	);
@@ -20,7 +21,6 @@ export class AiHelperPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.applyLanguage();
-		await this.refreshModels();
 
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
@@ -34,9 +34,12 @@ export class AiHelperPlugin extends Plugin {
 			callback: () => this.toggleView(),
 		});
 		this.addSettingTab(new AiHelperSettingsTab(this.app, this));
+		void this.refreshModels();
 	}
 
 	onunload(): void {
+		this.modelRequest?.abort();
+		this.modelRequest = null;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
 	}
 
@@ -49,21 +52,37 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async refreshModels(): Promise<void> {
+		this.modelRequest?.abort();
+		const request = new AbortController();
+		this.modelRequest = request;
 		const url = this.settings.serverUrl.trim();
+		const apiKey = this.settings.apiKey;
 		if (!url) {
+			this.modelRequest = null;
 			this.models = [];
 			this.modelStatus = "idle";
 			return;
 		}
 
-		const result = await this.serverClient.listModels(url, this.settings.apiKey);
-
-		if (result.ok) {
-			this.models = result.value;
-			this.modelStatus = result.value.length > 0 ? "loaded" : "empty";
-		} else {
-			this.models = [];
-			this.modelStatus = "error";
+		try {
+			const result = await this.serverClient.listModels(url, apiKey, request.signal);
+			if (this.modelRequest !== request || url !== this.settings.serverUrl.trim() || apiKey !== this.settings.apiKey) {
+				return;
+			}
+			if (result.ok) {
+				this.models = result.value;
+				this.modelStatus = result.value.length > 0 ? "loaded" : "empty";
+			} else {
+				this.models = [];
+				this.modelStatus = "error";
+			}
+		} catch {
+			if (this.modelRequest === request) {
+				this.models = [];
+				this.modelStatus = "error";
+			}
+		} finally {
+			if (this.modelRequest === request) this.modelRequest = null;
 		}
 	}
 

@@ -13,11 +13,16 @@ A chat with an LLM in your Obsidian vault, served by any OpenAI-compatible model
 
 1. `npm run build`
 2. In a vault: Settings → Community plugins → disable Restricted mode
-3. Copy `main.js` and `manifest.json` into `<vault>/.obsidian/plugins/obsidian-ai-helper/`
+3. Copy `main.js`, `manifest.json`, and `styles.css` into `<vault>/.obsidian/plugins/obsidian-ai-helper/`
 4. Reload Obsidian (Cmd/Ctrl+R)
 
 ## Usage
 
-- Ribbon icon or command palette (`Toggle AI Helper chat`) opens the chat in a tab.
+- Ribbon icon or command palette (`Toggle AI Helper chat`) opens the chat in the right sidebar.
 - Settings → Obsidian AI Helper: model server URL, optional API key, model name, UI language.
-- This build (T1) ships the scaffold: chat view, settings tab, full en/ru localization. Requests land in a later ticket.
+- Enter a message and click Send or press Enter; Shift+Enter inserts a newline. Model messages render as Markdown.
+- Each request includes the successful conversation history and optional system prompt. Generation parameters and the context window indicator are configured in settings.
+- Clear conversation resets the history and cancels the active request. Closing the chat also cancels its active request.
+- Failed messages can be retried without duplicating request history. Changing the UI language preserves the current draft and active request.
+- Model lists load in the background with a 15-second timeout. Chat requests have a 120-second timeout, including response body loading.
+- Conversations are kept in memory and are not saved between chat views or Obsidian restarts.

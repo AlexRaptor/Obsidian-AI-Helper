@@ -1,21 +1,21 @@
 # AGENTS.md
 
-Obsidian AI Helper — an Obsidian plugin (TypeScript, esbuild). Repo is currently empty (title-only README); code follows the standard `obsidian-sample-plugin` scaffold layout.
+Obsidian AI Helper — an Obsidian plugin (TypeScript, esbuild) with a chat view, settings, English/Russian localization, and an OpenAI-compatible model-server client. Source is in `src/`; tests are in `test/`.
 
-## Commands (standard scaffold — verify against package.json once it lands)
+## Commands
 
 - `npm install`
 - `npm run dev` — esbuild watch mode; rebuilds `main.js` on save
 - `npm run build` — production bundle + `tsc` typecheck (run this as the gate before committing)
-- If `test` script exists: `npm test`; run a single test with `npx vitest run <file>`
+- `npm test` — Vitest; run a single test with `npx vitest run <file>`
 
 ## How to test the plugin
 
 There is no standalone runtime. To run:
 
-1. `npm run build` (produces `main.js`, `manifest.json`, `styles.css` at repo root)
-2. In an Obsidian vault: Settings → Community plugins → turn on Restricted mode off
-3. Copy/zip `main.js` + `manifest.json` into `<vault>/.obsidian/plugins/<manifest id>/`
+1. `npm run build` (bundles `main.js` and synchronizes the version in `manifest.json`; `styles.css` is a separate source file)
+2. In an Obsidian vault: Settings → Community plugins → disable Restricted mode
+3. Copy `main.js`, `manifest.json`, and `styles.css` into `<vault>/.obsidian/plugins/<manifest id>/`
 4. Reload Obsidian (Ctrl/Cmd+R); check the console for errors
 
 ## Conventions
@@ -24,6 +24,7 @@ There is no standalone runtime. To run:
 - `@types/node` and `obsidian` are dev/prod deps of the scaffold; don't add Node-only libraries (fs, path, child_process) — use Obsidian APIs (`App.vault`, `DataAdapter`) instead.
 - `manifest.json` `id` must match the plugin folder name in the vault; the `id` is the source of truth.
 - No linter/formatter config exists yet; follow existing code style once files land.
+- Vitest maps `obsidian` to `test/helpers/obsidian.ts` because the npm package provides type definitions only. Test view behavior through its input and buttons; the helper does not replace validation inside Obsidian.
 
 ## Agent skills
 
