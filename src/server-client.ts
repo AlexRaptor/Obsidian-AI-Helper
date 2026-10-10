@@ -88,6 +88,14 @@ async function readErrorMessage(response: Response): Promise<string> {
 	return message;
 }
 
+class UnsupportedStreamingError extends Error {}
+
+function explicitlyRejectsStreaming(message: string): boolean {
+	return /\bstream(?:ing)?(?:\s+(?:mode|parameter|responses?))?["']?\s+(?:is\s+)?(?:not supported|unsupported|not implemented|disabled)\b/i.test(message)
+		|| /\b(?:unsupported|unrecognized|unknown)\s+(?:parameter|argument)\s*[:=]?\s*["']?stream["']?\b/i.test(message)
+		|| /\b(?:does not|doesn't|cannot)\s+support\s+(?:the\s+)?(?:streaming|stream(?:\s+parameter)?)\b/i.test(message);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -239,84 +247,103 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		const timeoutMs = seconds === undefined ? undefined : seconds * 1000;
 
 		return request(async (signal, resetWait) => {
-			const response = await fetchImpl(url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				signal,
-			});
-			if (!response.ok) {
-				return { ok: false, error: { message: await readErrorMessage(response) } };
-			}
+			const attempt = async (streaming: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
+				const requestBody: Record<string, unknown> = { ...body, stream: streaming };
+				if (!streaming) delete requestBody.stream_options;
+				const reject = (message: string): ServerClientResult<ChatCompletionResult> => {
+					if (streaming && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
+					return { ok: false, error: { message } };
+				};
+				const response = await fetchImpl(url, {
+					method: "POST",
+					headers,
+					body: JSON.stringify(requestBody),
+					signal,
+				});
+				if (!response.ok) return reject(await readErrorMessage(response));
 
-			const fail = (code: "empty" | "incomplete"): ServerClientResult<ChatCompletionResult> => ({
-				ok: false, error: { code, message: code === "empty"
-					? "Model server returned an empty response." : "Model server connection closed before completion." },
-			});
-			if (!response.headers?.get("content-type")?.includes("text/event-stream")) {
-				let data: unknown;
-				try { data = await response.json(); } catch {
-					return { ok: false, error: { message: "Model server returned an unparseable response." } };
-				}
-				if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
-					!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string" ||
-					!data.choices[0].message.content.trim()) return fail("empty");
-				const content = data.choices[0].message.content;
-				if (signal.aborted) return fail("incomplete");
-				resetWait();
-				params?.onText?.(content);
-				return { ok: true, value: { content, usage: parseUsage(data.usage) } };
-			}
-			if (!response.body) return fail("incomplete");
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			let content = "";
-			let usage: TokenUsage | undefined;
-			let completed = false;
-			let done = false;
-			const event = (raw: string) => {
-				const data = raw.split(/\r\n|\r|\n/).filter((line) => line.startsWith("data:"))
-					.map((line) => line.slice(5).replace(/^ /, "")).join("\n");
-				if (!data) return;
-				if (data.trim() === "[DONE]") { completed = true; done = true; return; }
-				const parsed: unknown = JSON.parse(data);
-				if (!isRecord(parsed)) throw new Error("Model server returned an invalid stream event.");
-				if (isRecord(parsed.error)) throw new Error(typeof parsed.error.message === "string"
-					? parsed.error.message : "Model server returned a stream error.");
-				if (parsed.usage !== undefined) usage = parseUsage(parsed.usage);
-				if (!Array.isArray(parsed.choices)) return;
-				const choice = parsed.choices.find((value: unknown) => isRecord(value) && (value.index === 0 || value.index === undefined));
-				if (!isRecord(choice)) return;
-				if (isRecord(choice.delta) && typeof choice.delta.content === "string" && choice.delta.content) {
-					content += choice.delta.content;
-					if (!signal.aborted) { resetWait(); params?.onText?.(content); }
-				}
-				if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
-			};
-			const onAbort = () => { void reader.cancel().catch(() => {}); };
-			signal.addEventListener("abort", onAbort, { once: true });
-			try {
-				while (!done && !signal.aborted) {
-					const part = await reader.read();
-					buffer += part.done ? decoder.decode() : decoder.decode(part.value, { stream: true });
-					let boundary: RegExpExecArray | null;
-					while (!done && (boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
-						const raw = buffer.slice(0, boundary.index);
-						buffer = buffer.slice(boundary.index + boundary[0].length);
-						event(raw);
+				const fail = (code: "empty" | "incomplete"): ServerClientResult<ChatCompletionResult> => ({
+					ok: false, error: { code, message: code === "empty"
+						? "Model server returned an empty response." : "Model server connection closed before completion." },
+				});
+				if (!response.headers?.get("content-type")?.includes("text/event-stream")) {
+					let data: unknown;
+					try { data = await response.json(); } catch {
+						return { ok: false, error: { message: "Model server returned an unparseable response." } };
 					}
-					if (part.done) break;
+					if (isRecord(data) && isRecord(data.error) && typeof data.error.message === "string") {
+						return reject(data.error.message);
+					}
+					if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
+						!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string" ||
+						!data.choices[0].message.content.trim()) return fail("empty");
+					const content = data.choices[0].message.content;
+					if (signal.aborted) return fail("incomplete");
+					resetWait();
+					params?.onText?.(content);
+					return { ok: true, value: { content, usage: parseUsage(data.usage) } };
 				}
-				if (signal.aborted || !completed) return fail("incomplete");
-				if (!content.trim()) return fail("empty");
-				return { ok: true, value: { content, usage } };
-			} finally {
-				signal.removeEventListener("abort", onAbort);
-				try { await reader.cancel(); } catch { /* closed transport */ }
-				reader.releaseLock();
-			}
+				if (!response.body) return fail("incomplete");
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				let content = "";
+				let usage: TokenUsage | undefined;
+				let completed = false;
+				let done = false;
+				const event = (raw: string) => {
+					const data = raw.split(/\r\n|\r|\n/).filter((line) => line.startsWith("data:"))
+						.map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+					if (!data) return;
+					if (data.trim() === "[DONE]") { completed = true; done = true; return; }
+					const parsed: unknown = JSON.parse(data);
+					if (!isRecord(parsed)) throw new Error("Model server returned an invalid stream event.");
+					if (isRecord(parsed.error)) {
+						const message = typeof parsed.error.message === "string" ? parsed.error.message : "Model server returned a stream error.";
+						if (streaming && !content && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
+						throw new Error(message);
+					}
+					if (parsed.usage !== undefined) usage = parseUsage(parsed.usage);
+					if (!Array.isArray(parsed.choices)) return;
+					const choice = parsed.choices.find((value: unknown) => isRecord(value) && (value.index === 0 || value.index === undefined));
+					if (!isRecord(choice)) return;
+					if (isRecord(choice.delta) && typeof choice.delta.content === "string" && choice.delta.content) {
+						content += choice.delta.content;
+						if (!signal.aborted) { resetWait(); params?.onText?.(content); }
+					}
+					if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
+				};
+				const onAbort = () => { void reader.cancel().catch(() => {}); };
+				signal.addEventListener("abort", onAbort, { once: true });
+				try {
+					while (!done && !signal.aborted) {
+						const part = await reader.read();
+						buffer += part.done ? decoder.decode() : decoder.decode(part.value, { stream: true });
+						let boundary: RegExpExecArray | null;
+						while (!done && (boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
+							const raw = buffer.slice(0, boundary.index);
+							buffer = buffer.slice(boundary.index + boundary[0].length);
+							event(raw);
+						}
+						if (part.done) break;
+					}
+					if (signal.aborted || !completed) return fail("incomplete");
+					if (!content.trim()) return fail("empty");
+					return { ok: true, value: { content, usage } };
+				} finally {
+					signal.removeEventListener("abort", onAbort);
+					try { await reader.cancel(); } catch { /* closed transport */ }
+					reader.releaseLock();
+				}
 
+			};
+			try {
+				return await attempt(true);
+			} catch (error) {
+				if (!(error instanceof UnsupportedStreamingError) || signal.aborted) throw error;
+				// One explicit compatibility fallback shares cancellation and the request's waiting policy.
+				return await attempt(false);
+			}
 		}, timeoutMs, params?.signal, "timeout");
 	}
 
