@@ -9,6 +9,9 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"chat-copy-message": "Copy message",
+	"chat-message-copied": "Message copied",
+	"chat-copy-failed": "Could not copy message",
 	"chat-invalid-stream": "Model server returned an invalid stream event.",
 	"chat-stream-error": "Model server returned a stream error.",
 	"setting-response-wait": "Response wait time",
@@ -75,6 +78,9 @@ export const en = {
 } as const;
 
 export const ru = {
+	"chat-copy-message": "Копировать сообщение",
+	"chat-message-copied": "Сообщение скопировано",
+	"chat-copy-failed": "Не удалось скопировать сообщение",
 	"chat-invalid-stream": "Модель-сервер вернул некорректную часть потока.",
 	"chat-stream-error": "Модель-сервер сообщил об ошибке потока.",
 	"setting-response-wait": "Время ожидания ответа",

@@ -71,6 +71,15 @@ export const MarkdownRenderer = {
 	},
 };
 
+export function setIcon(el: TestElement, icon: string): void {
+	el.setAttribute("data-icon", icon);
+}
+
+export class Notice {
+	static messages: string[] = [];
+	constructor(message: string) { Notice.messages.push(message); }
+}
+
 export class Plugin extends Component {
 	constructor(public app: unknown, _manifest: unknown) { super(); }
 	async loadData(): Promise<unknown> { return {}; }

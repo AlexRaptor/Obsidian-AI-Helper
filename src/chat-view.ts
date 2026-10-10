@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -11,6 +11,12 @@ function formatNumber(value: number): string {
 }
 
 type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean };
+type MessageRow = {
+	div: HTMLElement; branch: HTMLElement; body: HTMLElement; content: HTMLElement;
+	revision: number; signature: string; component?: Component;
+	copyBtn?: HTMLButtonElement; copying?: boolean; copied?: boolean;
+	copyTimer?: ReturnType<typeof setTimeout>;
+};
 
 export class ChatView extends ItemView {
 	plugin: AiHelperPlugin;
@@ -24,7 +30,7 @@ export class ChatView extends ItemView {
 	private clearBtn: HTMLButtonElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
-	private rendered = new Map<DisplayMessage, { div: HTMLElement; branch: HTMLElement; body: HTMLElement; revision: number; signature: string; component?: Component }>();
+	private rendered = new Map<DisplayMessage, MessageRow>();
 	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
 	private renderRevision = 0;
@@ -211,9 +217,55 @@ export class ChatView extends ItemView {
 	private detachMarkdown(): void {
 		for (const row of this.rendered.values()) {
 			row.revision++;
+			if (row.copyTimer !== undefined) clearTimeout(row.copyTimer);
 			if (row.component) this.removeChild(row.component);
 		}
 		this.rendered.clear();
+	}
+
+	private updateCopyButton(message: DisplayMessage, row: MessageRow): void {
+		if (message.kind !== "text" || !message.content.trim()) {
+			row.copyBtn?.remove();
+			row.copyBtn = undefined;
+			return;
+		}
+		if (!row.copyBtn) {
+			row.copyBtn = row.body.createEl("button", {
+				cls: "ai-helper-copy-message",
+				attr: { type: "button" },
+			});
+			row.copyBtn.addEventListener("click", () => void this.copyMessage(message, row));
+		}
+		row.copyBtn.disabled = this.activeMessage === message || !!row.copying;
+		const label = this.t(row.copied ? "chat-message-copied" : "chat-copy-message");
+		row.copyBtn.setAttribute("aria-label", label);
+		row.copyBtn.setAttribute("title", label);
+		setIcon(row.copyBtn, row.copied ? "check" : "copy");
+	}
+
+	private async copyMessage(message: DisplayMessage, row: MessageRow): Promise<void> {
+		if (this.rendered.get(message) !== row || this.activeMessage === message || row.copying
+			|| message.kind !== "text" || !message.content.trim()) return;
+		if (row.copyTimer !== undefined) clearTimeout(row.copyTimer);
+		row.copyTimer = undefined;
+		row.copied = false;
+		row.copying = true;
+		this.updateCopyButton(message, row);
+		try {
+			await navigator.clipboard.writeText(message.content);
+			if (this.rendered.get(message) !== row) return;
+			row.copied = true;
+			row.copyTimer = setTimeout(() => {
+				row.copyTimer = undefined;
+				row.copied = false;
+				this.updateCopyButton(message, row);
+			}, 2000);
+		} catch {
+			if (this.rendered.get(message) === row) new Notice(this.t("chat-copy-failed"));
+		} finally {
+			row.copying = false;
+			if (this.rendered.get(message) === row) this.updateCopyButton(message, row);
+		}
 	}
 
 	async renderMessages(): Promise<void> {
@@ -223,6 +275,7 @@ export class ChatView extends ItemView {
 		for (const [message, row] of this.rendered) {
 			if (!this.messages.includes(message)) {
 				row.revision++;
+				if (row.copyTimer !== undefined) clearTimeout(row.copyTimer);
 				if (row.component) this.removeChild(row.component);
 				this.messageResizeObserver?.unobserve(row.div);
 				row.div.remove();
@@ -235,10 +288,12 @@ export class ChatView extends ItemView {
 			if (!row) {
 				const div = el.createDiv({ cls: `ai-helper-message ai-helper-message-${message.role}` });
 				const branch = div.createDiv({ cls: "ai-helper-message-branch" });
-				row = { div, branch, body: div.createDiv({ cls: "ai-helper-message-body" }), revision: 0, signature: "" };
+				const body = div.createDiv({ cls: "ai-helper-message-body" });
+				row = { div, branch, body, content: body.createDiv({ cls: "ai-helper-message-content" }), revision: 0, signature: "" };
 				this.rendered.set(message, row);
 				this.messageResizeObserver?.observe(div);
 			}
+			this.updateCopyButton(message, row);
 			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}`;
 			if (row.signature === signature) continue;
 			row.signature = signature;
@@ -248,7 +303,7 @@ export class ChatView extends ItemView {
 			current.branch.className = `ai-helper-message-branch${message.kind === "thinking" ? " ai-helper-branch-thinking" : message.kind === "error" || message.error ? " ai-helper-branch-error" : ""}`;
 			current.div.className = `ai-helper-message ai-helper-message-${message.role} ai-helper-message-kind-${message.kind}`;
 			// Render off-tree. A slow renderer cannot replace a newer update or resurrect a cleared row.
-			const staging = current.body.createDiv({ cls: "ai-helper-markdown" });
+			const staging = current.content.createDiv({ cls: "ai-helper-markdown" });
 			staging.remove();
 			const content = message.content;
 			const error = message.error;
@@ -269,8 +324,8 @@ export class ChatView extends ItemView {
 				if (stopped) staging.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
 				if (error) staging.createDiv({ cls: "ai-helper-error-prefix", text: `${this.t("chat-error-prefix")}: ${error}` });
 				if (revision !== this.renderRevision || current.revision !== rowRevision || this.messagesEl !== el) return;
-				current.body.empty();
-				current.body.appendChild(staging);
+				current.content.empty();
+				current.content.appendChild(staging);
 				this.followMessages();
 			})());
 		}
@@ -303,9 +358,9 @@ export class ChatView extends ItemView {
 			if (row) {
 				row.revision++;
 				row.signature = "";
-				row.body.empty();
-				row.body.createSpan({ text: this.activeMessage.content });
-				row.body.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
+				row.content.empty();
+				row.content.createSpan({ text: this.activeMessage.content });
+				row.content.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
 			}
 		}
 		this.activeMessage = null;
