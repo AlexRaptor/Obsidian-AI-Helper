@@ -73,3 +73,31 @@ it("reports no suitable information for an unrelated embedding", async () => {
 	const search = createNoteSearch({ ...options, client }); search.configure(connection);
 	await search.index("Train.md"); expect(await search.search("Unrelated question")).toBeNull();
 });
+
+it("finds the departure time with the captured embeddings from the Russian acceptance scenario", async () => {
+	const { trainEmbedding, departureQuestionEmbedding } = await import("./fixtures/train-embeddings");
+	const text = "Поезд Север отправляется в 18:30 с платформы 4";
+	const { options, connection } = fixture();
+	const client = createServerClient(async (_url, init) => {
+		const { input } = JSON.parse(String(init?.body));
+		const embedding = input[0] === text ? trainEmbedding : departureQuestionEmbedding;
+		return new Response(JSON.stringify({ data: [{ index: 0, embedding }] }));
+	});
+	const search = createNoteSearch({ ...options, client, read: async () => text }); search.configure(connection);
+	await search.index("Тест поиска.md");
+	expect(await search.search("Время отправления поезда")).toEqual({ path: "Тест поиска.md", text });
+});
+
+it("still rejects an unrelated question with captured embeddings from the same model", async () => {
+	const { trainEmbedding, unrelatedQuestionEmbedding } = await import("./fixtures/train-embeddings");
+	const text = "Поезд Север отправляется в 18:30 с платформы 4";
+	const { options, connection } = fixture();
+	const client = createServerClient(async (_url, init) => {
+		const { input } = JSON.parse(String(init?.body));
+		const embedding = input[0] === text ? trainEmbedding : unrelatedQuestionEmbedding;
+		return new Response(JSON.stringify({ data: [{ index: 0, embedding }] }));
+	});
+	const search = createNoteSearch({ ...options, client, read: async () => text }); search.configure(connection);
+	await search.index("Тест поиска.md");
+	expect(await search.search("Курс доллара сегодня")).toBeNull();
+});

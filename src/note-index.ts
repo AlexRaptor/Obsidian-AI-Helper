@@ -15,6 +15,8 @@ interface NoteSearchEnvironment {
 	open(path: string): Promise<void>;
 }
 const SOURCE_CHAR_LIMIT = 4000;
+// Calibrated on the Russian single-note acceptance scenario with Qwen3 embeddings.
+const MIN_SOURCE_SIMILARITY = 0.45;
 async function hash(text: string): Promise<string> {
 	const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -137,7 +139,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			if (vector.length !== note.vector.length) throw new NoteSearchError("search-rebuild");
 			const norm = (values: number[]) => Math.hypot(...values);
 			const similarity = vector.reduce((sum, value, index) => sum + value * note.vector[index], 0) / (norm(vector) * norm(note.vector));
-			return similarity >= 0.5 ? { path: note.path, text: note.text } : null;
+			return similarity >= MIN_SOURCE_SIMILARITY ? { path: note.path, text: note.text } : null;
 		},
 		async open(source: NoteSource): Promise<void> {
 			if (await environment.read(source.path) !== source.text) throw new NoteSearchError("search-rebuild");
