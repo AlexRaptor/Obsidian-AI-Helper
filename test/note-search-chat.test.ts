@@ -6,6 +6,7 @@ import { createNoteSearch } from "../src/note-index";
 import { IDBFactory } from "fake-indexeddb";
 import { createServerClient } from "../src/server-client";
 import { DEFAULT_SETTINGS } from "../src/settings";
+import { createContextWindowConnection } from "../src/context-window";
 import { t, setLanguage } from "../src/i18n";
 import { TestElement, flushPromises } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
@@ -71,6 +72,20 @@ it("reserves answer space and keeps history intact when the context is too small
 	root.find("ai-helper-search-toggle").click(); view.plugin.settings.contextWindow = "1100"; bodies.length = 0;
 	await send("When?"); expect(root.getText()).toContain("Not enough context");
 	expect(bodies).toHaveLength(1); expect(bodies[0].input).toEqual(["When?"]); expect(view.getMessages()).toHaveLength(2); await view.onClose();
+});
+
+it("uses the automatically detected window to stop source requests that exceed the budget", async () => {
+	const { view, root, bodies, send } = await setup();
+	const connection = createContextWindowConnection(createServerClient(async () => new Response(JSON.stringify({ data: [{ id: "chat", max_model_len: 1100 }] }))));
+	connection.configure(view.plugin.settings); await connection.refresh();
+	view.plugin.contextWindowConnection = connection;
+	root.find("ai-helper-search-toggle").click();
+	await send("When?");
+	expect(root.getText()).toContain("Not enough context");
+	expect(bodies).toHaveLength(1);
+	expect(bodies[0].input).toEqual(["When?"]);
+	expect(view.plugin.settings.contextWindow).toBe("");
+	await view.onClose();
 });
 
 it("does not open a used source after the note changes", async () => {

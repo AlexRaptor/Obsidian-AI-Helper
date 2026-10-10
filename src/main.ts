@@ -12,6 +12,7 @@ import { createModelConnection } from "./model-connection";
 import { createNoteSearchConnection } from "./note-search";
 import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, type NoteSearch } from "./note-index";
 import { StorageProbeModal } from "./storage-probe-modal";
+import { createContextWindowConnection } from "./context-window";
 
 export class AiHelperPlugin extends Plugin {
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
@@ -31,9 +32,11 @@ export class AiHelperPlugin extends Plugin {
 	private indexingNote = false;
 	noteSearchConnection = createNoteSearchConnection(this.serverClient);
 	modelConnection = createModelConnection(this.serverClient);
+	contextWindowConnection = createContextWindowConnection(this.serverClient);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();
 		const adapter = this.app.vault?.adapter;
 		this.noteSearch = createNoteSearch({
@@ -77,6 +80,7 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearch?.dispose();
 		this.noteSearchConnection.cancel();
 		this.modelConnection.cancel();
+		this.contextWindowConnection.cancel();
 		this.embeddingModelRequest?.abort();
 		this.embeddingModelRequest = null;
 		this.modelRequest?.abort();
@@ -89,6 +93,7 @@ export class AiHelperPlugin extends Plugin {
 		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
 		this.noteSearchConnection.configure(this.settings);
 		this.modelConnection.configure(this.settings);
+		this.contextWindowConnection.configure(this.settings);
 	}
 
 	async indexActiveNote(): Promise<void> {
@@ -106,6 +111,8 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearch?.configure(this.settings);
 		this.noteSearchConnection.configure(this.settings);
 		this.modelConnection.configure(this.settings);
+		if (this.contextWindowConnection.configure(this.settings)) void this.contextWindowConnection.refresh();
+		this.updateContextIndicators();
 		if (this.embeddingListUrl !== this.settings.embeddingServerUrl.trim() || this.embeddingListKey !== this.settings.embeddingApiKey) {
 			this.embeddingModelRequest?.abort();
 			this.embeddingModelRequest = null;
@@ -116,7 +123,14 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async refreshModels(): Promise<void> {
-		await this.loadModels(false);
+		this.contextWindowConnection.configure(this.settings);
+		await Promise.all([this.loadModels(false), this.contextWindowConnection.refresh()]);
+	}
+
+	private updateContextIndicators(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+			if (leaf.view instanceof ChatView) leaf.view.updateContextIndicators();
+		}
 	}
 
 	async refreshEmbeddingModels(): Promise<void> {

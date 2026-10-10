@@ -3,6 +3,7 @@ import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity } from "./note-index";
 import { parseResponseWait } from "./response-wait";
+import { effectiveContextWindow } from "./context-window";
 import {
 	setLanguage,
 	LOCALES,
@@ -47,6 +48,7 @@ export type ModelStatus = "idle" | "loaded" | "empty" | "error";
 export class AiHelperSettingsTab extends PluginSettingTab {
 	plugin: AiHelperPlugin;
 	private displayVersion = 0;
+	private unsubscribeContext: (() => void) | undefined;
 
 	constructor(app: App, plugin: AiHelperPlugin) {
 		super(app, plugin);
@@ -58,6 +60,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.unsubscribeContext?.();
 		if (this.plugin.noteSearchConnection?.status.state === "checking") this.plugin.noteSearchConnection.cancel();
 		if (this.plugin.modelConnection?.status.state === "checking") this.plugin.modelConnection.cancel();
 		const version = ++this.displayVersion;
@@ -147,18 +150,38 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const updateModelCheck = this.renderModelCheck(model, version);
 		this.renderModels(modelSetting, updateModelCheck);
 
-		new Setting(model)
+		const contextSetting = new Setting(model)
 			.setName(this.t("setting-context-window"))
-			.setDesc(this.t("setting-context-window-desc"))
+			.setDesc(this.t("setting-context-window-desc"));
+		const contextStatus = contextSetting.descEl.createDiv({ attr: { "aria-live": "polite" } });
+		const updateContext = () => {
+			if (version !== this.displayVersion) return;
+			const connection = this.plugin.contextWindowConnection;
+			const manual = this.plugin.settings.contextWindow;
+			const tokens = effectiveContextWindow(manual, connection?.value);
+			contextStatus.setText(manual ? (tokens ? `${this.t("context-manual")}: ${tokens}` : this.t("context-invalid"))
+				: connection?.checking ? this.t("context-checking")
+				: tokens ? `${this.t("context-auto")}: ${tokens} (${connection?.value?.source})` : this.t("context-unknown"));
+		};
+		this.unsubscribeContext = this.plugin.contextWindowConnection?.subscribe(updateContext);
+		contextSetting
 			.addText((text) => {
 				text
 					.setPlaceholder(this.t("setting-context-window-placeholder"))
 					.setValue(this.plugin.settings.contextWindow)
 					.onChange(async (value) => {
+						const valid = !value.trim() || effectiveContextWindow(value) !== undefined;
+						text.inputEl.setAttribute("aria-invalid", String(!valid));
+						if (!valid) { contextStatus.setText(this.t("context-invalid")); return; }
 						this.plugin.settings.contextWindow = value.trim();
 						await this.plugin.saveSettings();
+						updateContext();
 					});
-			});
+			})
+			.addButton((button) => button.setIcon("refresh-cw").setTooltip(this.t("context-refresh")).onClick(async () => {
+				await this.plugin.contextWindowConnection.refresh();
+			}));
+		updateContext();
 
 		new Setting(generation)
 			.setName(this.t("setting-system-prompt"))
@@ -291,6 +314,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			update();
 			await checking;
 			update();
+			await this.plugin.contextWindowConnection?.refresh();
+			update();
 		}));
 		update();
 		return update;
@@ -343,6 +368,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		this.unsubscribeContext?.();
+		this.unsubscribeContext = undefined;
 		this.displayVersion++;
 		this.plugin.noteSearchConnection.cancel();
 		this.plugin.modelConnection?.cancel();

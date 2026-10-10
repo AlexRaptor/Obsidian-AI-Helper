@@ -130,8 +130,14 @@ export const en = {
 	"setting-top-p-placeholder": "0.9",
 	"setting-context-window": "Context window",
 	"setting-context-window-desc":
-		"Model context window size, in tokens. Used for the usage indicator in the chat header. Leave empty if unknown.",
-	"setting-context-window-placeholder": "254000",
+		"Leave empty to detect automatically (LM Studio, Ollama, vLLM, llama.cpp). Enter a token count to override the usage indicator and source budget.",
+	"setting-context-window-placeholder": "Automatic",
+	"context-manual": "Manual",
+	"context-auto": "Detected",
+	"context-checking": "Detecting context window…",
+	"context-unknown": "Context window unknown. Enter it manually or refresh after loading the model.",
+	"context-invalid": "Enter a positive whole number of tokens.",
+	"context-refresh": "Refresh context window",
 	"chat-error-prefix": "Request failed",
 	"chat-invalid-params":
 		"Generation parameters must be numbers. Correct the settings and try again.",
@@ -264,8 +270,14 @@ export const ru = {
 	"setting-top-p-placeholder": "0.9",
 	"setting-context-window": "Окно контекста",
 	"setting-context-window-desc":
-		"Размер окна контекста модели в токенах. Используется для индикатора заполнения в шапке чата. Оставьте пустым, если неизвестно.",
-	"setting-context-window-placeholder": "254000",
+		"Оставьте пустым для автоопределения (LM Studio, Ollama, vLLM, llama.cpp). Введите число токенов для ручного переопределения индикатора и бюджета источников.",
+	"setting-context-window-placeholder": "Автоматически",
+	"context-manual": "Вручную",
+	"context-auto": "Определено",
+	"context-checking": "Определение окна контекста…",
+	"context-unknown": "Окно контекста неизвестно. Введите вручную или обновите после загрузки модели.",
+	"context-invalid": "Введите положительное целое число токенов.",
+	"context-refresh": "Обновить окно контекста",
 	"chat-error-prefix": "Ошибка запроса",
 	"chat-invalid-params":
 		"Параметры генерации должны быть числами. Исправьте настройки и повторите запрос.",

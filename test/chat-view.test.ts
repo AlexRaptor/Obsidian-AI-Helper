@@ -7,6 +7,7 @@ import { t, setLanguage } from "../src/i18n";
 import { createServerClient, type ClientFetch } from "../src/server-client";
 import type { ServerClient, ServerClientResult, ChatCompletionResult } from "../src/server-client";
 import { TestElement, deferred, flushPromises } from "./helpers/obsidian";
+import { createContextWindowConnection } from "../src/context-window";
 
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 
@@ -29,6 +30,24 @@ async function setup(chat: ServerClient["chat"]) {
 	const send = root.find("ai-helper-send");
 	return { view, root, input, send };
 }
+
+it("uses the detected window for the progress bar and lets manual settings override it", async () => {
+	const client = createServerClient(async () => new Response(JSON.stringify({ data: [{ id: "m", max_model_len: 4000 }] })));
+	const { view, root, input, send } = await setup(async () => ({ ok: true, value: { content: "answer", usage: { promptTokens: 900, completionTokens: 100, totalTokens: 1000 } } }));
+	const connection = createContextWindowConnection(client);
+	view.plugin.contextWindowConnection = connection;
+	connection.configure(view.plugin.settings);
+	const unsubscribe = connection.subscribe(() => view.updateContextIndicators());
+	await connection.refresh();
+	input.value = "question"; send.click(); await flushPromises();
+	expect(root.find("ai-helper-context-label").getText()).toBe("25% - 1,000 / 4,000");
+	expect(root.find("ai-helper-context-bar-fill").style.width).toBe("25%");
+	view.plugin.settings.contextWindow = "2000"; view.updateContextIndicators();
+	expect(root.find("ai-helper-context-bar-fill").style.width).toBe("50%");
+	view.plugin.settings.contextWindow = ""; view.updateContextIndicators();
+	expect(root.find("ai-helper-context-bar-fill").style.width).toBe("25%");
+	unsubscribe(); await view.onClose();
+});
 
 describe("chat view request lifecycle", () => {
 	it.each([

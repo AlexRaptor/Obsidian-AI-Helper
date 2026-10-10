@@ -81,7 +81,13 @@ export class Notice {
 }
 
 export class Plugin extends Component {
-	constructor(public app: unknown, _manifest: unknown) { super(); }
+	constructor(public app: unknown, _manifest: unknown) {
+		super();
+		const testApp = app as { workspace?: { getLeavesOfType?: () => unknown[] } };
+		testApp.workspace ??= {};
+		testApp.workspace.getLeavesOfType ??= () => [];
+	}
+	register(_callback: () => void): void {}
 	async loadData(): Promise<unknown> { return {}; }
 	registerView(): void {}
 	addRibbonIcon(): void {}

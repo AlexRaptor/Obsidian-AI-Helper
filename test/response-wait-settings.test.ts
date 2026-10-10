@@ -78,10 +78,37 @@ it.each(["en", "ru"] as const)("explains idle seconds and validates saved values
 	expect(saveSettings).toHaveBeenCalledTimes(2);
 });
 
+it.each(["en", "ru"] as const)("shows a detected context window and preserves a validated manual override in %s", async (locale) => {
+	setLanguage(locale);
+	const dictionary = locale === "ru" ? ru : en;
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, serverUrl: "http://s/v1", model: "m" };
+	plugin.contextWindowConnection.configure(plugin.settings);
+	Object.assign(plugin, { saveData: vi.fn(async () => {}) });
+	vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ data: [{ id: "m", max_model_len: 8192 }] })));
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const setting = controls.find((control) => control.name === dictionary["setting-context-window"])!;
+	await setting.button!.click();
+	expect(setting.description).toContain("8192 (vLLM)");
+	expect(setting.input!.value).toBe("");
+	await setting.input!.change("4096");
+	expect(plugin.settings.contextWindow).toBe("4096");
+	expect(setting.description).toContain(`${dictionary["context-manual"]}: 4096`);
+	await setting.input!.change("-1");
+	expect(plugin.settings.contextWindow).toBe("4096");
+	expect(setting.input!.inputEl.attributes["aria-invalid"]).toBe("true");
+	await setting.button!.click();
+	expect(plugin.settings.contextWindow).toBe("4096");
+	await setting.input!.change("");
+	expect(setting.description).toContain("8192 (vLLM)");
+	tab.hide();
+});
+
 
 it("saves an independent embedding connection and verifies it through the settings button", async () => {
 	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
 	plugin.settings = { ...DEFAULT_SETTINGS, serverUrl: "http://chat/v1", apiKey: "chat-key", model: "chat-model" };
+	plugin.contextWindowConnection.configure(plugin.settings);
 	const save = vi.fn(async () => {});
 	// Persistence and HTTP are the external boundaries.
 	Object.assign(plugin, { saveData: save });

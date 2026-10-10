@@ -1,4 +1,5 @@
 import { parseResponseWait } from "./response-wait";
+import { discoverContextWindow, type ContextWindow } from "./context-window";
 
 export type ClientFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -71,6 +72,7 @@ export interface TokenUsage {
 }
 
 export interface ServerClient {
+	getContextWindow(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<ContextWindow | undefined>>;
 	verifyModel(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<void>>;
 	embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>>;
 	listModels(serverUrl: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<string[]>>;
@@ -457,5 +459,11 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		return !result.ok && !result.error.code ? fail("model-network") : result;
 	}
 
-	return { listModels, chat, embeddings, verifyModel };
+	async function getContextWindow(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<ContextWindow | undefined>> {
+		const url = connectionUrl(serverUrl);
+		if (!url || !model.trim()) return { ok: true, value: undefined };
+		return request(async (active) => ({ ok: true, value: await discoverContextWindow(fetchImpl, url, model.trim(), apiKey, active) }), MODELS_TIMEOUT_MS, signal);
+	}
+
+	return { listModels, chat, embeddings, verifyModel, getContextWindow };
 }
