@@ -9,6 +9,10 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"setting-response-wait": "Response wait time",
+	"setting-response-wait-desc": "Seconds to wait for the first text and each pause between text parts. New text restarts the wait; active generation can last longer. Leave empty to wait indefinitely. Changes apply to the next request.",
+	"setting-response-wait-invalid": "Enter a positive whole number of seconds, or leave empty. The last valid value is kept.",
+	"chat-response-timeout": "The wait for model text expired. The request was cancelled.",
 	"view-title": "AI Helper",
 	"command": "Toggle AI Helper chat",
 	"ribbon": "Toggle AI Helper chat",
@@ -69,6 +73,10 @@ export const en = {
 } as const;
 
 export const ru = {
+	"setting-response-wait": "Время ожидания ответа",
+	"setting-response-wait-desc": "Секунды ожидания первого текста и каждой паузы между частями текста. Новый текст обновляет отсчёт; активная генерация может длиться дольше. Пустое поле — бесконечное ожидание. Изменения применяются к следующему запросу.",
+	"setting-response-wait-invalid": "Введите целое положительное число секунд или оставьте поле пустым. Последнее корректное значение сохранено.",
+	"chat-response-timeout": "Время ожидания текста модели истекло. Запрос отменён.",
 	"view-title": "AI-ассистент",
 	"command": "Показать/скрыть чат с ИИ",
 	"ribbon": "Показать/скрыть чат с ИИ",

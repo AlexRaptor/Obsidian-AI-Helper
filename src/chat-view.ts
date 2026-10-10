@@ -336,6 +336,7 @@ export class ChatView extends ItemView {
 			temperature: settings.temperature,
 			maxTokens: settings.maxTokens,
 			topP: settings.topP,
+			responseWait: settings.responseWait,
 			signal: request.signal,
 			onText: (content: string) => {
 				if (this.activeRequest !== request) return;
@@ -369,7 +370,8 @@ export class ChatView extends ItemView {
 				pending.kind = "text";
 			} else {
 				const message = result.error.code === "empty" ? this.t("chat-empty-response")
-					: result.error.code === "incomplete" ? this.t("chat-incomplete-response") : result.error.message;
+					: result.error.code === "incomplete" ? this.t("chat-incomplete-response")
+					: result.error.code === "timeout" ? this.t("chat-response-timeout") : result.error.message;
 				if (pending.kind === "text") pending.error = message;
 				else { pending.content = message; pending.kind = "error"; }
 				if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;

@@ -1,7 +1,6 @@
 export type ClientFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 const MODELS_TIMEOUT_MS = 15_000;
-const CHAT_TIMEOUT_MS = 120_000;
 
 export interface Model {
 	id: string;
@@ -18,7 +17,7 @@ export interface ServerErrorBody {
 
 export type ServerClientResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; error: { message: string; code?: "empty" | "incomplete" } };
+	| { ok: false; error: { message: string; code?: "empty" | "incomplete" | "timeout" } };
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant";
@@ -26,6 +25,7 @@ export interface ChatMessage {
 }
 
 export interface ChatParams {
+	responseWait?: string;
 	signal?: AbortSignal;
 	onText?: (content: string) => void;
 	apiKey?: string;
@@ -121,26 +121,40 @@ function numericParam(
 
 export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 	async function request<T>(
-		operation: (signal: AbortSignal) => Promise<ServerClientResult<T>>,
-		timeoutMs: number,
-		signal?: AbortSignal
+		operation: (signal: AbortSignal, resetWait: () => void) => Promise<ServerClientResult<T>>,
+		timeoutMs: number | undefined,
+		signal?: AbortSignal,
+		timeoutCode?: "timeout"
 	): Promise<ServerClientResult<T>> {
 		const controller = new AbortController();
 		let interrupt!: (result: ServerClientResult<T>) => void;
 		const interrupted = new Promise<ServerClientResult<T>>((resolve) => { interrupt = resolve; });
-		const cancel = (message: string) => {
-			interrupt({ ok: false, error: { message } });
+		const cancel = (message: string, code?: "timeout") => {
+			interrupt({ ok: false, error: { message, ...(code ? { code } : {}) } });
 			controller.abort();
 		};
 		const onAbort = () => cancel("Request cancelled.");
 		signal?.addEventListener("abort", onAbort, { once: true });
-		const timer = setTimeout(() => cancel("Model server request timed out."), timeoutMs);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let deadline = 0;
+		const scheduleWait = () => {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) cancel("Model server request timed out.", timeoutCode);
+			else timer = setTimeout(scheduleWait, Math.min(remaining, 2_147_483_647));
+		};
+		const resetWait = () => {
+			if (timeoutMs === undefined || controller.signal.aborted) return;
+			clearTimeout(timer);
+			deadline = Date.now() + timeoutMs;
+			scheduleWait();
+		};
+		resetWait();
 		try {
 			if (signal?.aborted) {
 				onAbort();
 				return await interrupted;
 			}
-			return await Promise.race([operation(controller.signal), interrupted]);
+			return await Promise.race([operation(controller.signal, resetWait), interrupted]);
 		} catch (error) {
 			return { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
 		} finally {
@@ -217,7 +231,14 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			...bearerHeaders(params?.apiKey),
 		};
 
-		return request(async (signal) => {
+		const responseWait = params?.responseWait?.trim() ?? "";
+		const seconds = responseWait ? Number(responseWait) : undefined;
+		if (seconds !== undefined && (!/^\d+$/.test(responseWait) || !Number.isSafeInteger(seconds) || seconds <= 0)) {
+			return { ok: false, error: { message: "Response wait must be a positive whole number of seconds." } };
+		}
+		const timeoutMs = seconds === undefined ? undefined : seconds * 1000;
+
+		return request(async (signal, resetWait) => {
 			const response = await fetchImpl(url, {
 				method: "POST",
 				headers,
@@ -242,6 +263,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					!data.choices[0].message.content.trim()) return fail("empty");
 				const content = data.choices[0].message.content;
 				if (signal.aborted) return fail("incomplete");
+				resetWait();
 				params?.onText?.(content);
 				return { ok: true, value: { content, usage: parseUsage(data.usage) } };
 			}
@@ -268,7 +290,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				if (!isRecord(choice)) return;
 				if (isRecord(choice.delta) && typeof choice.delta.content === "string" && choice.delta.content) {
 					content += choice.delta.content;
-					if (!signal.aborted) params?.onText?.(content);
+					if (!signal.aborted) { resetWait(); params?.onText?.(content); }
 				}
 				if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
 			};
@@ -295,7 +317,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				reader.releaseLock();
 			}
 
-		}, CHAT_TIMEOUT_MS, params?.signal);
+		}, timeoutMs, params?.signal, "timeout");
 	}
 
 	return { listModels, chat };

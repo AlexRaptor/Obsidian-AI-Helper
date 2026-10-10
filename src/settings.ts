@@ -17,6 +17,7 @@ export interface AiHelperSettings {
 	maxTokens: string;
 	topP: string;
 	contextWindow: string;
+	responseWait: string;
 	language: Locale;
 }
 
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	maxTokens: "",
 	topP: "",
 	contextWindow: "",
+	responseWait: "",
 	language: "en",
 };
 
@@ -131,6 +133,22 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		const responseWait = new Setting(generation)
+			.setName(this.t("setting-response-wait"))
+			.setDesc(this.t("setting-response-wait-desc"));
+		responseWait.addText((text) => {
+			text.setValue(this.plugin.settings.responseWait).onChange(async (raw) => {
+				const value = raw.trim();
+				const seconds = Number(value);
+				const valid = value === "" || (/^\d+$/.test(value) && Number.isSafeInteger(seconds) && seconds > 0);
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				responseWait.setDesc(this.t("setting-response-wait-desc") + (valid ? "" : ` ${this.t("setting-response-wait-invalid")}`));
+				if (!valid) return;
+				this.plugin.settings.responseWait = value;
+				await this.plugin.saveSettings();
+			});
+		});
 
 		new Setting(generation)
 			.setName(this.t("setting-system-prompt"))
