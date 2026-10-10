@@ -17,7 +17,9 @@ export interface ServerErrorBody {
 	error?: { message?: string };
 }
 
-type ClientErrorCode = "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
+export type EmbeddingErrorCode = "embedding-config" | "embedding-auth" | "embedding-model" | "embedding-network" | "embedding-response";
+
+type ClientErrorCode = EmbeddingErrorCode | "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
 
 class ClientError extends Error {
 	constructor(message: string, readonly code: ClientErrorCode) { super(message); }
@@ -66,6 +68,7 @@ export interface TokenUsage {
 }
 
 export interface ServerClient {
+	embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>>;
 	listModels(serverUrl: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<string[]>>;
 	chat(
 		serverUrl: string,
@@ -386,5 +389,41 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		}, timeoutMs, params?.signal, "timeout");
 	}
 
-	return { listModels, chat };
+	async function embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>> {
+		const fail = (code: EmbeddingErrorCode): ServerClientResult<number[][]> => ({ ok: false, error: { code, message: code } });
+		let url: URL;
+		try {
+			url = new URL(serverUrl.trim());
+			if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return fail("embedding-config");
+		} catch { return fail("embedding-config"); }
+		if (!model.trim() || !input.length || input.some((text) => !text.trim())) return fail("embedding-config");
+		const result = await request<number[][]>(async (requestSignal) => {
+			const response = await fetchImpl(`${url.href.replace(/\/+$/, "")}/embeddings`, {
+				method: "POST", headers: { "Content-Type": "application/json", ...bearerHeaders(apiKey) },
+				body: JSON.stringify({ model: model.trim(), input, encoding_format: "float" }), signal: requestSignal,
+			});
+			if (!response.ok) return fail(response.status === 401 || response.status === 403 ? "embedding-auth"
+				: [400, 404, 405, 422].includes(response.status) ? "embedding-model" : "embedding-network");
+			let body: unknown;
+			try { body = await response.json(); } catch { return fail("embedding-response"); }
+			if (!isRecord(body) || !Array.isArray(body.data) || body.data.length !== input.length) return fail("embedding-response");
+			const vectors: number[][] = new Array(input.length);
+			let dimensions = 0;
+			for (const item of body.data) {
+				if (!isRecord(item) || typeof item.index !== "number" || !Number.isSafeInteger(item.index) ||
+					item.index < 0 || item.index >= input.length || vectors[item.index] !== undefined ||
+					!Array.isArray(item.embedding) || !item.embedding.length ||
+					item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) return fail("embedding-response");
+				const vector: number[] = item.embedding;
+				const norm = vector.reduce((length, value) => Math.hypot(length, value), 0);
+				if (!Number.isFinite(norm) || norm === 0 || (dimensions !== 0 && dimensions !== vector.length)) return fail("embedding-response");
+				dimensions = vector.length;
+				vectors[item.index] = vector;
+			}
+			return { ok: true, value: vectors };
+		}, MODELS_TIMEOUT_MS, signal);
+		return !result.ok && !result.error.code ? fail("embedding-network") : result;
+	}
+
+	return { listModels, chat, embeddings };
 }

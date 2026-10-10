@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type { AiHelperPlugin } from "./main";
+import type { EmbeddingConnection } from "./note-search";
 import { parseResponseWait } from "./response-wait";
 import {
 	setLanguage,
@@ -9,7 +10,7 @@ import {
 	type LocaleKey,
 } from "./i18n";
 
-export interface AiHelperSettings {
+export interface AiHelperSettings extends EmbeddingConnection {
 	serverUrl: string;
 	apiKey: string;
 	model: string;
@@ -23,6 +24,9 @@ export interface AiHelperSettings {
 }
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
+	embeddingServerUrl: "",
+	embeddingApiKey: "",
+	embeddingModel: "",
 	serverUrl: "",
 	apiKey: "",
 	model: "",
@@ -39,6 +43,7 @@ export type ModelStatus = "idle" | "loaded" | "empty" | "error";
 
 export class AiHelperSettingsTab extends PluginSettingTab {
 	plugin: AiHelperPlugin;
+	private displayVersion = 0;
 
 	constructor(app: App, plugin: AiHelperPlugin) {
 		super(app, plugin);
@@ -50,6 +55,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		if (this.plugin.noteSearchConnection?.status.state === "checking") this.plugin.noteSearchConnection.cancel();
+		const version = ++this.displayVersion;
 		const { containerEl } = this;
 		containerEl.empty();
 
@@ -60,6 +67,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const server = this.createGroup(containerEl, "settings-group-connection");
 		const model = this.createGroup(containerEl, "settings-group-model");
 		const generation = this.createGroup(containerEl, "settings-group-generation");
+		const embedding = this.createGroup(containerEl, "settings-group-embedding");
+		this.renderEmbeddingConnection(embedding, version);
 
 		new Setting(general)
 			.setName(this.t("setting-language"))
@@ -201,6 +210,50 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+	}
+
+	private renderEmbeddingConnection(parent: HTMLElement, version: number): void {
+		const destination = parent.createDiv({ attr: { "aria-live": "polite" } });
+		const check = new Setting(parent).setName(this.t("embedding-check"));
+		const update = () => {
+			if (version !== this.displayVersion) return;
+			const url = this.plugin.settings.embeddingServerUrl;
+			destination.setText(url ? `${this.t("embedding-destination")} ${url}` : this.t("embedding-destination-empty"));
+			const status = this.plugin.noteSearchConnection?.status ?? { state: "idle" };
+			const message = status.state === "verified" ? `${this.t("embedding-verified")} ${status.dimensions}`
+				: status.state === "error" ? this.t(status.code)
+				: this.t(status.state === "checking" ? "embedding-checking" : "embedding-idle");
+			check.setDesc(`${this.t("embedding-check-desc")} ${message}`);
+		};
+		const fields: Array<{ key: keyof EmbeddingConnection; name: LocaleKey; description: LocaleKey }> = [
+			{ key: "embeddingServerUrl", name: "setting-embedding-server-url", description: "setting-embedding-server-url-desc" },
+			{ key: "embeddingApiKey", name: "setting-embedding-api-key", description: "setting-api-key-desc" },
+			{ key: "embeddingModel", name: "setting-embedding-model", description: "setting-embedding-model-desc" },
+		];
+		for (const field of fields) {
+			new Setting(parent).setName(this.t(field.name)).setDesc(this.t(field.description)).addText((text) => {
+				text.setValue(this.plugin.settings[field.key]).onChange(async (value) => {
+					this.plugin.settings[field.key] = value.trim();
+					const save = this.plugin.saveSettings();
+					update();
+					await save;
+				});
+				if (field.key === "embeddingApiKey") text.inputEl.type = "password";
+			});
+		}
+		check.addButton((button) => button.setButtonText(this.t("embedding-check")).onClick(async () => {
+			this.plugin.noteSearchConnection.configure(this.plugin.settings);
+			const checking = this.plugin.noteSearchConnection.verify();
+			update();
+			await checking;
+			update();
+		}));
+		update();
+	}
+
+	hide(): void {
+		this.displayVersion++;
+		this.plugin.noteSearchConnection.cancel();
 	}
 
 	private createGroup(parent: HTMLElement, headingKey: LocaleKey): HTMLElement {

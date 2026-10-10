@@ -9,6 +9,25 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"settings-group-embedding": "Note search: embedding model",
+	"setting-embedding-server-url": "Embedding model server URL",
+	"setting-embedding-server-url-desc": "Independent OpenAI-compatible server address, including /v1. External servers are allowed.",
+	"setting-embedding-api-key": "Embedding API key",
+	"setting-embedding-model": "Embedding model API identifier",
+	"setting-embedding-model-desc": "Enter the API identifier manually. A model list does not prove embedding support.",
+	"embedding-destination": "Text for embeddings will be sent to:",
+	"embedding-destination-empty": "Set an embedding model server URL.",
+	"embedding-check": "Check embeddings",
+	"embedding-check-desc": "Sends two synthetic texts to this server; no notes are sent. Checks vectors and their input indices, not semantic quality.",
+	"embedding-idle": "Connection has not been verified.",
+	"embedding-checking": "Checking embeddings…",
+	"embedding-verified": "Embeddings verified. Vector dimensions:",
+	"embedding-config": "Enter an HTTP(S) server URL and a model API identifier. URL credentials, query and fragment are not supported.",
+	"embedding-auth": "Embedding server rejected authorization. Check the API key.",
+	"embedding-model": "The server rejected the embedding model or endpoint. Check the API identifier and embedding support.",
+	"embedding-network": "Could not reach the embedding server, the server failed, or the 15-second check timed out.",
+	"embedding-response": "The embedding server returned an invalid response: expected one finite, nonzero vector of the same size per input with unique matching indices.",
+
 	"probe-title": "Check local index storage",
 	"probe-description": "Technical probe: synthetic data only; notes are unchanged. Write, quit Obsidian completely, reopen and read. Repeat in a second vault before clearing both. No file fallback.",
 	"probe-ready": "Ready. Test data: 6 MiB; limit: 8 MiB; block: 64 KiB.",
@@ -95,6 +114,25 @@ export const en = {
 } as const;
 
 export const ru = {
+	"settings-group-embedding": "Поиск по заметкам: embedding-модель",
+	"setting-embedding-server-url": "Адрес модель-сервера embeddings",
+	"setting-embedding-server-url-desc": "Независимый адрес OpenAI-совместимого сервера, включая /v1. Внешние серверы разрешены.",
+	"setting-embedding-api-key": "API-ключ embeddings",
+	"setting-embedding-model": "API-идентификатор embedding-модели",
+	"setting-embedding-model-desc": "Введите API-идентификатор вручную. Список моделей не подтверждает поддержку embeddings.",
+	"embedding-destination": "Текст для embeddings будет передаваться на:",
+	"embedding-destination-empty": "Задайте адрес модель-сервера embeddings.",
+	"embedding-check": "Проверить embeddings",
+	"embedding-check-desc": "Отправляет два синтетических текста на этот сервер; заметки не отправляются. Проверяет векторы и индексы входных текстов, а не смысловое качество.",
+	"embedding-idle": "Подключение ещё не проверено.",
+	"embedding-checking": "Проверка embeddings…",
+	"embedding-verified": "Embeddings проверены. Размерность вектора:",
+	"embedding-config": "Введите HTTP(S)-адрес сервера и API-идентификатор модели. Данные авторизации, параметры запроса и фрагмент в адресе не поддерживаются.",
+	"embedding-auth": "Сервер embeddings отклонил авторизацию. Проверьте API-ключ.",
+	"embedding-model": "Сервер отклонил embedding-модель или endpoint. Проверьте API-идентификатор и поддержку embeddings.",
+	"embedding-network": "Не удалось связаться с сервером embeddings, сервер сообщил об ошибке или истекли 15 секунд проверки.",
+	"embedding-response": "Сервер embeddings вернул некорректный ответ: для каждого текста ожидается конечный ненулевой вектор одинаковой размерности с уникальным соответствующим индексом.",
+
 	"probe-title": "Проверить локальное хранение индекса",
 	"probe-description": "Техническая проверка: только синтетические данные, заметки не меняются. Запишите, полностью завершите Obsidian, откройте и прочитайте. Повторите во втором хранилище, затем очистите оба. Перехода к файлам нет.",
 	"probe-ready": "Готово. Пробные данные: 6 МиБ; предел: 8 МиБ; блок: 64 КиБ.",

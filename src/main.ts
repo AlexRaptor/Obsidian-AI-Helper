@@ -8,6 +8,7 @@ import {
 import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
+import { createNoteSearchConnection } from "./note-search";
 import { StorageProbeModal } from "./storage-probe-modal";
 
 export class AiHelperPlugin extends Plugin {
@@ -18,6 +19,8 @@ export class AiHelperPlugin extends Plugin {
 	serverClient: ServerClient = createServerClient(
 		(input, init) => globalThis.fetch(input, init)
 	);
+
+	noteSearchConnection = createNoteSearchConnection(this.serverClient);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -44,6 +47,7 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.noteSearchConnection.cancel();
 		this.modelRequest?.abort();
 		this.modelRequest = null;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
@@ -51,9 +55,11 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.noteSearchConnection.configure(this.settings);
 	}
 
 	async saveSettings(): Promise<void> {
+		this.noteSearchConnection.configure(this.settings);
 		await this.saveData(this.settings);
 	}
 
