@@ -93,6 +93,14 @@ export class PluginSettingTab {
 	constructor(_app: unknown, _plugin: unknown) {}
 }
 
+export class Modal {
+	contentEl = new TestElement();
+	constructor(public app: unknown) {}
+	open(): void {}
+}
+
+export class FileSystemAdapter {}
+
 export function deferred<T>() {
 	let resolve!: (value: T) => void;
 	const promise = new Promise<T>((done) => { resolve = done; });

@@ -8,6 +8,7 @@ import {
 import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
+import { StorageProbeModal } from "./storage-probe-modal";
 
 export class AiHelperPlugin extends Plugin {
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
@@ -34,6 +35,11 @@ export class AiHelperPlugin extends Plugin {
 			callback: () => this.toggleView(),
 		});
 		this.addSettingTab(new AiHelperSettingsTab(this.app, this));
+		this.addCommand({
+			id: "local-storage-probe",
+			name: this.t("probe-title"),
+			callback: () => new StorageProbeModal(this.app).open(),
+		});
 		void this.refreshModels();
 	}
 
