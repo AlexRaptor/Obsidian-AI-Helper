@@ -2,10 +2,40 @@ import { describe, expect, it, vi } from "vitest";
 import type { App, PluginManifest } from "obsidian";
 import { AiHelperPlugin } from "../src/main";
 import { DEFAULT_SETTINGS } from "../src/settings";
+import { VIEW_TYPE_CHAT } from "../src/chat-view";
 import { deferred, flushPromises } from "./helpers/obsidian";
 import type { ServerClientResult } from "../src/server-client";
 
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
+
+describe("chat toggle", () => {
+	it.each(["ribbon", "command"])("opens, closes and reopens the sidebar through %s", async (trigger) => {
+		const leaf = { detach: vi.fn(() => { leaves = []; }) };
+		let leaves: typeof leaf[] = [];
+		const workspace = {
+			getLeavesOfType: vi.fn(() => leaves),
+			ensureSideLeaf: vi.fn(async () => { leaves = [leaf]; }),
+			revealLeaf: vi.fn(),
+		};
+		const plugin = new AiHelperPlugin({ workspace } as unknown as App, {} as PluginManifest);
+		const ribbon = vi.spyOn(plugin, "addRibbonIcon");
+		const command = vi.spyOn(plugin, "addCommand");
+		await plugin.onload();
+		const toggle = trigger === "ribbon"
+			? () => ribbon.mock.calls[0][2]({} as MouseEvent)
+			: () => command.mock.calls[0][0].callback!();
+
+		await toggle();
+		expect(workspace.ensureSideLeaf).toHaveBeenCalledWith(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
+		expect(leaves).toHaveLength(1);
+		await toggle();
+		expect(leaf.detach).toHaveBeenCalledTimes(1);
+		expect(leaves).toHaveLength(0);
+		await toggle();
+		expect(workspace.ensureSideLeaf).toHaveBeenCalledTimes(2);
+		expect(leaves).toHaveLength(1);
+	});
+});
 
 describe("plugin model loading", () => {
 	it("registers the interface without waiting for the model server", async () => {

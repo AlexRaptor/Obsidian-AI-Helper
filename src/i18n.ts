@@ -66,7 +66,7 @@ export const en = {
 	"setting-context-window-placeholder": "254000",
 	"chat-error-prefix": "Request failed",
 	"chat-invalid-params":
-		"Generation parameters must be numbers. The request was sent without them.",
+		"Generation parameters must be numbers. Correct the settings and try again.",
 	"header-context": "Context window",
 	"header-context-empty": "0 / 0 tokens",
 	"header-context-unavailable": "No data",
@@ -132,7 +132,7 @@ export const ru = {
 	"setting-context-window-placeholder": "254000",
 	"chat-error-prefix": "Ошибка запроса",
 	"chat-invalid-params":
-		"Параметры генерации должны быть числами. Запрос отправлен без них.",
+		"Параметры генерации должны быть числами. Исправьте настройки и повторите запрос.",
 	"header-context": "Окно контекста",
 	"header-context-empty": "0 / 0 токенов",
 	"header-context-unavailable": "Нет данных",

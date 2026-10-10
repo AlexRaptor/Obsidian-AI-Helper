@@ -107,7 +107,7 @@ export class AiHelperPlugin extends Plugin {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_CHAT)[0];
 		if (existing) {
-			await workspace.revealLeaf(existing);
+			existing.detach();
 			return;
 		}
 		await workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });

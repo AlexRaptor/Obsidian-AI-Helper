@@ -17,7 +17,7 @@ export interface ServerErrorBody {
 	error?: { message?: string };
 }
 
-type ClientErrorCode = "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait";
+type ClientErrorCode = "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
 
 class ClientError extends Error {
 	constructor(message: string, readonly code: ClientErrorCode) { super(message); }
@@ -238,6 +238,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			return {
 				ok: false,
 				error: {
+					code: "invalid-params",
 					message: `Invalid generation parameters: ${invalidParams.join(", ")}`,
 				},
 			};

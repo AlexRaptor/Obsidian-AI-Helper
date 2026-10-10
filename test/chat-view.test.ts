@@ -4,7 +4,7 @@ import { ChatView } from "../src/chat-view";
 import type { AiHelperPlugin } from "../src/main";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import { t, setLanguage } from "../src/i18n";
-import { createServerClient } from "../src/server-client";
+import { createServerClient, type ClientFetch } from "../src/server-client";
 import type { ServerClient, ServerClientResult, ChatCompletionResult } from "../src/server-client";
 import { TestElement, deferred, flushPromises } from "./helpers/obsidian";
 
@@ -31,6 +31,36 @@ async function setup(chat: ServerClient["chat"]) {
 }
 
 describe("chat view request lifecycle", () => {
+	it.each([
+		["en", "Generation parameters must be numbers. Correct the settings and try again."],
+		["ru", "Параметры генерации должны быть числами. Исправьте настройки и повторите запрос."],
+	] as const)("localizes invalid generation parameters and retries in %s", async (locale, message) => {
+		const fetch = vi.fn<Parameters<ClientFetch>, ReturnType<ClientFetch>>(async () => new Response(JSON.stringify({ choices: [{ message: { content: "answer" } }] })));
+		const { view, root, input, send } = await setup(createServerClient(fetch).chat);
+		setLanguage(locale);
+		await view.refreshLocale();
+		view.plugin.settings.temperature = "abc";
+		view.plugin.settings.maxTokens = "bad";
+		view.plugin.settings.topP = "oops";
+		input.value = "question";
+		send.click();
+		await flushPromises();
+		expect(root.getText()).toContain(message);
+		expect(root.getText()).not.toContain("Invalid generation parameters:");
+		expect(fetch).not.toHaveBeenCalled();
+		expect(input.value).toBe("question");
+		expect(view.getMessages()).toEqual([]);
+		view.plugin.settings.temperature = "0.7";
+		view.plugin.settings.maxTokens = "100";
+		view.plugin.settings.topP = "0.9";
+		send.click();
+		await flushPromises();
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).messages).toEqual([{ role: "user", content: "question" }]);
+		expect(view.getMessages()).toEqual([{ role: "user", content: "question" }, { role: "model", content: "answer" }]);
+		await view.onClose();
+	});
+
 	it("ignores an old response after clearing and starting a new conversation", async () => {
 		const old = deferred<Result>();
 		const next = deferred<Result>();

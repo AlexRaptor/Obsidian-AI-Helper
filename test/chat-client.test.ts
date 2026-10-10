@@ -173,7 +173,7 @@ describe("server client: chat", () => {
 		expect(fetchImpl).not.toHaveBeenCalled();
 		expect(result).toEqual({
 			ok: false,
-			error: { message: "Invalid generation parameters: temperature" },
+			error: { code: "invalid-params", message: "Invalid generation parameters: temperature" },
 		});
 	});
 

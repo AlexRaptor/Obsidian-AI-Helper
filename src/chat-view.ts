@@ -374,6 +374,7 @@ export class ChatView extends ItemView {
 					: result.error.code === "timeout" ? this.t("chat-response-timeout")
 					: result.error.code === "invalid-stream" ? this.t("chat-invalid-stream")
 					: result.error.code === "stream-error" ? this.t("chat-stream-error")
+					: result.error.code === "invalid-params" ? this.t("chat-invalid-params")
 					: result.error.code === "invalid-response-wait" ? this.t("setting-response-wait-invalid") : result.error.message;
 				if (pending.kind === "text") pending.error = message;
 				else { pending.content = message; pending.kind = "error"; }
