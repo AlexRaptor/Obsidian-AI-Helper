@@ -98,9 +98,11 @@ export class ChatView extends ItemView {
 	}
 
 	async refreshLocale(): Promise<void> {
-		this.searchBtn?.setText(this.t("search-toggle"));
+		this.searchBtn?.setAttribute("aria-label", this.t("search-toggle"));
+		this.searchBtn?.setAttribute("title", this.t("search-toggle"));
 		this.headerTitleEl?.setText(this.t("view-title"));
-		this.clearBtn?.setText(this.t("clear-conversation"));
+		this.clearBtn?.setAttribute("aria-label", this.t("clear-conversation"));
+		this.clearBtn?.setAttribute("title", this.t("clear-conversation"));
 		this.inputEl?.setAttribute("placeholder", this.t("input-placeholder"));
 		for (const message of this.messages) {
 			if (message.kind === "thinking") message.content = this.t("thinking");
@@ -154,10 +156,12 @@ export class ChatView extends ItemView {
 		this.contextLabelEl = header.createSpan({ cls: "ai-helper-context-label" });
 		this.clearBtn = header.createEl("button", {
 			cls: "ai-helper-clear-btn",
-			text: this.t("clear-conversation"),
+			attr: { type: "button", "aria-label": this.t("clear-conversation"), title: this.t("clear-conversation") },
 		});
+		setIcon(this.clearBtn, "trash-2");
 
-		this.searchBtn = header.createEl("button", { cls: "ai-helper-search-toggle", text: this.t("search-toggle"), attr: { "aria-pressed": String(this.searchEnabled) } });
+		this.searchBtn = header.createEl("button", { cls: "ai-helper-search-toggle", attr: { type: "button", "aria-label": this.t("search-toggle"), title: this.t("search-toggle"), "aria-pressed": String(this.searchEnabled) } });
+		setIcon(this.searchBtn, "search");
 		this.searchBtn.addEventListener("click", () => {
 			this.searchEnabled = !this.searchEnabled;
 			this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
