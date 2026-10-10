@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
+import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity } from "./note-index";
 import { parseResponseWait } from "./response-wait";
 import {
 	setLanguage,
@@ -11,6 +12,7 @@ import {
 } from "./i18n";
 
 export interface AiHelperSettings extends EmbeddingConnection {
+	noteSearchMinSimilarity: number;
 	serverUrl: string;
 	apiKey: string;
 	model: string;
@@ -24,6 +26,7 @@ export interface AiHelperSettings extends EmbeddingConnection {
 }
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
+	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	embeddingServerUrl: "",
 	embeddingApiKey: "",
 	embeddingModel: "",
@@ -69,6 +72,25 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const generation = this.createGroup(containerEl, "settings-group-generation");
 		const embedding = this.createGroup(containerEl, "settings-group-embedding");
 		this.renderEmbeddingConnection(embedding, version);
+		const similarity = new Setting(embedding)
+			.setName(this.t("setting-search-min-similarity"))
+			.setDesc(this.t("setting-search-min-similarity-desc"));
+		similarity.addText((text) => {
+			text.setValue(String(this.plugin.settings.noteSearchMinSimilarity)).onChange(async (value) => {
+				const normalized = value.trim().replace(",", ".");
+				const threshold = Number(normalized);
+				if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) || !isValidMinimumSimilarity(threshold)) {
+					similarity.setDesc(`${this.t("setting-search-min-similarity-desc")} ${this.t("setting-search-min-similarity-invalid")}`);
+					text.inputEl.setAttribute("aria-invalid", "true");
+					return;
+				}
+				text.inputEl.setAttribute("aria-invalid", "false");
+				similarity.setDesc(this.t("setting-search-min-similarity-desc"));
+				this.plugin.settings.noteSearchMinSimilarity = threshold;
+				await this.plugin.saveSettings();
+			});
+			text.inputEl.setAttribute("inputmode", "decimal");
+		});
 
 		new Setting(general)
 			.setName(this.t("setting-language"))

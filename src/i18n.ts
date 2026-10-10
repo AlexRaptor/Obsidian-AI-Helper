@@ -9,6 +9,9 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"setting-search-min-similarity": "Minimum source similarity",
+	"setting-search-min-similarity-desc": "A number from 0 to 1; default 0.45. Lower values include more sources, higher values require closer matches. Applies to the next search; no index rebuild needed.",
+	"setting-search-min-similarity-invalid": "Enter a number from 0 to 1 using a decimal point or comma. The last valid value is kept.",
 	"search-toggle": "Note search",
 	"search-index": "Index the active Markdown note",
 	"search-indexing": "Indexing the active note…",
@@ -127,6 +130,9 @@ export const en = {
 } as const;
 
 export const ru = {
+	"setting-search-min-similarity": "Минимальный порог сходства",
+	"setting-search-min-similarity-desc": "Число от 0 до 1; по умолчанию 0,45. Ниже — больше источников, выше — более близкие совпадения. Применяется к следующему поиску; перестроение индекса не требуется.",
+	"setting-search-min-similarity-invalid": "Введите число от 0 до 1 с точкой или запятой. Последнее корректное значение сохранено.",
 	"search-toggle": "Поиск по заметкам",
 	"search-index": "Проиндексировать активную Markdown-заметку",
 	"search-indexing": "Индексация активной заметки…",

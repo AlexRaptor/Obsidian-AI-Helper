@@ -16,10 +16,17 @@ it("indexes only on the explicit active-note command through the public module",
 	const app = { vault: { adapter, getFileByPath: () => file, read }, workspace: { getActiveFile: () => file } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" });
-	plugin.serverClient = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+	let embeddings = 0;
+	plugin.serverClient = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: ++embeddings === 1 ? [1, 0] : [0.6, 0.8] }] })));
+	const save = vi.fn(async () => {}); Object.assign(plugin, { saveData: save });
 	const commands = vi.spyOn(plugin, "addCommand"); await plugin.onload(); expect(read).not.toHaveBeenCalled();
 	const command = commands.mock.calls.find(([command]) => command.id === "index-active-note")![0];
 	Notice.messages.length = 0; command.callback!();
 	await vi.waitFor(() => expect(Notice.messages.join(" ")).toContain("Note indexed locally"));
 	expect(await plugin.noteSearch.search("When?")).toEqual({ path: "Train.md", text: "Train departs at 18:30." });
+	plugin.settings.noteSearchMinSimilarity = 0.7; await plugin.saveSettings();
+	expect(await plugin.noteSearch.search("When?")).toBeNull();
+	plugin.settings.noteSearchMinSimilarity = 0.5; await plugin.saveSettings();
+	expect(await plugin.noteSearch.search("When?")).toEqual({ path: "Train.md", text: "Train departs at 18:30." });
+	expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ noteSearchMinSimilarity: 0.5 }));
 });

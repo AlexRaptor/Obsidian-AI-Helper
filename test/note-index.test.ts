@@ -86,6 +86,14 @@ it("finds the departure time with the captured embeddings from the Russian accep
 	const search = createNoteSearch({ ...options, client, read: async () => text }); search.configure(connection);
 	await search.index("Тест поиска.md");
 	expect(await search.search("Время отправления поезда")).toEqual({ path: "Тест поиска.md", text });
+	search.configure({ ...connection, noteSearchMinSimilarity: 0.5 });
+	expect(await search.search("Время отправления поезда")).toBeNull();
+	search.configure({ ...connection, noteSearchMinSimilarity: 0.4 });
+	expect(await search.search("Время отправления поезда")).toEqual({ path: "Тест поиска.md", text });
+	// The persisted vectors remain compatible after changing only the search threshold.
+	const restored = createNoteSearch({ ...options, client, read: async () => text });
+	restored.configure({ ...connection, noteSearchMinSimilarity: 0.5 });
+	expect(await restored.search("Время отправления поезда")).toBeNull();
 });
 
 it("still rejects an unrelated question with captured embeddings from the same model", async () => {
@@ -100,4 +108,13 @@ it("still rejects an unrelated question with captured embeddings from the same m
 	const search = createNoteSearch({ ...options, client, read: async () => text }); search.configure(connection);
 	await search.index("Тест поиска.md");
 	expect(await search.search("Курс доллара сегодня")).toBeNull();
+});
+
+it("accepts an identical captured embedding at the maximum similarity threshold", async () => {
+	const { trainEmbedding } = await import("./fixtures/train-embeddings");
+	const { options, connection } = fixture();
+	const client = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: trainEmbedding }] })));
+	const search = createNoteSearch({ ...options, client });
+	search.configure({ ...connection, noteSearchMinSimilarity: 1 }); await search.index("Train.md");
+	expect(await search.search("The train departs at 18:30.")).toEqual({ path: "Train.md", text: "The train departs at 18:30." });
 });

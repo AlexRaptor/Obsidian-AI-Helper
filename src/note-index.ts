@@ -16,7 +16,10 @@ interface NoteSearchEnvironment {
 }
 const SOURCE_CHAR_LIMIT = 4000;
 // Calibrated on the Russian single-note acceptance scenario with Qwen3 embeddings.
-const MIN_SOURCE_SIMILARITY = 0.45;
+export const DEFAULT_MIN_SOURCE_SIMILARITY = 0.45;
+export function isValidMinimumSimilarity(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
 async function hash(text: string): Promise<string> {
 	const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -80,6 +83,7 @@ function storage(environment: NoteSearchEnvironment) {
 export function createNoteSearch(environment: NoteSearchEnvironment) {
 	const store = storage(environment);
 	let connection: EmbeddingConnection | undefined;
+	let minimumSimilarity = DEFAULT_MIN_SOURCE_SIMILARITY;
 	let revision = 0;
 	let writes: Promise<unknown> = Promise.resolve();
 	let disposed = false;
@@ -102,7 +106,8 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		return result.value[0];
 	}
 	return {
-		configure(next: EmbeddingConnection): void {
+		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number }): void {
+			minimumSimilarity = isValidMinimumSimilarity(next.noteSearchMinSimilarity) ? next.noteSearchMinSimilarity : DEFAULT_MIN_SOURCE_SIMILARITY;
 			const copy = { embeddingServerUrl: next.embeddingServerUrl, embeddingApiKey: next.embeddingApiKey, embeddingModel: next.embeddingModel };
 			if (JSON.stringify(connection) === JSON.stringify(copy)) return;
 			const changed = connection !== undefined;
@@ -127,6 +132,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		async search(question: string, signal?: AbortSignal): Promise<NoteSource | null> {
 			const version = revision;
+			const threshold = minimumSimilarity;
 			try { await writes; } catch { throw new NoteSearchError("search-storage"); }
 			const note = await store.read();
 			check(version, signal);
@@ -139,7 +145,8 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			if (vector.length !== note.vector.length) throw new NoteSearchError("search-rebuild");
 			const norm = (values: number[]) => Math.hypot(...values);
 			const similarity = vector.reduce((sum, value, index) => sum + value * note.vector[index], 0) / (norm(vector) * norm(note.vector));
-			return similarity >= MIN_SOURCE_SIMILARITY ? { path: note.path, text: note.text } : null;
+			// Allow for floating-point accumulation error, including identical vectors at threshold 1.
+			return similarity + 1e-12 >= threshold ? { path: note.path, text: note.text } : null;
 		},
 		async open(source: NoteSource): Promise<void> {
 			if (await environment.read(source.path) !== source.text) throw new NoteSearchError("search-rebuild");

@@ -9,7 +9,7 @@ import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
 import { createNoteSearchConnection } from "./note-search";
-import { createNoteSearch, NoteSearchError, type NoteSearch } from "./note-index";
+import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, type NoteSearch } from "./note-index";
 import { StorageProbeModal } from "./storage-probe-modal";
 
 export class AiHelperPlugin extends Plugin {
@@ -75,6 +75,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
 		this.noteSearchConnection.configure(this.settings);
 	}
 
