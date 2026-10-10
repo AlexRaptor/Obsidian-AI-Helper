@@ -212,3 +212,19 @@
 .ai-helper-models-hint-empty {
 	color: var(--text-error);
 }
+
+.ai-helper-input-row .ai-helper-send {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.ai-helper-input-row .ai-helper-stop {
+	background: var(--background-secondary);
+	color: var(--text-error);
+	border: 1px solid var(--text-error);
+}
+
+.ai-helper-stopped {
+	color: var(--text-muted);
+	font-style: italic;
+}

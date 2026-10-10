@@ -10,7 +10,7 @@ function formatNumber(value: number): string {
 	return value.toLocaleString("en-US");
 }
 
-type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string };
+type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean };
 
 export class ChatView extends ItemView {
 	plugin: AiHelperPlugin;
@@ -28,6 +28,8 @@ export class ChatView extends ItemView {
 	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
 	private renderRevision = 0;
+	private activeMessage: DisplayMessage | null = null;
+	private draft = "";
 
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
@@ -95,6 +97,7 @@ export class ChatView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.draft = this.inputEl?.value ?? this.draft;
 		this.cancelRequest();
 		this.renderRevision++;
 		this.detachMarkdown();
@@ -112,7 +115,7 @@ export class ChatView extends ItemView {
 	}
 
 	clearConversation(): void {
-		this.cancelRequest();
+		this.cancelRequest(false);
 		this.conversation.clear();
 		this.messages = [];
 		this.updateContextIndicators();
@@ -144,6 +147,7 @@ export class ChatView extends ItemView {
 			cls: "ai-helper-input",
 			attr: { rows: "2", placeholder: this.t("input-placeholder") },
 		});
+		this.inputEl.value = this.draft;
 		this.sendBtn = inputRow.createEl("button", {
 			cls: "ai-helper-send",
 			text: this.t("send"),
@@ -152,7 +156,10 @@ export class ChatView extends ItemView {
 
 	private bindEvents(): void {
 		this.clearBtn?.addEventListener("click", () => this.clearConversation());
-		this.sendBtn?.addEventListener("click", () => void this.handleSend());
+		this.sendBtn?.addEventListener("click", () => {
+			if (this.thinking) { this.cancelRequest(); void this.renderMessages(); }
+			else void this.handleSend();
+		});
 		this.inputEl?.addEventListener("keydown", (e) => {
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
@@ -199,7 +206,7 @@ export class ChatView extends ItemView {
 				row = { div, branch, body: div.createDiv({ cls: "ai-helper-message-body" }), revision: 0, signature: "" };
 				this.rendered.set(message, row);
 			}
-			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${this.t("chat-error-prefix")}`;
+			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}`;
 			if (row.signature === signature) continue;
 			row.signature = signature;
 			const current = row;
@@ -213,6 +220,7 @@ export class ChatView extends ItemView {
 			const content = message.content;
 			const error = message.error;
 			const kind = message.kind;
+			const stopped = message.stopped;
 			const component = new Component();
 			component.load();
 			this.addChild(component);
@@ -225,6 +233,7 @@ export class ChatView extends ItemView {
 					staging.createSpan({ cls: "ai-helper-error-prefix", text: this.t("chat-error-prefix") });
 					staging.createSpan({ text: ` ${content}` });
 				} else staging.createSpan({ cls: kind === "thinking" ? "ai-helper-thinking" : "", text: content });
+				if (stopped) staging.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
 				if (error) staging.createDiv({ cls: "ai-helper-error-prefix", text: `${this.t("chat-error-prefix")}: ${error}` });
 				if (revision !== this.renderRevision || current.revision !== rowRevision || this.messagesEl !== el) return;
 				current.body.empty();
@@ -243,17 +252,32 @@ export class ChatView extends ItemView {
 	private setThinking(thinking: boolean): void {
 		this.thinking = thinking;
 		if (this.sendBtn) {
-			this.sendBtn.disabled = thinking;
-			this.sendBtn.setText(this.t(thinking ? "thinking" : "send"));
+			this.sendBtn.disabled = false;
+			this.sendBtn.className = `ai-helper-send${thinking ? " ai-helper-stop" : ""}`;
+			this.sendBtn.setText(this.t(thinking ? "stop" : "send"));
 		}
 	}
 
-	private cancelRequest(): void {
+	private cancelRequest(preservePartial = true): void {
 		const request = this.activeRequest;
 		this.activeRequest = null;
+		if (preservePartial && this.activeMessage) {
+			if (this.activeMessage.kind === "thinking") this.activeMessage.content = "";
+			this.activeMessage.kind = "text";
+			this.activeMessage.stopped = true;
+			// Flush received text synchronously; Markdown may finish after the stop action.
+			const row = this.rendered.get(this.activeMessage);
+			if (row) {
+				row.revision++;
+				row.signature = "";
+				row.body.empty();
+				row.body.createSpan({ text: this.activeMessage.content });
+				row.body.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
+			}
+		}
+		this.activeMessage = null;
 		this.clearUpdateTimer();
 		request?.abort();
-		this.messages = this.messages.filter((message) => message.kind !== "thinking");
 		this.setThinking(false);
 	}
 
@@ -266,6 +290,7 @@ export class ChatView extends ItemView {
 		this.messages.push({ role: "user", content: text, kind: "text" });
 		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
 		this.messages.push(pending);
+		this.activeMessage = pending;
 		const request = new AbortController();
 		this.activeRequest = request;
 		const { settings, serverClient } = this.plugin;
@@ -325,6 +350,7 @@ export class ChatView extends ItemView {
 		} finally {
 			if (this.activeRequest === request) {
 				this.activeRequest = null;
+				this.activeMessage = null;
 				this.clearUpdateTimer();
 				this.setThinking(false);
 				this.updateContextIndicators();

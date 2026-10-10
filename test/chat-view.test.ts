@@ -50,7 +50,7 @@ describe("chat view request lifecycle", () => {
 		await flushPromises();
 		old.resolve(success("old answer"));
 		await flushPromises();
-		expect(send.disabled).toBe(true);
+		expect(send.text).toBe("Stop");
 		expect(root.getText()).not.toContain("old answer");
 		next.resolve(success("new answer"));
 		await flushPromises();
@@ -94,9 +94,9 @@ describe("chat view request lifecycle", () => {
 		setLanguage("ru");
 		await view.refreshLocale();
 		expect(root.find("ai-helper-input").value).toBe("next draft");
-		expect(root.find("ai-helper-send").disabled).toBe(true);
-		expect(root.find("ai-helper-send").text).toBe("Думаю…");
-		root.find("ai-helper-send").click();
+		expect(root.find("ai-helper-send").disabled).toBe(false);
+		expect(root.find("ai-helper-send").text).toBe("Остановить");
+		input.keydown("Enter");
 		await flushPromises();
 		expect(chat).toHaveBeenCalledTimes(1);
 		pending.resolve(success("answer"));

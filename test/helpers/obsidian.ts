@@ -14,7 +14,7 @@ export class TestElement {
 	text = "";
 	scrollTop = 0;
 	scrollHeight = 0;
-	private listeners = new Map<string, Array<() => void>>();
+	private listeners = new Map<string, Array<(event: any) => void>>();
 
 	empty(): void { this.children = []; this.text = ""; }
 	addClass(value: string): void { value.split(" ").forEach((cls) => this.classes.add(cls)); }
@@ -31,11 +31,14 @@ export class TestElement {
 	}
 	createDiv(options?: ElementOptions): TestElement { return this.createEl("div", options); }
 	createSpan(options?: ElementOptions): TestElement { return this.createEl("span", options); }
-	addEventListener(name: string, callback: () => void): void {
+	addEventListener(name: string, callback: (event: any) => void): void {
 		this.listeners.set(name, [...(this.listeners.get(name) ?? []), callback]);
 	}
 	click(): void {
-		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback());
+		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback({}));
+	}
+	keydown(key: string, shiftKey = false): void {
+		this.listeners.get("keydown")?.forEach((callback) => callback({ key, shiftKey, preventDefault() {} }));
 	}
 	find(cls: string): TestElement {
 		if (this.classes.has(cls)) return this;
