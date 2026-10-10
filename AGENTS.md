@@ -20,6 +20,7 @@ There is no standalone runtime. To run:
 
 ## Conventions
 
+- Все сообщения коммитов (заголовок и тело) пишите на русском языке.
 - Import the Obsidian API as `import { ... } from "obsidian"` and `app`-typed services via `this.app` — never `require`/Node builtins; the bundle runs in the Obsidian renderer.
 - `@types/node` and `obsidian` are dev/prod deps of the scaffold; don't add Node-only libraries (fs, path, child_process) — use Obsidian APIs (`App.vault`, `DataAdapter`) instead.
 - `manifest.json` `id` must match the plugin folder name in the vault; the `id` is the source of truth.

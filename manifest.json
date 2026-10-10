@@ -5,5 +5,5 @@
 	"minAppVersion": "1.4.0",
 	"description": "A chat with an LLM in your vault, served by any OpenAI-compatible model server.",
 	"author": "AlexRaptor",
-	"isDesktopOnly": false
+	"isDesktopOnly": true
 }

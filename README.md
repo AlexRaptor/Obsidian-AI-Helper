@@ -2,6 +2,8 @@
 
 A chat with an LLM in your Obsidian vault, served by any OpenAI-compatible model server.
 
+Supports desktop Obsidian only. Mobile Obsidian is not supported.
+
 ## Development
 
 - `npm install`
