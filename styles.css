@@ -69,6 +69,10 @@
 	background: var(--interactive-accent);
 }
 
+.ai-helper-message-model .ai-helper-message-branch {
+	visibility: hidden;
+}
+
 .ai-helper-message-kind-error .ai-helper-message-branch {
 	background: var(--text-error);
 }
@@ -159,6 +163,42 @@
 	letter-spacing: 0.04em;
 	color: var(--text-muted);
 	margin: 0 0 8px;
+}
+
+.ai-helper-settings-card {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	padding: 0 16px;
+}
+
+.ai-helper-settings-card > .setting-item {
+	margin: 0;
+	padding: 16px 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+}
+
+.ai-helper-settings-card > .setting-item + .setting-item {
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.ai-helper-settings-card .setting-item-control {
+	min-width: 0;
+	flex-wrap: wrap;
+}
+
+.ai-helper-settings-card .setting-item-control textarea {
+	width: 100%;
+	min-height: 96px;
+	resize: vertical;
+}
+
+.ai-helper-settings-card .setting-item-control input,
+.ai-helper-settings-card .setting-item-control select,
+.ai-helper-settings-card .setting-item-control textarea {
+	max-width: 100%;
 }
 
 .ai-helper-models-hint {

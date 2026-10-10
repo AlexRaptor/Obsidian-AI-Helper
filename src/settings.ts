@@ -119,6 +119,19 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
+		new Setting(model)
+			.setName(this.t("setting-context-window"))
+			.setDesc(this.t("setting-context-window-desc"))
+			.addText((text) => {
+				text
+					.setPlaceholder(this.t("setting-context-window-placeholder"))
+					.setValue(this.plugin.settings.contextWindow)
+					.onChange(async (value) => {
+						this.plugin.settings.contextWindow = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
 		new Setting(generation)
 			.setName(this.t("setting-system-prompt"))
 			.setDesc(this.t("setting-system-prompt-desc"))
@@ -146,19 +159,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 
 		new Setting(generation)
-			.setName(this.t("setting-max-tokens"))
-			.setDesc(this.t("setting-max-tokens-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-max-tokens-placeholder"))
-					.setValue(this.plugin.settings.maxTokens)
-					.onChange(async (value) => {
-						this.plugin.settings.maxTokens = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(generation)
 			.setName(this.t("setting-top-p"))
 			.setDesc(this.t("setting-top-p-desc"))
 			.addText((text) => {
@@ -172,14 +172,14 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 
 		new Setting(generation)
-			.setName(this.t("setting-context-window"))
-			.setDesc(this.t("setting-context-window-desc"))
+			.setName(this.t("setting-max-tokens"))
+			.setDesc(this.t("setting-max-tokens-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder(this.t("setting-context-window-placeholder"))
-					.setValue(this.plugin.settings.contextWindow)
+					.setPlaceholder(this.t("setting-max-tokens-placeholder"))
+					.setValue(this.plugin.settings.maxTokens)
 					.onChange(async (value) => {
-						this.plugin.settings.contextWindow = value.trim();
+						this.plugin.settings.maxTokens = value.trim();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -190,7 +190,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		group.createEl("h3", { text: this.t(headingKey) }).addClass(
 			"ai-helper-settings-group-heading"
 		);
-		return group;
+		return group.createDiv({ cls: "ai-helper-settings-card" });
 	}
 
 	private async refreshModels(): Promise<void> {
