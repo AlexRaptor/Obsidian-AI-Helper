@@ -233,34 +233,51 @@
 	overflow-wrap: anywhere;
 }
 
-.ai-helper-settings-card > .ai-helper-embedding-check {
+.ai-helper-settings-card > .ai-helper-connection-check {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(0, auto);
 	align-items: center;
 	gap: 16px;
 }
 
-.ai-helper-embedding-check .setting-item-info {
+.ai-helper-connection-check .setting-item-info {
 	width: 100%;
 	min-width: 0;
 	margin: 0;
 }
 
-.ai-helper-embedding-check .setting-item-description {
+.ai-helper-connection-check .setting-item-description {
 	white-space: pre-line;
 	overflow-wrap: anywhere;
 }
 
-.ai-helper-embedding-check .setting-item-control {
+.ai-helper-connection-check .setting-item-control {
 	justify-content: flex-end;
 	width: auto;
 }
 
-.ai-helper-embedding-check button {
+.ai-helper-connection-check button {
 	max-width: 100%;
 	height: auto;
 	min-height: var(--input-height);
 	white-space: normal;
+}
+
+.ai-helper-connection-status {
+	margin-top: 6px;
+}
+
+.ai-helper-connection-status[data-state="verified"] {
+	color: var(--text-success, var(--color-green));
+}
+
+.ai-helper-connection-status[data-state="error"] {
+	color: var(--text-error);
+}
+
+.ai-helper-model-controls .ai-helper-model-manual {
+	grid-column: 1 / -1;
+	grid-row: 2;
 }
 
 .ai-helper-settings-card .ai-helper-model-controls {

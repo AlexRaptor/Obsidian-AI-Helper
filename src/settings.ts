@@ -59,6 +59,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 
 	display(): void {
 		if (this.plugin.noteSearchConnection?.status.state === "checking") this.plugin.noteSearchConnection.cancel();
+		if (this.plugin.modelConnection?.status.state === "checking") this.plugin.modelConnection.cancel();
 		const version = ++this.displayVersion;
 		const { containerEl } = this;
 		containerEl.empty();
@@ -118,7 +119,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.serverUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.serverUrl = value.trim();
-						await this.plugin.saveSettings();
+						const save = this.plugin.saveSettings();
+						updateModelCheck();
+						await save;
 						await this.refreshModels();
 					});
 			});
@@ -132,14 +135,17 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
+						const save = this.plugin.saveSettings();
+						updateModelCheck();
+						await save;
 					});
 			});
 
 		const modelSetting = new Setting(model)
 			.setName(this.t("setting-model"))
 			.setDesc(this.t("setting-model-desc"));
-		this.renderModels(modelSetting);
+		const updateModelCheck = this.renderModelCheck(model, version);
+		this.renderModels(modelSetting, updateModelCheck);
 
 		new Setting(model)
 			.setName(this.t("setting-context-window"))
@@ -232,26 +238,28 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			const message = status.state === "verified" ? `${this.t("embedding-verified")} ${status.dimensions}`
 				: status.state === "error" ? this.t(status.code)
 				: this.t(status.state === "checking" ? "embedding-checking" : "embedding-idle");
-			check.setDesc(`${this.t("embedding-check-desc")}\n${message}`);
+			this.updateConnectionStatus(statusEl, status.state, message);
 		};
 		const fields: Array<{ key: keyof EmbeddingConnection; name: LocaleKey; description: LocaleKey }> = [
 			{ key: "embeddingServerUrl", name: "setting-embedding-server-url", description: "setting-embedding-server-url-desc" },
 			{ key: "embeddingApiKey", name: "setting-embedding-api-key", description: "setting-api-key-desc" },
-			{ key: "embeddingModel", name: "setting-embedding-model", description: "setting-embedding-model-desc" },
 		];
 		for (const field of fields) {
 			new Setting(parent).setName(this.t(field.name)).setDesc(this.t(field.description)).addText((text) => {
 				text.setValue(this.plugin.settings[field.key]).onChange(async (value) => {
 					this.plugin.settings[field.key] = value.trim();
 					const save = this.plugin.saveSettings();
+					this.renderEmbeddingModel(modelSetting, update, version);
 					update();
 					await save;
 				});
 				if (field.key === "embeddingApiKey") text.inputEl.type = "password";
 			});
 		}
-		const check = new Setting(parent).setName(this.t("embedding-check")).setClass("ai-helper-embedding-check");
-		check.descEl.setAttribute("aria-live", "polite");
+		const modelSetting = new Setting(parent).setName(this.t("setting-embedding-model")).setDesc(this.t("setting-embedding-model-desc"));
+		this.renderEmbeddingModel(modelSetting, update, version);
+		const check = new Setting(parent).setName(this.t("embedding-check")).setDesc(this.t("embedding-check-desc")).setClass("ai-helper-connection-check");
+		const statusEl = check.descEl.createDiv({ cls: "ai-helper-connection-status", attr: { "aria-live": "polite" } });
 		check.addButton((button) => button.setButtonText(this.t("embedding-check")).onClick(async () => {
 			this.plugin.noteSearchConnection.configure(this.plugin.settings);
 			const checking = this.plugin.noteSearchConnection.verify();
@@ -262,9 +270,82 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		update();
 	}
 
+	private updateConnectionStatus(el: HTMLElement, state: "idle" | "checking" | "verified" | "error", message: string): void {
+		el.setText(message);
+		el.setAttribute("data-state", state);
+	}
+
+	private renderModelCheck(parent: HTMLElement, version: number): () => void {
+		const check = new Setting(parent).setName(this.t("model-check")).setDesc(this.t("model-check-desc")).setClass("ai-helper-connection-check");
+		const statusEl = check.descEl.createDiv({ cls: "ai-helper-connection-status", attr: { "aria-live": "polite" } });
+		const update = () => {
+			if (version !== this.displayVersion) return;
+			const status = this.plugin.modelConnection?.status ?? { state: "idle" };
+			const message = status.state === "error" ? this.t(status.code)
+				: this.t(status.state === "verified" ? "model-verified" : status.state === "checking" ? "model-checking" : "model-idle");
+			this.updateConnectionStatus(statusEl, status.state, message);
+		};
+		check.addButton((button) => button.setButtonText(this.t("model-check")).onClick(async () => {
+			this.plugin.modelConnection.configure(this.plugin.settings);
+			const checking = this.plugin.modelConnection.verify();
+			update();
+			await checking;
+			update();
+		}));
+		update();
+		return update;
+	}
+
+	private renderEmbeddingModel(setting: Setting, onChange: () => void, version: number, manual?: boolean): void {
+		setting.controlEl.empty();
+		setting.controlEl.addClass("ai-helper-model-controls");
+		const models = this.plugin.embeddingModels ?? [];
+		const loaded = this.plugin.embeddingModelStatus === "loaded";
+		const selected = this.plugin.settings.embeddingModel;
+		const useManual = manual ?? !models.includes(selected);
+		if (loaded) {
+			setting.addDropdown((dropdown) => {
+				dropdown.addOption("", this.t("setting-model-manual"));
+				for (const id of models) dropdown.addOption(id, id);
+				dropdown.setValue(useManual ? "" : selected).onChange(async (value) => {
+					let save: Promise<void> | undefined;
+					if (value) {
+						this.plugin.settings.embeddingModel = value;
+						save = this.plugin.saveSettings();
+						onChange();
+					}
+					this.renderEmbeddingModel(setting, onChange, version, !value);
+					await save;
+				});
+			});
+		}
+		if (!loaded || useManual) {
+			setting.addText((text) => {
+				text.setValue(selected).onChange(async (value) => {
+					this.plugin.settings.embeddingModel = value.trim();
+					const save = this.plugin.saveSettings();
+					onChange();
+					await save;
+				});
+				if (loaded) text.inputEl.addClass("ai-helper-model-manual");
+			});
+		}
+		setting.addButton((button) => {
+			button.setIcon("refresh-cw").setTooltip(this.t("setting-refresh-models")).onClick(async () => {
+				await this.plugin.refreshEmbeddingModels();
+				if (version === this.displayVersion) this.display();
+			});
+			button.buttonEl.setAttribute("aria-label", this.t("setting-refresh-models"));
+		});
+		setting.setDesc(this.t("setting-embedding-model-desc") + (loaded ? ` ${this.t("setting-embedding-models-hint")}`
+			: this.plugin.embeddingModelStatus === "empty" ? ` ${this.t("setting-models-empty")}`
+			: this.plugin.embeddingModelStatus === "error" ? ` ${this.t("setting-models-load-error")}` : ""));
+	}
+
 	hide(): void {
 		this.displayVersion++;
 		this.plugin.noteSearchConnection.cancel();
+		this.plugin.modelConnection?.cancel();
 	}
 
 	private createGroup(parent: HTMLElement, headingKey: LocaleKey): HTMLElement {
@@ -280,7 +361,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		this.display();
 	}
 
-	private renderModels(modelSetting: Setting): void {
+	private renderModels(modelSetting: Setting, onChange: () => void): void {
 		modelSetting.controlEl.empty();
 		modelSetting.controlEl.addClass("ai-helper-model-controls");
 
@@ -296,7 +377,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.setValue(selected)
 					.onChange(async (value: string) => {
 						this.plugin.settings.model = value;
-						await this.plugin.saveSettings();
+						const save = this.plugin.saveSettings();
+						onChange();
+						await save;
 					});
 			});
 		} else {
@@ -306,7 +389,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					.setValue(selected)
 					.onChange(async (value) => {
 						this.plugin.settings.model = value.trim();
-						await this.plugin.saveSettings();
+						const save = this.plugin.saveSettings();
+						onChange();
+						await save;
 					});
 			});
 

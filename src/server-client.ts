@@ -3,6 +3,7 @@ import { parseResponseWait } from "./response-wait";
 export type ClientFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 const MODELS_TIMEOUT_MS = 15_000;
+const MODEL_CHECK_TIMEOUT_MS = 60_000;
 
 export interface Model {
 	id: string;
@@ -19,7 +20,9 @@ export interface ServerErrorBody {
 
 export type EmbeddingErrorCode = "embedding-config" | "embedding-auth" | "embedding-model" | "embedding-network" | "embedding-response";
 
-type ClientErrorCode = EmbeddingErrorCode | "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
+export type ModelCheckErrorCode = "model-config" | "model-auth" | "model-unavailable" | "model-network" | "model-response";
+
+type ClientErrorCode = ModelCheckErrorCode | EmbeddingErrorCode | "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
 
 class ClientError extends Error {
 	constructor(message: string, readonly code: ClientErrorCode) { super(message); }
@@ -68,6 +71,7 @@ export interface TokenUsage {
 }
 
 export interface ServerClient {
+	verifyModel(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<void>>;
 	embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>>;
 	listModels(serverUrl: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<string[]>>;
 	chat(
@@ -76,6 +80,14 @@ export interface ServerClient {
 		messages: ChatMessage[],
 		params?: ChatParams
 	): Promise<ServerClientResult<ChatCompletionResult>>;
+}
+
+function connectionUrl(raw: string): string | undefined {
+	try {
+		const url = new URL(raw.trim());
+		if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;
+		return url.href.replace(/\/+$/, "");
+	} catch { return undefined; }
 }
 
 function bearerHeaders(apiKey?: string): Record<string, string> {
@@ -391,14 +403,11 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 
 	async function embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>> {
 		const fail = (code: EmbeddingErrorCode): ServerClientResult<number[][]> => ({ ok: false, error: { code, message: code } });
-		let url: URL;
-		try {
-			url = new URL(serverUrl.trim());
-			if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return fail("embedding-config");
-		} catch { return fail("embedding-config"); }
+		const url = connectionUrl(serverUrl);
+		if (!url) return fail("embedding-config");
 		if (!model.trim() || !input.length || input.some((text) => !text.trim())) return fail("embedding-config");
 		const result = await request<number[][]>(async (requestSignal) => {
-			const response = await fetchImpl(`${url.href.replace(/\/+$/, "")}/embeddings`, {
+			const response = await fetchImpl(`${url}/embeddings`, {
 				method: "POST", headers: { "Content-Type": "application/json", ...bearerHeaders(apiKey) },
 				body: JSON.stringify({ model: model.trim(), input, encoding_format: "float" }), signal: requestSignal,
 			});
@@ -425,5 +434,28 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		return !result.ok && !result.error.code ? fail("embedding-network") : result;
 	}
 
-	return { listModels, chat, embeddings };
+	async function verifyModel(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<void>> {
+		const fail = (code: ModelCheckErrorCode): ServerClientResult<void> => ({ ok: false, error: { code, message: code } });
+		const url = connectionUrl(serverUrl);
+		if (!url || !model.trim()) return fail("model-config");
+		const result = await request<void>(async (requestSignal) => {
+			const response = await fetchImpl(`${url}/chat/completions`, {
+				method: "POST", headers: { "Content-Type": "application/json", ...bearerHeaders(apiKey) },
+				body: JSON.stringify({ model: model.trim(), messages: [{ role: "user", content: "Reply with OK." }], stream: false, max_tokens: 8 }),
+				signal: requestSignal,
+			});
+			if (!response.ok) return fail(response.status === 401 || response.status === 403 ? "model-auth"
+				: [400, 404, 405, 422].includes(response.status) ? "model-unavailable" : "model-network");
+			let body: unknown;
+			try { body = await response.json(); } catch { return fail("model-response"); }
+			if (!isRecord(body) || !Array.isArray(body.choices) || !isRecord(body.choices[0]) || !isRecord(body.choices[0].message)) return fail("model-response");
+			const message = body.choices[0].message;
+			// A reasoning model may spend the short check budget on reasoning before emitting its answer.
+			if (![message.content, message.reasoning_content].some((text) => typeof text === "string" && text.trim())) return fail("model-response");
+			return { ok: true, value: undefined };
+		}, MODEL_CHECK_TIMEOUT_MS, signal);
+		return !result.ok && !result.error.code ? fail("model-network") : result;
+	}
+
+	return { listModels, chat, embeddings, verifyModel };
 }

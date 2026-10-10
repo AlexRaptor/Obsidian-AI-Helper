@@ -17,7 +17,9 @@ it("indexes only on the explicit active-note command through the public module",
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" });
 	let embeddings = 0;
-	plugin.serverClient = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: ++embeddings === 1 ? [1, 0] : [0.6, 0.8] }] })));
+	plugin.serverClient = createServerClient(async (url) => new Response(JSON.stringify(url.endsWith("/models")
+		? { data: [{ id: "e" }] }
+		: { data: [{ index: 0, embedding: ++embeddings === 1 ? [1, 0] : [0.6, 0.8] }] })));
 	const save = vi.fn(async () => {}); Object.assign(plugin, { saveData: save });
 	const commands = vi.spyOn(plugin, "addCommand"); await plugin.onload(); expect(read).not.toHaveBeenCalled();
 	const command = commands.mock.calls.find(([command]) => command.id === "index-active-note")![0];

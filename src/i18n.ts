@@ -9,6 +9,19 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"model-check": "Check model",
+	"model-check-desc": "Sends a short sample message to check the selected model. Your conversation and notes are not sent.",
+	"model-idle": "Connection has not been verified.",
+	"model-checking": "Checking model…",
+	"model-verified": "Model is available.",
+	"model-config": "Enter an HTTP(S) server URL and select a model. URL credentials, query and fragment are not supported.",
+	"model-auth": "The model server rejected authorization. Check the API key.",
+	"model-unavailable": "The selected model or conversation endpoint is unavailable. Check the model identifier.",
+	"model-network": "Could not reach the model server, the server failed, or the 60-second check timed out.",
+	"model-response": "The model server returned an invalid or empty response.",
+	"setting-model-manual": "Enter manually",
+	"setting-embedding-models-hint": "The list may also include conversation models. Use Check embeddings to confirm support.",
+
 	"setting-search-min-similarity": "Minimum source similarity",
 	"setting-search-min-similarity-desc": "A number from 0 to 1; default 0.45. Lower values include more sources, higher values require closer matches. Applies to the next search; no index rebuild needed.",
 	"setting-search-min-similarity-invalid": "Enter a number from 0 to 1 using a decimal point or comma. The last valid value is kept.",
@@ -30,7 +43,7 @@ export const en = {
 	"setting-embedding-server-url-desc": "Independent OpenAI-compatible server address, including /v1. External servers are allowed.",
 	"setting-embedding-api-key": "Embedding API key",
 	"setting-embedding-model": "Embedding model",
-	"setting-embedding-model-desc": "Enter the API identifier manually. A model list does not prove embedding support.",
+	"setting-embedding-model-desc": "Select an embedding model or enter its API identifier manually.",
 	"embedding-destination": "Text for embeddings will be sent to:",
 	"embedding-destination-empty": "Set an embedding model server URL.",
 	"embedding-check": "Check embeddings",
@@ -130,6 +143,19 @@ export const en = {
 } as const;
 
 export const ru = {
+	"model-check": "Проверить модель",
+	"model-check-desc": "Отправляет короткое пробное сообщение выбранной модели. История диалога и заметки не отправляются.",
+	"model-idle": "Подключение ещё не проверено.",
+	"model-checking": "Проверка модели…",
+	"model-verified": "Модель доступна.",
+	"model-config": "Введите HTTP(S)-адрес сервера и выберите модель. Данные авторизации, параметры запроса и фрагмент в адресе не поддерживаются.",
+	"model-auth": "Модель-сервер отклонил авторизацию. Проверьте API-ключ.",
+	"model-unavailable": "Выбранная модель или endpoint диалога недоступны. Проверьте идентификатор модели.",
+	"model-network": "Не удалось связаться с модель-сервером, сервер сообщил об ошибке или истекли 60 секунд проверки.",
+	"model-response": "Модель-сервер вернул некорректный или пустой ответ.",
+	"setting-model-manual": "Ввести вручную",
+	"setting-embedding-models-hint": "В списке могут быть и модели диалога. Поддержку подтвердит проверка embeddings.",
+
 	"setting-search-min-similarity": "Минимальный порог сходства",
 	"setting-search-min-similarity-desc": "Число от 0 до 1; по умолчанию 0,45. Ниже — больше источников, выше — более близкие совпадения. Применяется к следующему поиску; перестроение индекса не требуется.",
 	"setting-search-min-similarity-invalid": "Введите число от 0 до 1 с точкой или запятой. Последнее корректное значение сохранено.",
@@ -151,7 +177,7 @@ export const ru = {
 	"setting-embedding-server-url-desc": "Независимый адрес OpenAI-совместимого сервера, включая /v1. Внешние серверы разрешены.",
 	"setting-embedding-api-key": "API-ключ embeddings",
 	"setting-embedding-model": "Embedding-модель",
-	"setting-embedding-model-desc": "Введите API-идентификатор вручную. Список моделей не подтверждает поддержку embeddings.",
+	"setting-embedding-model-desc": "Выберите embedding-модель или введите её API-идентификатор вручную.",
 	"embedding-destination": "Текст для embeddings будет передаваться на:",
 	"embedding-destination-empty": "Задайте адрес модель-сервера embeddings.",
 	"embedding-check": "Проверить embeddings",

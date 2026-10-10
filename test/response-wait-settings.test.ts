@@ -5,18 +5,22 @@ import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
 import { en, ru, setLanguage, t } from "../src/i18n";
 import { deferred, TestElement } from "./helpers/obsidian";
 
-const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; button?: { click: () => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
+const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
 vi.mock("obsidian", async () => {
 	const helper = await import("./helpers/obsidian");
 	return { ...helper,
 		PluginSettingTab: class { containerEl = new helper.TestElement(); },
 		Setting: class {
-			name = ""; description = ""; controlEl = new helper.TestElement(); descEl = new helper.TestElement();
+			name = ""; get description() { return this.descEl.getText(); } controlEl = new helper.TestElement(); descEl = new helper.TestElement();
 			input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> };
-			constructor() { controls.push(this); }
+			dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> };
+			constructor() {
+				controls.push(this);
+				this.controlEl.empty = () => { this.input = undefined; this.dropdown = undefined; };
+			}
 			setClass() { return this; }
 			setName(name: string) { this.name = name; return this; }
-			setDesc(description: string) { this.description = description; return this; }
+			setDesc(description: string) { this.descEl.setText(description); return this; }
 			addText(callback: (text: unknown) => void) { return this.addTextArea(callback); }
 			addTextArea(callback: (text: unknown) => void) {
 				const input = { value: "", inputEl: new helper.TestElement(), change: async (_value: string) => {},
@@ -24,7 +28,13 @@ vi.mock("obsidian", async () => {
 					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
 				this.input = input; callback(input); return this;
 			}
-			addDropdown(callback: (dropdown: unknown) => void) { callback({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; }
+			addDropdown(callback: (dropdown: unknown) => void) {
+				const dropdown = { value: "", options: {} as Record<string, string>, change: async (_value: string) => {},
+					addOption(value: string, label: string) { this.options[value] = label; return this; },
+					setValue(value: string) { this.value = value; return this; },
+					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
+				this.dropdown = dropdown; callback(dropdown); return this;
+			}
 			addButton(callback: (button: unknown) => void) {
 				const button = { buttonEl: new helper.TestElement(), click: async () => {}, setIcon() { return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
 				(this as unknown as { button: typeof button }).button = button;
@@ -187,4 +197,54 @@ it.each([null, -1, 2, "invalid", "0.6"])("uses the default for an invalid saved 
 	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ noteSearchMinSimilarity: value }); await plugin.loadSettings();
 	expect(plugin.settings.noteSearchMinSimilarity).toBe(0.45);
+});
+
+
+it("offers embedding server models and lets the user select or enter a model manually", async () => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://embed/v1/", embeddingApiKey: "embed-key", embeddingModel: "custom-id", model: "chat-model" };
+	const save = vi.fn(async () => {}); Object.assign(plugin, { saveData: save });
+	const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ data: [{ id: "embed-a" }, { id: "embed-b" }] })));
+	vi.stubGlobal("fetch", fetch);
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	await controls.find((control) => control.name === en["setting-embedding-model"])!.button!.click();
+	const selector = controls.filter((control) => control.name === en["setting-embedding-model"]).slice(-1)[0]!;
+	expect(fetch.mock.calls[0][0]).toBe("http://embed/v1/models");
+	expect(fetch.mock.calls[0][1]?.headers).toEqual({ Authorization: "Bearer embed-key" });
+	expect(selector.dropdown!.options).toEqual({ "": "Enter manually", "embed-a": "embed-a", "embed-b": "embed-b" });
+	expect(selector.input!.value).toBe("custom-id");
+	await selector.dropdown!.change("embed-b");
+	expect(plugin.settings.embeddingModel).toBe("embed-b");
+	expect(plugin.settings.model).toBe("chat-model");
+	expect(selector.dropdown!.value).toBe("embed-b");
+	await selector.dropdown!.change("");
+	await selector.input!.change("private-model");
+	expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ embeddingModel: "private-model" }));
+	await controls.filter((control) => control.name === en["setting-embedding-api-key"]).slice(-1)[0]!.input!.change("new-key");
+	expect(selector.dropdown).toBeUndefined();
+	expect(selector.input!.value).toBe("private-model");
+	expect(plugin.embeddingModels).toEqual([]);
+	expect(plugin.noteSearchConnection.status.state).toBe("idle");
+});
+
+it.each(["en", "ru"] as const)("checks the main model without sending history and exposes success/error status in %s", async (locale) => {
+	setLanguage(locale); const dictionary = locale === "ru" ? ru : en;
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, serverUrl: "http://chat/v1", apiKey: "chat-key", model: "selected" };
+	Object.assign(plugin, { saveData: vi.fn(async () => {}) });
+	const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] })));
+	vi.stubGlobal("fetch", fetch);
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const check = controls.find((control) => control.name === dictionary["model-check"])!;
+	await check.button!.click();
+	expect(check.description).toContain(dictionary["model-verified"]);
+	expect((check as unknown as { descEl: TestElement }).descEl.find("ai-helper-connection-status").attributes["data-state"]).toBe("verified");
+	expect(fetch.mock.calls[0][0]).toBe("http://chat/v1/chat/completions");
+	expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ model: "selected", messages: [{ role: "user", content: "Reply with OK." }] });
+	await controls.find((control) => control.name === dictionary["setting-api-key"])!.input!.change("bad-key");
+	expect(check.description).toContain(dictionary["model-idle"]);
+	fetch.mockImplementation(async () => new Response("private server details", { status: 401 }));
+	await check.button!.click();
+	expect(check.description).toContain(dictionary["model-auth"]);
+	expect((check as unknown as { descEl: TestElement }).descEl.find("ai-helper-connection-status").attributes["data-state"]).toBe("error");
 });

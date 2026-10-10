@@ -8,6 +8,7 @@ import {
 import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
+import { createModelConnection } from "./model-connection";
 import { createNoteSearchConnection } from "./note-search";
 import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, type NoteSearch } from "./note-index";
 import { StorageProbeModal } from "./storage-probe-modal";
@@ -17,6 +18,11 @@ export class AiHelperPlugin extends Plugin {
 	models: string[] = [];
 	modelStatus: ModelStatus = "idle";
 	private modelRequest: AbortController | null = null;
+	embeddingModels: string[] = [];
+	embeddingModelStatus: ModelStatus = "idle";
+	private embeddingModelRequest: AbortController | null = null;
+	private embeddingListUrl = "";
+	private embeddingListKey = "";
 	serverClient: ServerClient = createServerClient(
 		(input, init) => globalThis.fetch(input, init)
 	);
@@ -24,6 +30,7 @@ export class AiHelperPlugin extends Plugin {
 	noteSearch!: NoteSearch;
 	private indexingNote = false;
 	noteSearchConnection = createNoteSearchConnection(this.serverClient);
+	modelConnection = createModelConnection(this.serverClient);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -63,11 +70,15 @@ export class AiHelperPlugin extends Plugin {
 			callback: () => { void this.indexActiveNote(); },
 		});
 		void this.refreshModels();
+		void this.refreshEmbeddingModels();
 	}
 
 	onunload(): void {
 		this.noteSearch?.dispose();
 		this.noteSearchConnection.cancel();
+		this.modelConnection.cancel();
+		this.embeddingModelRequest?.abort();
+		this.embeddingModelRequest = null;
 		this.modelRequest?.abort();
 		this.modelRequest = null;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
@@ -77,6 +88,7 @@ export class AiHelperPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
 		this.noteSearchConnection.configure(this.settings);
+		this.modelConnection.configure(this.settings);
 	}
 
 	async indexActiveNote(): Promise<void> {
@@ -93,41 +105,55 @@ export class AiHelperPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		this.noteSearch?.configure(this.settings);
 		this.noteSearchConnection.configure(this.settings);
+		this.modelConnection.configure(this.settings);
+		if (this.embeddingListUrl !== this.settings.embeddingServerUrl.trim() || this.embeddingListKey !== this.settings.embeddingApiKey) {
+			this.embeddingModelRequest?.abort();
+			this.embeddingModelRequest = null;
+			this.embeddingModels = [];
+			this.embeddingModelStatus = "idle";
+		}
 		await this.saveData(this.settings);
 	}
 
 	async refreshModels(): Promise<void> {
-		this.modelRequest?.abort();
+		await this.loadModels(false);
+	}
+
+	async refreshEmbeddingModels(): Promise<void> {
+		await this.loadModels(true);
+	}
+
+	private async loadModels(embedding: boolean): Promise<void> {
+		const requestKey = embedding ? "embeddingModelRequest" : "modelRequest";
+		const modelsKey = embedding ? "embeddingModels" : "models";
+		const statusKey = embedding ? "embeddingModelStatus" : "modelStatus";
+		const urlKey = embedding ? "embeddingServerUrl" : "serverUrl";
+		const apiKeyField = embedding ? "embeddingApiKey" : "apiKey";
+		this[requestKey]?.abort();
 		const request = new AbortController();
-		this.modelRequest = request;
-		const url = this.settings.serverUrl.trim();
-		const apiKey = this.settings.apiKey;
+		this[requestKey] = request;
+		const url = this.settings[urlKey].trim().replace(/\/+$/, "");
+		const apiKey = this.settings[apiKeyField];
+		if (embedding) {
+			this.embeddingListUrl = this.settings.embeddingServerUrl.trim();
+			this.embeddingListKey = apiKey;
+		}
 		if (!url) {
-			this.modelRequest = null;
-			this.models = [];
-			this.modelStatus = "idle";
+			this[requestKey] = null;
+			this[modelsKey] = [];
+			this[statusKey] = "idle";
 			return;
 		}
-
+		const current = () => this[requestKey] === request && url === this.settings[urlKey].trim().replace(/\/+$/, "") && apiKey === this.settings[apiKeyField];
 		try {
 			const result = await this.serverClient.listModels(url, apiKey, request.signal);
-			if (this.modelRequest !== request || url !== this.settings.serverUrl.trim() || apiKey !== this.settings.apiKey) {
-				return;
-			}
-			if (result.ok) {
-				this.models = result.value;
-				this.modelStatus = result.value.length > 0 ? "loaded" : "empty";
-			} else {
-				this.models = [];
-				this.modelStatus = "error";
-			}
+			if (!current()) return;
+			this[modelsKey] = result.ok ? result.value : [];
+			this[statusKey] = result.ok ? (result.value.length ? "loaded" : "empty") : "error";
 		} catch {
-			if (this.modelRequest === request) {
-				this.models = [];
-				this.modelStatus = "error";
-			}
+			if (current()) { this[modelsKey] = []; this[statusKey] = "error"; }
 		} finally {
-			if (this.modelRequest === request) this.modelRequest = null;
+			if (this[requestKey] === request) this[requestKey] = null;
 		}
 	}
 

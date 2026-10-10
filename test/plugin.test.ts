@@ -86,3 +86,23 @@ describe("plugin model loading", () => {
 		expect(plugin.models).toEqual([]);
 	});
 });
+
+
+it("ignores an old embedding model list after the key changes and keeps the main model list independent", async () => {
+	const pending = deferred<Response>();
+	const fetch = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: "new-embedding" }] })));
+	vi.stubGlobal("fetch", fetch);
+	try {
+		const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+		plugin.settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://embed", embeddingApiKey: "old", model: "chat-model" };
+		const first = plugin.refreshEmbeddingModels();
+		plugin.settings.embeddingApiKey = "new";
+		await plugin.refreshEmbeddingModels();
+		pending.resolve(new Response(JSON.stringify({ data: [{ id: "old-embedding" }] })));
+		await first;
+		expect(plugin.embeddingModels).toEqual(["new-embedding"]);
+		expect(plugin.embeddingModelStatus).toBe("loaded");
+		expect(plugin.models).toEqual([]);
+		expect(plugin.settings.model).toBe("chat-model");
+	} finally { vi.unstubAllGlobals(); }
+});
