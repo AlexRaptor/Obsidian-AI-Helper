@@ -9,6 +9,19 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"search-toggle": "Note search",
+	"search-index": "Index the active Markdown note",
+	"search-indexing": "Indexing the active note…",
+	"search-indexed": "Note indexed locally. Enable Note search in chat.",
+	"search-fragment": "Used fragment",
+	"search-storage": "Local index storage is unavailable. No file fallback.",
+	"search-rebuild": "Index missing, incompatible or outdated. Index the note again.",
+	"search-note": "Select a nonempty Markdown note.",
+	"search-long": "This first version supports one note up to 4000 characters. Select a shorter note.",
+	"search-empty": "No suitable information found in the indexed note.",
+	"search-budget": "Not enough context for the source and answer. Start a new conversation or increase the context window.",
+	"search-failed": "Note search failed. Check the embedding connection and retry.",
+
 	"settings-group-embedding": "Note search: embedding model",
 	"setting-embedding-server-url": "Embedding model server URL",
 	"setting-embedding-server-url-desc": "Independent OpenAI-compatible server address, including /v1. External servers are allowed.",
@@ -114,6 +127,19 @@ export const en = {
 } as const;
 
 export const ru = {
+	"search-toggle": "Поиск по заметкам",
+	"search-index": "Проиндексировать активную Markdown-заметку",
+	"search-indexing": "Индексация активной заметки…",
+	"search-indexed": "Заметка проиндексирована локально. Включите поиск по заметкам в чате.",
+	"search-fragment": "Использованный фрагмент",
+	"search-storage": "Локальное хранение индекса недоступно. Перехода к файлам нет.",
+	"search-rebuild": "Индекс отсутствует, несовместим или устарел. Проиндексируйте заметку заново.",
+	"search-note": "Выберите непустую Markdown-заметку.",
+	"search-long": "В первой версии поддерживается одна заметка до 4000 символов. Выберите короткую заметку.",
+	"search-empty": "Подходящих сведений в проиндексированной заметке не найдено.",
+	"search-budget": "Недостаточно контекста для источника и ответа. Начните новый диалог или увеличьте окно контекста.",
+	"search-failed": "Ошибка поиска по заметкам. Проверьте embedding-подключение и повторите запрос.",
+
 	"settings-group-embedding": "Поиск по заметкам: embedding-модель",
 	"setting-embedding-server-url": "Адрес модель-сервера embeddings",
 	"setting-embedding-server-url-desc": "Независимый адрес OpenAI-совместимого сервера, включая /v1. Внешние серверы разрешены.",

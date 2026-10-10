@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -9,6 +9,7 @@ import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
 import { createNoteSearchConnection } from "./note-search";
+import { createNoteSearch, NoteSearchError, type NoteSearch } from "./note-index";
 import { StorageProbeModal } from "./storage-probe-modal";
 
 export class AiHelperPlugin extends Plugin {
@@ -20,11 +21,25 @@ export class AiHelperPlugin extends Plugin {
 		(input, init) => globalThis.fetch(input, init)
 	);
 
+	noteSearch!: NoteSearch;
+	private indexingNote = false;
 	noteSearchConnection = createNoteSearchConnection(this.serverClient);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.applyLanguage();
+		const adapter = this.app.vault?.adapter;
+		this.noteSearch = createNoteSearch({
+			vaultPath: adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "",
+			factory: globalThis.indexedDB,
+			client: this.serverClient,
+			read: async (path) => {
+				const file = this.app.vault.getFileByPath(path);
+				return file?.extension === "md" ? this.app.vault.read(file) : null;
+			},
+			open: (path) => this.app.workspace.openLinkText(path, "", false),
+		});
+		this.noteSearch.configure(this.settings);
 
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
@@ -43,10 +58,15 @@ export class AiHelperPlugin extends Plugin {
 			name: this.t("probe-title"),
 			callback: () => new StorageProbeModal(this.app).open(),
 		});
+		this.addCommand({
+			id: "index-active-note", name: this.t("search-index"),
+			callback: () => { void this.indexActiveNote(); },
+		});
 		void this.refreshModels();
 	}
 
 	onunload(): void {
+		this.noteSearch?.dispose();
 		this.noteSearchConnection.cancel();
 		this.modelRequest?.abort();
 		this.modelRequest = null;
@@ -58,7 +78,19 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearchConnection.configure(this.settings);
 	}
 
+	async indexActiveNote(): Promise<void> {
+		if (this.indexingNote) return;
+		const file = this.app.workspace.getActiveFile();
+		if (!file || file.extension !== "md") { new Notice(this.t("search-note")); return; }
+		this.indexingNote = true;
+		new Notice(this.t("search-indexing"));
+		try { await this.noteSearch.index(file.path); new Notice(this.t("search-indexed")); }
+		catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
+		finally { this.indexingNote = false; }
+	}
+
 	async saveSettings(): Promise<void> {
+		this.noteSearch?.configure(this.settings);
 		this.noteSearchConnection.configure(this.settings);
 		await this.saveData(this.settings);
 	}

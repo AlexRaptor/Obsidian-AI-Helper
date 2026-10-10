@@ -264,3 +264,18 @@
 	color: var(--text-muted);
 	font-style: italic;
 }
+
+.ai-helper-search-toggle[aria-pressed="true"] {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.ai-helper-source {
+	margin-top: 0.75em;
+}
+
+.ai-helper-source pre,
+.ai-helper-message-content:has(.ai-helper-source) .ai-helper-markdown {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
