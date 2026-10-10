@@ -14,6 +14,7 @@ export class TestElement {
 	text = "";
 	scrollTop = 0;
 	scrollHeight = 0;
+	clientHeight = 0;
 	private listeners = new Map<string, Array<(event: any) => void>>();
 
 	empty(): void { this.children = []; this.text = ""; }
@@ -33,6 +34,9 @@ export class TestElement {
 	createSpan(options?: ElementOptions): TestElement { return this.createEl("span", options); }
 	addEventListener(name: string, callback: (event: any) => void): void {
 		this.listeners.set(name, [...(this.listeners.get(name) ?? []), callback]);
+	}
+	dispatchEvent(event: { type: string }): void {
+		this.listeners.get(event.type)?.forEach((callback) => callback(event));
 	}
 	click(): void {
 		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback({}));

@@ -30,6 +30,8 @@ export class ChatView extends ItemView {
 	private renderRevision = 0;
 	private activeMessage: DisplayMessage | null = null;
 	private draft = "";
+	private followingMessages = true;
+	private messageResizeObserver: ResizeObserver | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
@@ -76,7 +78,9 @@ export class ChatView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.detachScrollObserver();
 		this.detachMarkdown();
+		this.followingMessages = true;
 		this.buildStructure();
 		this.bindEvents();
 		this.setThinking(this.thinking);
@@ -100,6 +104,7 @@ export class ChatView extends ItemView {
 		this.draft = this.inputEl?.value ?? this.draft;
 		this.cancelRequest();
 		this.renderRevision++;
+		this.detachScrollObserver();
 		this.detachMarkdown();
 		this.messagesEl = null;
 		this.inputEl = null;
@@ -118,6 +123,7 @@ export class ChatView extends ItemView {
 		this.cancelRequest(false);
 		this.conversation.clear();
 		this.messages = [];
+		this.followingMessages = true;
 		this.updateContextIndicators();
 		void this.renderMessages();
 	}
@@ -154,7 +160,32 @@ export class ChatView extends ItemView {
 		});
 	}
 
+	private detachScrollObserver(): void {
+		this.messageResizeObserver?.disconnect();
+		this.messageResizeObserver = null;
+	}
+
+	private followMessages(): void {
+		if (this.followingMessages && this.messagesEl) {
+			this.messagesEl.scrollTop = Math.max(0, this.messagesEl.scrollHeight - this.messagesEl.clientHeight);
+		}
+	}
+
 	private bindEvents(): void {
+		const messages = this.messagesEl;
+		if (messages) {
+			messages.addEventListener("scroll", () => {
+				if (this.messagesEl !== messages) return;
+				this.followingMessages = messages.scrollHeight - messages.clientHeight - messages.scrollTop <= 32;
+			});
+			// Markdown embeds and code blocks can change height after render() resolves.
+			if (typeof ResizeObserver !== "undefined") {
+				this.messageResizeObserver = new ResizeObserver(() => {
+					if (this.messagesEl === messages) this.followMessages();
+				});
+				this.messageResizeObserver.observe(messages);
+			}
+		}
 		this.clearBtn?.addEventListener("click", () => this.clearConversation());
 		this.sendBtn?.addEventListener("click", () => {
 			if (this.thinking) { this.cancelRequest(); void this.renderMessages(); }
@@ -193,6 +224,7 @@ export class ChatView extends ItemView {
 			if (!this.messages.includes(message)) {
 				row.revision++;
 				if (row.component) this.removeChild(row.component);
+				this.messageResizeObserver?.unobserve(row.div);
 				row.div.remove();
 				this.rendered.delete(message);
 			}
@@ -205,6 +237,7 @@ export class ChatView extends ItemView {
 				const branch = div.createDiv({ cls: "ai-helper-message-branch" });
 				row = { div, branch, body: div.createDiv({ cls: "ai-helper-message-body" }), revision: 0, signature: "" };
 				this.rendered.set(message, row);
+				this.messageResizeObserver?.observe(div);
 			}
 			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}`;
 			if (row.signature === signature) continue;
@@ -238,7 +271,7 @@ export class ChatView extends ItemView {
 				if (revision !== this.renderRevision || current.revision !== rowRevision || this.messagesEl !== el) return;
 				current.body.empty();
 				current.body.appendChild(staging);
-				el.scrollTop = el.scrollHeight;
+				this.followMessages();
 			})());
 		}
 		await Promise.all(updates);
