@@ -223,7 +223,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	private renderEmbeddingConnection(parent: HTMLElement, version: number): void {
-		const destination = parent.createDiv({ attr: { "aria-live": "polite" } });
+		const destination = parent.createDiv({ cls: "ai-helper-embedding-destination", attr: { "aria-live": "polite" } });
 		const update = () => {
 			if (version !== this.displayVersion) return;
 			const url = this.plugin.settings.embeddingServerUrl;
@@ -232,7 +232,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			const message = status.state === "verified" ? `${this.t("embedding-verified")} ${status.dimensions}`
 				: status.state === "error" ? this.t(status.code)
 				: this.t(status.state === "checking" ? "embedding-checking" : "embedding-idle");
-			check.setDesc(`${this.t("embedding-check-desc")} ${message}`);
+			check.setDesc(`${this.t("embedding-check-desc")}\n${message}`);
 		};
 		const fields: Array<{ key: keyof EmbeddingConnection; name: LocaleKey; description: LocaleKey }> = [
 			{ key: "embeddingServerUrl", name: "setting-embedding-server-url", description: "setting-embedding-server-url-desc" },
@@ -250,7 +250,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				if (field.key === "embeddingApiKey") text.inputEl.type = "password";
 			});
 		}
-		const check = new Setting(parent).setName(this.t("embedding-check"));
+		const check = new Setting(parent).setName(this.t("embedding-check")).setClass("ai-helper-embedding-check");
+		check.descEl.setAttribute("aria-live", "polite");
 		check.addButton((button) => button.setButtonText(this.t("embedding-check")).onClick(async () => {
 			this.plugin.noteSearchConnection.configure(this.plugin.settings);
 			const checking = this.plugin.noteSearchConnection.verify();

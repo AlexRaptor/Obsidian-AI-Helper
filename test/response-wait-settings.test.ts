@@ -11,9 +11,10 @@ vi.mock("obsidian", async () => {
 	return { ...helper,
 		PluginSettingTab: class { containerEl = new helper.TestElement(); },
 		Setting: class {
-			name = ""; description = ""; controlEl = new helper.TestElement();
+			name = ""; description = ""; controlEl = new helper.TestElement(); descEl = new helper.TestElement();
 			input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> };
 			constructor() { controls.push(this); }
+			setClass() { return this; }
 			setName(name: string) { this.name = name; return this; }
 			setDesc(description: string) { this.description = description; return this; }
 			addText(callback: (text: unknown) => void) { return this.addTextArea(callback); }

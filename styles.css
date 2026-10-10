@@ -225,6 +225,44 @@
 	flex-wrap: wrap;
 }
 
+.ai-helper-embedding-destination {
+	padding: 16px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+
+.ai-helper-settings-card > .ai-helper-embedding-check {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 12px;
+}
+
+.ai-helper-embedding-check .setting-item-info {
+	width: 100%;
+	min-width: 0;
+	margin: 0;
+}
+
+.ai-helper-embedding-check .setting-item-description {
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+}
+
+.ai-helper-embedding-check .setting-item-control {
+	justify-content: flex-start;
+	width: 100%;
+}
+
+.ai-helper-embedding-check button {
+	max-width: 100%;
+	height: auto;
+	min-height: var(--input-height);
+	white-space: normal;
+}
+
 .ai-helper-settings-card .ai-helper-model-controls {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
