@@ -2,6 +2,10 @@ type ElementOptions = { cls?: string; text?: string; attr?: Record<string, strin
 
 export class TestElement {
 	children: TestElement[] = [];
+	private parent: TestElement | null = null;
+	className = "";
+	remove(): void { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
+	appendChild(child: TestElement): TestElement { child.remove(); child.parent = this; this.children.push(child); return child; }
 	classes = new Set<string>();
 	attributes: Record<string, string> = {};
 	style: Record<string, string> = {};
@@ -10,7 +14,8 @@ export class TestElement {
 	text = "";
 	scrollTop = 0;
 	scrollHeight = 0;
-	private listeners = new Map<string, Array<() => void>>();
+	clientHeight = 0;
+	private listeners = new Map<string, Array<(event: any) => void>>();
 
 	empty(): void { this.children = []; this.text = ""; }
 	addClass(value: string): void { value.split(" ").forEach((cls) => this.classes.add(cls)); }
@@ -21,16 +26,23 @@ export class TestElement {
 		if (options.cls) child.addClass(options.cls);
 		child.text = options.text ?? "";
 		child.attributes = { ...options.attr };
+		child.parent = this;
 		this.children.push(child);
 		return child;
 	}
 	createDiv(options?: ElementOptions): TestElement { return this.createEl("div", options); }
 	createSpan(options?: ElementOptions): TestElement { return this.createEl("span", options); }
-	addEventListener(name: string, callback: () => void): void {
+	addEventListener(name: string, callback: (event: any) => void): void {
 		this.listeners.set(name, [...(this.listeners.get(name) ?? []), callback]);
 	}
+	dispatchEvent(event: { type: string }): void {
+		this.listeners.get(event.type)?.forEach((callback) => callback(event));
+	}
 	click(): void {
-		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback());
+		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback({}));
+	}
+	keydown(key: string, shiftKey = false): void {
+		this.listeners.get("keydown")?.forEach((callback) => callback({ key, shiftKey, preventDefault() {} }));
 	}
 	find(cls: string): TestElement {
 		if (this.classes.has(cls)) return this;

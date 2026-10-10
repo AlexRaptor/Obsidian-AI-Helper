@@ -109,7 +109,7 @@ describe("server client: chat", () => {
 		expect(body.messages[0].role).toBe("user");
 	});
 
-	it("always sends stream: false", async () => {
+	it("requests streaming with usage", async () => {
 		const fetchImpl = makeFetch(async () => ok("hi"));
 		const client = createServerClient(fetchImpl);
 
@@ -117,7 +117,7 @@ describe("server client: chat", () => {
 
 		const [, init] = capturedCall(fetchImpl);
 		const body = JSON.parse(init.body ?? "{}");
-		expect(body.stream).toBe(false);
+		expect(body.stream).toBe(true);
 	});
 
 	it("sends the configured model", async () => {
@@ -331,5 +331,37 @@ describe("server client: chat", () => {
 		if (!result.ok) {
 			expect(result.error.message.length).toBeGreaterThan(0);
 		}
+	});
+});
+
+describe("stream transport", () => {
+	const event = (content: string, extra = {}) => `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, ...extra }] })}\r\n\r\n`;
+	function stream(parts: Uint8Array[]) {
+		return new Response(new ReadableStream({ start(controller) {
+			for (const part of parts) controller.enqueue(part);
+			controller.close();
+		} }), { headers: { "Content-Type": "text/event-stream" } });
+	}
+	it("decodes UTF-8 and events across every byte boundary and retains server usage", async () => {
+		const encoded = new TextEncoder().encode(event("Привет 🌍") + event("!") +
+			'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}\r\n\r\ndata: [DONE]\r\n\r\n');
+		const onText = vi.fn();
+		const client = createServerClient(async () => stream(Array.from(encoded, (byte) => new Uint8Array([byte]))));
+		const result = await client.chat("http://s", "m", [], { onText });
+		expect(onText.mock.calls.map(([text]) => text)).toEqual(["Привет 🌍", "Привет 🌍!"]);
+		expect(result).toEqual({ ok: true, value: { content: "Привет 🌍!", usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10 } } });
+	});
+	it("rejects EOF without completion even after text", async () => {
+		const onText = vi.fn();
+		const client = createServerClient(async () => stream([new TextEncoder().encode(event("partial"))]));
+		const result = await client.chat("http://s", "m", [], { onText });
+		expect(onText).toHaveBeenCalledWith("partial");
+		expect(result).toMatchObject({ ok: false, error: { code: "incomplete" } });
+	});
+	it("accepts a finish reason at EOF and rejects a confirmed empty message", async () => {
+		const client = createServerClient(async () => stream([new TextEncoder().encode(event("answer", { finish_reason: "stop" }))]));
+		expect(await client.chat("http://s", "m", [])).toMatchObject({ ok: true, value: { content: "answer" } });
+		const empty = createServerClient(async () => stream([new TextEncoder().encode("data: [DONE]\n\n")]));
+		expect(await empty.chat("http://s", "m", [])).toMatchObject({ ok: false, error: { code: "empty" } });
 	});
 });

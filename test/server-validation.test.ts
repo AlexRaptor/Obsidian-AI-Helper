@@ -52,12 +52,12 @@ describe("server request timeout", () => {
 		await expect(result).resolves.toMatchObject({ ok: false, error: { message: expect.stringMatching(/timed out/i) } });
 		expect(fetchImpl.mock.calls[0][1]?.signal?.aborted).toBe(true);
 	});
-	it("keeps the chat timeout active while reading the response body", async () => {
+	it("keeps the configured response wait active while reading the response body", async () => {
 		vi.useFakeTimers();
 		const fetchImpl: ClientFetch = async () => ({
 			ok: true, json: () => new Promise(() => {}),
 		}) as unknown as Response;
-		const result = createServerClient(fetchImpl).chat("http://s", "m", []);
+		const result = createServerClient(fetchImpl).chat("http://s", "m", [], { responseWait: "120" });
 		await vi.advanceTimersByTimeAsync(120_000);
 		await expect(result).resolves.toMatchObject({ ok: false, error: { message: expect.stringMatching(/timed out/i) } });
 	});

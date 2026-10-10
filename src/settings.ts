@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type { AiHelperPlugin } from "./main";
+import { parseResponseWait } from "./response-wait";
 import {
 	setLanguage,
 	LOCALES,
@@ -17,6 +18,7 @@ export interface AiHelperSettings {
 	maxTokens: string;
 	topP: string;
 	contextWindow: string;
+	responseWait: string;
 	language: Locale;
 }
 
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	maxTokens: "",
 	topP: "",
 	contextWindow: "",
+	responseWait: "",
 	language: "en",
 };
 
@@ -119,6 +122,34 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
+		new Setting(model)
+			.setName(this.t("setting-context-window"))
+			.setDesc(this.t("setting-context-window-desc"))
+			.addText((text) => {
+				text
+					.setPlaceholder(this.t("setting-context-window-placeholder"))
+					.setValue(this.plugin.settings.contextWindow)
+					.onChange(async (value) => {
+						this.plugin.settings.contextWindow = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		const responseWait = new Setting(generation)
+			.setName(this.t("setting-response-wait"))
+			.setDesc(this.t("setting-response-wait-desc"));
+		responseWait.addText((text) => {
+			text.setValue(this.plugin.settings.responseWait).onChange(async (raw) => {
+				const parsed = parseResponseWait(raw);
+				const valid = parsed.valid;
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				responseWait.setDesc(this.t("setting-response-wait-desc") + (valid ? "" : ` ${this.t("setting-response-wait-invalid")}`));
+				if (!parsed.valid) return;
+				this.plugin.settings.responseWait = parsed.value;
+				await this.plugin.saveSettings();
+			});
+		});
+
 		new Setting(generation)
 			.setName(this.t("setting-system-prompt"))
 			.setDesc(this.t("setting-system-prompt-desc"))
@@ -146,19 +177,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 
 		new Setting(generation)
-			.setName(this.t("setting-max-tokens"))
-			.setDesc(this.t("setting-max-tokens-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-max-tokens-placeholder"))
-					.setValue(this.plugin.settings.maxTokens)
-					.onChange(async (value) => {
-						this.plugin.settings.maxTokens = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(generation)
 			.setName(this.t("setting-top-p"))
 			.setDesc(this.t("setting-top-p-desc"))
 			.addText((text) => {
@@ -172,14 +190,14 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 
 		new Setting(generation)
-			.setName(this.t("setting-context-window"))
-			.setDesc(this.t("setting-context-window-desc"))
+			.setName(this.t("setting-max-tokens"))
+			.setDesc(this.t("setting-max-tokens-desc"))
 			.addText((text) => {
 				text
-					.setPlaceholder(this.t("setting-context-window-placeholder"))
-					.setValue(this.plugin.settings.contextWindow)
+					.setPlaceholder(this.t("setting-max-tokens-placeholder"))
+					.setValue(this.plugin.settings.maxTokens)
 					.onChange(async (value) => {
-						this.plugin.settings.contextWindow = value.trim();
+						this.plugin.settings.maxTokens = value.trim();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -190,7 +208,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		group.createEl("h3", { text: this.t(headingKey) }).addClass(
 			"ai-helper-settings-group-heading"
 		);
-		return group;
+		return group.createDiv({ cls: "ai-helper-settings-card" });
 	}
 
 	private async refreshModels(): Promise<void> {

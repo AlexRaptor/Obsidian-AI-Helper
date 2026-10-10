@@ -1,7 +1,8 @@
+import { parseResponseWait } from "./response-wait";
+
 export type ClientFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 const MODELS_TIMEOUT_MS = 15_000;
-const CHAT_TIMEOUT_MS = 120_000;
 
 export interface Model {
 	id: string;
@@ -16,9 +17,15 @@ export interface ServerErrorBody {
 	error?: { message?: string };
 }
 
+type ClientErrorCode = "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait";
+
+class ClientError extends Error {
+	constructor(message: string, readonly code: ClientErrorCode) { super(message); }
+}
+
 export type ServerClientResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; error: { message: string } };
+	| { ok: false; error: { message: string; code?: ClientErrorCode } };
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant";
@@ -26,7 +33,9 @@ export interface ChatMessage {
 }
 
 export interface ChatParams {
+	responseWait?: string;
 	signal?: AbortSignal;
+	onText?: (content: string) => void;
 	apiKey?: string;
 	systemPrompt?: string;
 	temperature?: string;
@@ -87,6 +96,14 @@ async function readErrorMessage(response: Response): Promise<string> {
 	return message;
 }
 
+class UnsupportedStreamingError extends Error {}
+
+function explicitlyRejectsStreaming(message: string): boolean {
+	return /\bstream(?:ing)?(?:\s+(?:mode|parameter|responses?))?["']?\s+(?:is\s+)?(?:not supported|unsupported|not implemented|disabled)\b/i.test(message)
+		|| /\b(?:unsupported|unrecognized|unknown)\s+(?:parameter|argument)\s*[:=]?\s*["']?stream["']?\b/i.test(message)
+		|| /\b(?:does not|doesn't|cannot)\s+support\s+(?:the\s+)?(?:streaming|stream(?:\s+parameter)?)\b/i.test(message);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -120,28 +137,43 @@ function numericParam(
 
 export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 	async function request<T>(
-		operation: (signal: AbortSignal) => Promise<ServerClientResult<T>>,
-		timeoutMs: number,
-		signal?: AbortSignal
+		operation: (signal: AbortSignal, resetWait: () => void) => Promise<ServerClientResult<T>>,
+		timeoutMs: number | undefined,
+		signal?: AbortSignal,
+		timeoutCode?: "timeout"
 	): Promise<ServerClientResult<T>> {
 		const controller = new AbortController();
 		let interrupt!: (result: ServerClientResult<T>) => void;
 		const interrupted = new Promise<ServerClientResult<T>>((resolve) => { interrupt = resolve; });
-		const cancel = (message: string) => {
-			interrupt({ ok: false, error: { message } });
+		const cancel = (message: string, code?: "timeout") => {
+			interrupt({ ok: false, error: { message, ...(code ? { code } : {}) } });
 			controller.abort();
 		};
 		const onAbort = () => cancel("Request cancelled.");
 		signal?.addEventListener("abort", onAbort, { once: true });
-		const timer = setTimeout(() => cancel("Model server request timed out."), timeoutMs);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let deadline = 0;
+		const scheduleWait = () => {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) cancel("Model server request timed out.", timeoutCode);
+			else timer = setTimeout(scheduleWait, Math.min(remaining, 2_147_483_647));
+		};
+		const resetWait = () => {
+			if (timeoutMs === undefined || controller.signal.aborted) return;
+			clearTimeout(timer);
+			deadline = Date.now() + timeoutMs;
+			scheduleWait();
+		};
+		resetWait();
 		try {
 			if (signal?.aborted) {
 				onAbort();
 				return await interrupted;
 			}
-			return await Promise.race([operation(controller.signal), interrupted]);
+			return await Promise.race([operation(controller.signal, resetWait), interrupted]);
 		} catch (error) {
-			return { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
+			return { ok: false, error: { message: error instanceof Error ? error.message : String(error),
+				...(error instanceof ClientError ? { code: error.code } : {}) } };
 		} finally {
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", onAbort);
@@ -190,7 +222,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				...(params?.systemPrompt ? [{ role: "system", content: params.systemPrompt }] : []),
 				...messages,
 			],
-			stream: false,
+			stream: true,
+			stream_options: { include_usage: true },
 		};
 
 		const invalidParams: string[] = [];
@@ -215,33 +248,141 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			...bearerHeaders(params?.apiKey),
 		};
 
-		return request(async (signal) => {
-			const response = await fetchImpl(url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				signal,
-			});
-			if (!response.ok) {
-				return { ok: false, error: { message: await readErrorMessage(response) } };
-			}
+		const responseWait = parseResponseWait(params?.responseWait);
+		if (!responseWait.valid) {
+			return { ok: false, error: { code: "invalid-response-wait", message: "Response wait must be a positive whole number of seconds." } };
+		}
+		const timeoutMs = responseWait.seconds === undefined ? undefined : responseWait.seconds * 1000;
 
-			let data: unknown;
+		return request(async (signal, resetWait) => {
+			const attempt = async (streaming: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
+				const requestBody: Record<string, unknown> = { ...body, stream: streaming };
+				if (!streaming) delete requestBody.stream_options;
+				const reject = (message: string): ServerClientResult<ChatCompletionResult> => {
+					if (streaming && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
+					return { ok: false, error: { message } };
+				};
+				const response = await fetchImpl(url, {
+					method: "POST",
+					headers,
+					body: JSON.stringify(requestBody),
+					signal,
+				});
+				if (!response.ok) return reject(await readErrorMessage(response));
+
+				const fail = (code: "empty" | "incomplete"): ServerClientResult<ChatCompletionResult> => ({
+					ok: false, error: { code, message: code === "empty"
+						? "Model server returned an empty response." : "Model server connection closed before completion." },
+				});
+				if (!response.headers?.get("content-type")?.includes("text/event-stream")) {
+					let data: unknown;
+					try { data = await response.json(); } catch {
+						return { ok: false, error: { message: "Model server returned an unparseable response." } };
+					}
+					if (isRecord(data) && isRecord(data.error) && typeof data.error.message === "string") {
+						return reject(data.error.message);
+					}
+					if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
+						!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string" ||
+						!data.choices[0].message.content.trim()) return fail("empty");
+					const content = data.choices[0].message.content;
+					if (signal.aborted) return fail("incomplete");
+					resetWait();
+					params?.onText?.(content);
+					return { ok: true, value: { content, usage: parseUsage(data.usage) } };
+				}
+				if (!response.body) return fail("incomplete");
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				let line = "";
+				let afterCR = false;
+				let dataLines: string[] = [];
+				let content = "";
+				let usage: TokenUsage | undefined;
+				let completed = false;
+				let done = false;
+				const event = (data: string) => {
+					if (!data) return;
+					if (data.trim() === "[DONE]") { completed = true; done = true; return; }
+					let parsed: unknown;
+					try { parsed = JSON.parse(data); } catch {
+						if (completed) return;
+						throw new ClientError("Model server returned an invalid stream event.", "invalid-stream");
+					}
+					if (!isRecord(parsed)) {
+						if (completed) return;
+						throw new ClientError("Model server returned an invalid stream event.", "invalid-stream");
+					}
+					if (parsed.usage !== undefined) usage = parseUsage(parsed.usage);
+					// Completion is final. Only collect usage already available in this transport chunk.
+					if (completed) return;
+					if (isRecord(parsed.error)) {
+						if (typeof parsed.error.message !== "string" || !parsed.error.message) {
+							throw new ClientError("Model server returned a stream error.", "stream-error");
+						}
+						const message = parsed.error.message;
+						if (streaming && !content && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
+						throw new Error(message);
+					}
+					if (!Array.isArray(parsed.choices)) return;
+					const choice = parsed.choices.find((value: unknown) => isRecord(value) && (value.index === 0 || value.index === undefined));
+					if (!isRecord(choice)) return;
+					if (isRecord(choice.delta) && typeof choice.delta.content === "string" && choice.delta.content) {
+						content += choice.delta.content;
+						if (!signal.aborted) { resetWait(); params?.onText?.(content); }
+					}
+					if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
+				};
+				const endLine = () => {
+					if (line === "") {
+						const data = dataLines.join("\n");
+						dataLines = [];
+						event(data);
+					} else if (line === "data" || line.startsWith("data:")) {
+						dataLines.push(line === "data" ? "" : line.slice(5).replace(/^ /, ""));
+					}
+					line = "";
+				};
+				const consume = (text: string) => {
+					for (const character of text) {
+						if (done) break;
+						if (afterCR) {
+							afterCR = false;
+							if (character === "\n") continue;
+						}
+						if (character === "\r" || character === "\n") {
+							endLine();
+							afterCR = character === "\r";
+						} else line += character;
+					}
+				};
+				const onAbort = () => { void reader.cancel().catch(() => {}); };
+				signal.addEventListener("abort", onAbort, { once: true });
+				try {
+					while (!completed && !signal.aborted) {
+						const part = await reader.read();
+						consume(part.done ? decoder.decode() : decoder.decode(part.value, { stream: true }));
+						if (part.done) break;
+					}
+					if (signal.aborted || !completed) return fail("incomplete");
+					if (!content.trim()) return fail("empty");
+					return { ok: true, value: { content, usage } };
+				} finally {
+					signal.removeEventListener("abort", onAbort);
+					// Do not make confirmed completion wait for the transport cancellation handshake.
+					void reader.cancel().catch(() => {});
+					reader.releaseLock();
+				}
+
+			};
 			try {
-				data = await response.json();
-			} catch {
-				return { ok: false, error: { message: "Model server returned an unparseable response." } };
+				return await attempt(true);
+			} catch (error) {
+				if (!(error instanceof UnsupportedStreamingError) || signal.aborted) throw error;
+				// One explicit compatibility fallback shares cancellation and the request's waiting policy.
+				return await attempt(false);
 			}
-
-			if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
-				!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string") {
-				return { ok: false, error: { message: "Model server returned an empty response." } };
-			}
-
-			const content = data.choices[0].message.content;
-			const usage = parseUsage(data.usage);
-			return { ok: true, value: { content, usage } };
-		}, CHAT_TIMEOUT_MS, params?.signal);
+		}, timeoutMs, params?.signal, "timeout");
 	}
 
 	return { listModels, chat };

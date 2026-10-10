@@ -4,6 +4,7 @@ import { ChatView } from "../src/chat-view";
 import type { AiHelperPlugin } from "../src/main";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import { t, setLanguage } from "../src/i18n";
+import { createServerClient } from "../src/server-client";
 import type { ServerClient, ServerClientResult, ChatCompletionResult } from "../src/server-client";
 import { TestElement, deferred, flushPromises } from "./helpers/obsidian";
 
@@ -49,7 +50,7 @@ describe("chat view request lifecycle", () => {
 		await flushPromises();
 		old.resolve(success("old answer"));
 		await flushPromises();
-		expect(send.disabled).toBe(true);
+		expect(send.text).toBe("Stop");
 		expect(root.getText()).not.toContain("old answer");
 		next.resolve(success("new answer"));
 		await flushPromises();
@@ -93,9 +94,9 @@ describe("chat view request lifecycle", () => {
 		setLanguage("ru");
 		await view.refreshLocale();
 		expect(root.find("ai-helper-input").value).toBe("next draft");
-		expect(root.find("ai-helper-send").disabled).toBe(true);
-		expect(root.find("ai-helper-send").text).toBe("Думаю…");
-		root.find("ai-helper-send").click();
+		expect(root.find("ai-helper-send").disabled).toBe(false);
+		expect(root.find("ai-helper-send").text).toBe("Остановить");
+		input.keydown("Enter");
 		await flushPromises();
 		expect(chat).toHaveBeenCalledTimes(1);
 		pending.resolve(success("answer"));
@@ -131,7 +132,7 @@ describe("chat view request lifecycle", () => {
 		expect(view.getMessages()).toEqual([]);
 	});
 
-	it("stops an old Markdown render after clearing before the next fetch", async () => {
+	it("discards an old Markdown render after clearing without rerendering previous messages", async () => {
 		const chat = vi.fn(async () => success("first answer"));
 		const { view, root, input, send } = await setup(chat);
 		input.value = "first question";
@@ -147,6 +148,89 @@ describe("chat view request lifecycle", () => {
 		await flushPromises();
 		expect(view.getMessages()).toEqual([]);
 		expect(root.find("ai-helper-messages").getText()).toBe("");
-		expect(chat).toHaveBeenCalledTimes(1);
+		expect(chat).toHaveBeenCalledTimes(2);
 	});
+});
+
+describe("chat streaming with the real client", () => {
+	function controlledStream() {
+		let controller!: ReadableStreamDefaultController<Uint8Array>;
+		const response = new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }),
+			{ headers: { "Content-Type": "text/event-stream" } });
+		return { response, text(content: string) {
+			controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`));
+		}, finish(usage?: unknown) {
+			controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`));
+			controller.close();
+		}, close() { controller.close(); } };
+	}
+	it("shows first text, coalesces updates, flushes final Markdown and sends each completed pair once", async () => {
+		vi.useFakeTimers();
+		try {
+			const first = controlledStream();
+			const second = controlledStream();
+			const fetch = vi.fn().mockResolvedValueOnce(first.response).mockResolvedValueOnce(second.response);
+			const client = createServerClient(fetch);
+			const { view, root, input, send } = await setup(client.chat);
+			input.value = "first"; send.click(); await flushPromises();
+			input.value = "draft";
+			first.text("- item"); await flushPromises();
+			expect(root.getText()).toContain("- item");
+			expect(view.getMessages()).toEqual([]);
+			first.text("\n```ts\nconst x"); await flushPromises();
+			expect(root.getText()).not.toContain("const x");
+			await vi.advanceTimersByTimeAsync(100);
+			expect(root.getText()).toContain("const x");
+			const previousRow = root.find("ai-helper-message-model");
+			first.text(" = 1;\n```"); first.finish({ total_tokens: 15 }); await flushPromises();
+			expect(root.getText()).toContain(" = 1;\n```");
+			expect(input.value).toBe("draft");
+			input.value = "next"; send.click(); await flushPromises();
+			second.text("second"); await flushPromises();
+			expect(root.find("ai-helper-message-model")).toBe(previousRow);
+			expect(JSON.parse(fetch.mock.calls[1][1].body).messages).toEqual([
+				{ role: "user", content: "first" }, { role: "assistant", content: "- item\n```ts\nconst x = 1;\n```" },
+				{ role: "user", content: "next" },
+			]);
+			second.finish(); await flushPromises();
+			expect(root.getText()).toContain("No data");
+			await view.onClose();
+		} finally { vi.useRealTimers(); }
+	});
+	it("preserves partial text on EOF and excludes failed history", async () => {
+		const stream = controlledStream();
+		const fetch = vi.fn().mockResolvedValueOnce(stream.response).mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: "next answer" } }] })));
+		const { view, root, input, send } = await setup(createServerClient(fetch).chat);
+		input.value = "failed question"; send.click(); await flushPromises();
+		stream.text("partial answer"); await flushPromises();
+		stream.close(); await flushPromises();
+		expect(root.getText()).toContain("partial answer");
+		expect(root.getText()).toContain("Connection closed");
+		expect(view.getMessages()).toEqual([]);
+		input.value = "next question"; send.click(); await flushPromises();
+		expect(JSON.parse(fetch.mock.calls[1][1].body).messages).toEqual([{ role: "user", content: "next question" }]);
+		await view.onClose();
+	});
+});
+
+it("keeps the final message when an older streaming Markdown render resolves late", async () => {
+	const pending = deferred<Result>();
+	let params: Parameters<ServerClient["chat"]>[3];
+	const { view, root, input, send } = await setup(async (_url, _model, _messages, value) => {
+		params = value;
+		return pending.promise;
+	});
+	input.value = "question"; send.click(); await flushPromises();
+	const older = deferred<void>();
+	vi.spyOn(MarkdownRenderer, "render").mockImplementationOnce(async (_app, _content, element) => {
+		await older.promise;
+		element.setText("stale content");
+	});
+	params?.onText?.("early text"); await flushPromises();
+	pending.resolve(success("final text")); await flushPromises();
+	expect(root.getText()).toContain("final text");
+	older.resolve(); await flushPromises();
+	expect(root.getText()).not.toContain("stale content");
+	expect(root.getText()).toContain("final text");
+	await view.onClose();
 });
