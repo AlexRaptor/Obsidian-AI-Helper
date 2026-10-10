@@ -67,7 +67,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		title.addClass("ai-helper-settings-title");
 
 		const general = this.createGroup(containerEl, "settings-group-general");
-		const server = this.createGroup(containerEl, "settings-group-connection");
 		const model = this.createGroup(containerEl, "settings-group-model");
 		const generation = this.createGroup(containerEl, "settings-group-generation");
 		const embedding = this.createGroup(containerEl, "settings-group-embedding");
@@ -110,7 +109,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(server)
+		new Setting(model)
 			.setName(this.t("setting-server-url"))
 			.setDesc(this.t("setting-server-url-desc"))
 			.addText((text) => {
@@ -124,7 +123,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(server)
+		new Setting(model)
 			.setName(this.t("setting-api-key"))
 			.setDesc(this.t("setting-api-key-desc"))
 			.addText((text) => {
@@ -143,17 +142,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		this.renderModels(modelSetting);
 
 		new Setting(model)
-			.setName(this.t("setting-refresh-models"))
-			.setDesc(this.t("setting-refresh-models-desc"))
-			.addButton((button) => {
-				button
-					.setButtonText(this.t("setting-refresh-models"))
-					.onClick(async () => {
-						await this.refreshModels();
-					});
-			});
-
-		new Setting(model)
 			.setName(this.t("setting-context-window"))
 			.setDesc(this.t("setting-context-window-desc"))
 			.addText((text) => {
@@ -165,21 +153,6 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
-
-		const responseWait = new Setting(generation)
-			.setName(this.t("setting-response-wait"))
-			.setDesc(this.t("setting-response-wait-desc"));
-		responseWait.addText((text) => {
-			text.setValue(this.plugin.settings.responseWait).onChange(async (raw) => {
-				const parsed = parseResponseWait(raw);
-				const valid = parsed.valid;
-				text.inputEl.setAttribute("aria-invalid", String(!valid));
-				responseWait.setDesc(this.t("setting-response-wait-desc") + (valid ? "" : ` ${this.t("setting-response-wait-invalid")}`));
-				if (!parsed.valid) return;
-				this.plugin.settings.responseWait = parsed.value;
-				await this.plugin.saveSettings();
-			});
-		});
 
 		new Setting(generation)
 			.setName(this.t("setting-system-prompt"))
@@ -232,11 +205,25 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		const responseWait = new Setting(generation)
+			.setName(this.t("setting-response-wait"))
+			.setDesc(this.t("setting-response-wait-desc"));
+		responseWait.addText((text) => {
+			text.setValue(this.plugin.settings.responseWait).onChange(async (raw) => {
+				const parsed = parseResponseWait(raw);
+				const valid = parsed.valid;
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				responseWait.setDesc(this.t("setting-response-wait-desc") + (valid ? "" : ` ${this.t("setting-response-wait-invalid")}`));
+				if (!parsed.valid) return;
+				this.plugin.settings.responseWait = parsed.value;
+				await this.plugin.saveSettings();
+			});
+		});
 	}
 
 	private renderEmbeddingConnection(parent: HTMLElement, version: number): void {
 		const destination = parent.createDiv({ attr: { "aria-live": "polite" } });
-		const check = new Setting(parent).setName(this.t("embedding-check"));
 		const update = () => {
 			if (version !== this.displayVersion) return;
 			const url = this.plugin.settings.embeddingServerUrl;
@@ -263,6 +250,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				if (field.key === "embeddingApiKey") text.inputEl.type = "password";
 			});
 		}
+		const check = new Setting(parent).setName(this.t("embedding-check"));
 		check.addButton((button) => button.setButtonText(this.t("embedding-check")).onClick(async () => {
 			this.plugin.noteSearchConnection.configure(this.plugin.settings);
 			const checking = this.plugin.noteSearchConnection.verify();
@@ -293,6 +281,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 
 	private renderModels(modelSetting: Setting): void {
 		modelSetting.controlEl.empty();
+		modelSetting.controlEl.addClass("ai-helper-model-controls");
 
 		const { models, modelStatus } = this.plugin;
 		const selected = this.plugin.settings.model;
@@ -330,5 +319,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				});
 			}
 		}
+		modelSetting.addButton((button) => {
+			button
+				.setIcon("refresh-cw")
+				.setTooltip(this.t("setting-refresh-models"))
+				.onClick(async () => { await this.refreshModels(); });
+			button.buttonEl.setAttribute("aria-label", this.t("setting-refresh-models"));
+		});
 	}
 }

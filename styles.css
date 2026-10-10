@@ -225,6 +225,23 @@
 	flex-wrap: wrap;
 }
 
+.ai-helper-settings-card .ai-helper-model-controls {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 8px;
+}
+
+.ai-helper-model-controls input,
+.ai-helper-model-controls select {
+	width: 100%;
+	min-width: 0;
+}
+
+.ai-helper-model-controls .ai-helper-models-hint {
+	grid-column: 1 / -1;
+	grid-row: 2;
+}
+
 .ai-helper-settings-card .setting-item-control textarea {
 	width: 100%;
 	min-height: 96px;

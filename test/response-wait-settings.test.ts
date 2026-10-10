@@ -25,7 +25,7 @@ vi.mock("obsidian", async () => {
 			}
 			addDropdown(callback: (dropdown: unknown) => void) { callback({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; }
 			addButton(callback: (button: unknown) => void) {
-				const button = { click: async () => {}, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
+				const button = { buttonEl: new helper.TestElement(), click: async () => {}, setIcon() { return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
 				(this as unknown as { button: typeof button }).button = button;
 				callback(button); return this;
 			}
