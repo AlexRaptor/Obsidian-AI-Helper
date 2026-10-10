@@ -234,10 +234,10 @@
 }
 
 .ai-helper-settings-card > .ai-helper-embedding-check {
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 12px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+	align-items: center;
+	gap: 16px;
 }
 
 .ai-helper-embedding-check .setting-item-info {
@@ -252,8 +252,8 @@
 }
 
 .ai-helper-embedding-check .setting-item-control {
-	justify-content: flex-start;
-	width: 100%;
+	justify-content: flex-end;
+	width: auto;
 }
 
 .ai-helper-embedding-check button {

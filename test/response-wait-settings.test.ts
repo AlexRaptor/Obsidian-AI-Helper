@@ -81,7 +81,7 @@ it("saves an independent embedding connection and verifies it through the settin
 	vi.stubGlobal("fetch", fetch);
 	const tab = new AiHelperSettingsTab({} as App, plugin);
 	tab.display();
-	for (const [name, value] of [["Embedding model server URL", "http://embed/v1"], ["Embedding API key", "embed-key"], ["Embedding model API identifier", "embed-model"]]) {
+	for (const [name, value] of [["Embedding model server URL", "http://embed/v1"], ["Embedding API key", "embed-key"], ["Embedding model", "embed-model"]]) {
 		await controls.find((control) => control.name === name)!.input!.change(value);
 	}
 	expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ embeddingServerUrl: "http://embed/v1", embeddingApiKey: "embed-key", embeddingModel: "embed-model", serverUrl: "http://chat/v1", apiKey: "chat-key", model: "chat-model" }));
