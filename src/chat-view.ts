@@ -371,7 +371,10 @@ export class ChatView extends ItemView {
 			} else {
 				const message = result.error.code === "empty" ? this.t("chat-empty-response")
 					: result.error.code === "incomplete" ? this.t("chat-incomplete-response")
-					: result.error.code === "timeout" ? this.t("chat-response-timeout") : result.error.message;
+					: result.error.code === "timeout" ? this.t("chat-response-timeout")
+					: result.error.code === "invalid-stream" ? this.t("chat-invalid-stream")
+					: result.error.code === "stream-error" ? this.t("chat-stream-error")
+					: result.error.code === "invalid-response-wait" ? this.t("setting-response-wait-invalid") : result.error.message;
 				if (pending.kind === "text") pending.error = message;
 				else { pending.content = message; pending.kind = "error"; }
 				if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;

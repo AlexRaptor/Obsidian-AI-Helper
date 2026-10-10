@@ -1,3 +1,5 @@
+import { parseResponseWait } from "./response-wait";
+
 export type ClientFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 const MODELS_TIMEOUT_MS = 15_000;
@@ -15,9 +17,15 @@ export interface ServerErrorBody {
 	error?: { message?: string };
 }
 
+type ClientErrorCode = "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait";
+
+class ClientError extends Error {
+	constructor(message: string, readonly code: ClientErrorCode) { super(message); }
+}
+
 export type ServerClientResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; error: { message: string; code?: "empty" | "incomplete" | "timeout" } };
+	| { ok: false; error: { message: string; code?: ClientErrorCode } };
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant";
@@ -164,7 +172,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			}
 			return await Promise.race([operation(controller.signal, resetWait), interrupted]);
 		} catch (error) {
-			return { ok: false, error: { message: error instanceof Error ? error.message : String(error) } };
+			return { ok: false, error: { message: error instanceof Error ? error.message : String(error),
+				...(error instanceof ClientError ? { code: error.code } : {}) } };
 		} finally {
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", onAbort);
@@ -239,12 +248,11 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			...bearerHeaders(params?.apiKey),
 		};
 
-		const responseWait = params?.responseWait?.trim() ?? "";
-		const seconds = responseWait ? Number(responseWait) : undefined;
-		if (seconds !== undefined && (!/^\d+$/.test(responseWait) || !Number.isSafeInteger(seconds) || seconds <= 0)) {
-			return { ok: false, error: { message: "Response wait must be a positive whole number of seconds." } };
+		const responseWait = parseResponseWait(params?.responseWait);
+		if (!responseWait.valid) {
+			return { ok: false, error: { code: "invalid-response-wait", message: "Response wait must be a positive whole number of seconds." } };
 		}
-		const timeoutMs = seconds === undefined ? undefined : seconds * 1000;
+		const timeoutMs = responseWait.seconds === undefined ? undefined : responseWait.seconds * 1000;
 
 		return request(async (signal, resetWait) => {
 			const attempt = async (streaming: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
@@ -286,24 +294,36 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				if (!response.body) return fail("incomplete");
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
-				let buffer = "";
+				let line = "";
+				let afterCR = false;
+				let dataLines: string[] = [];
 				let content = "";
 				let usage: TokenUsage | undefined;
 				let completed = false;
 				let done = false;
-				const event = (raw: string) => {
-					const data = raw.split(/\r\n|\r|\n/).filter((line) => line.startsWith("data:"))
-						.map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+				const event = (data: string) => {
 					if (!data) return;
 					if (data.trim() === "[DONE]") { completed = true; done = true; return; }
-					const parsed: unknown = JSON.parse(data);
-					if (!isRecord(parsed)) throw new Error("Model server returned an invalid stream event.");
+					let parsed: unknown;
+					try { parsed = JSON.parse(data); } catch {
+						if (completed) return;
+						throw new ClientError("Model server returned an invalid stream event.", "invalid-stream");
+					}
+					if (!isRecord(parsed)) {
+						if (completed) return;
+						throw new ClientError("Model server returned an invalid stream event.", "invalid-stream");
+					}
+					if (parsed.usage !== undefined) usage = parseUsage(parsed.usage);
+					// Completion is final. Only collect usage already available in this transport chunk.
+					if (completed) return;
 					if (isRecord(parsed.error)) {
-						const message = typeof parsed.error.message === "string" ? parsed.error.message : "Model server returned a stream error.";
+						if (typeof parsed.error.message !== "string" || !parsed.error.message) {
+							throw new ClientError("Model server returned a stream error.", "stream-error");
+						}
+						const message = parsed.error.message;
 						if (streaming && !content && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
 						throw new Error(message);
 					}
-					if (parsed.usage !== undefined) usage = parseUsage(parsed.usage);
 					if (!Array.isArray(parsed.choices)) return;
 					const choice = parsed.choices.find((value: unknown) => isRecord(value) && (value.index === 0 || value.index === undefined));
 					if (!isRecord(choice)) return;
@@ -313,18 +333,35 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					}
 					if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
 				};
+				const endLine = () => {
+					if (line === "") {
+						const data = dataLines.join("\n");
+						dataLines = [];
+						event(data);
+					} else if (line === "data" || line.startsWith("data:")) {
+						dataLines.push(line === "data" ? "" : line.slice(5).replace(/^ /, ""));
+					}
+					line = "";
+				};
+				const consume = (text: string) => {
+					for (const character of text) {
+						if (done) break;
+						if (afterCR) {
+							afterCR = false;
+							if (character === "\n") continue;
+						}
+						if (character === "\r" || character === "\n") {
+							endLine();
+							afterCR = character === "\r";
+						} else line += character;
+					}
+				};
 				const onAbort = () => { void reader.cancel().catch(() => {}); };
 				signal.addEventListener("abort", onAbort, { once: true });
 				try {
-					while (!done && !signal.aborted) {
+					while (!completed && !signal.aborted) {
 						const part = await reader.read();
-						buffer += part.done ? decoder.decode() : decoder.decode(part.value, { stream: true });
-						let boundary: RegExpExecArray | null;
-						while (!done && (boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
-							const raw = buffer.slice(0, boundary.index);
-							buffer = buffer.slice(boundary.index + boundary[0].length);
-							event(raw);
-						}
+						consume(part.done ? decoder.decode() : decoder.decode(part.value, { stream: true }));
 						if (part.done) break;
 					}
 					if (signal.aborted || !completed) return fail("incomplete");
@@ -332,7 +369,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					return { ok: true, value: { content, usage } };
 				} finally {
 					signal.removeEventListener("abort", onAbort);
-					try { await reader.cancel(); } catch { /* closed transport */ }
+					// Do not make confirmed completion wait for the transport cancellation handshake.
+					void reader.cancel().catch(() => {});
 					reader.releaseLock();
 				}
 

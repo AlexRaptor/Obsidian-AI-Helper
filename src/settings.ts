@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type { AiHelperPlugin } from "./main";
+import { parseResponseWait } from "./response-wait";
 import {
 	setLanguage,
 	LOCALES,
@@ -139,13 +140,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			.setDesc(this.t("setting-response-wait-desc"));
 		responseWait.addText((text) => {
 			text.setValue(this.plugin.settings.responseWait).onChange(async (raw) => {
-				const value = raw.trim();
-				const seconds = Number(value);
-				const valid = value === "" || (/^\d+$/.test(value) && Number.isSafeInteger(seconds) && seconds > 0);
+				const parsed = parseResponseWait(raw);
+				const valid = parsed.valid;
 				text.inputEl.setAttribute("aria-invalid", String(!valid));
 				responseWait.setDesc(this.t("setting-response-wait-desc") + (valid ? "" : ` ${this.t("setting-response-wait-invalid")}`));
-				if (!valid) return;
-				this.plugin.settings.responseWait = value;
+				if (!parsed.valid) return;
+				this.plugin.settings.responseWait = parsed.value;
 				await this.plugin.saveSettings();
 			});
 		});

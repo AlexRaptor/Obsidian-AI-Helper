@@ -9,6 +9,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"chat-invalid-stream": "Model server returned an invalid stream event.",
+	"chat-stream-error": "Model server returned a stream error.",
 	"setting-response-wait": "Response wait time",
 	"setting-response-wait-desc": "Seconds to wait for the first text and each pause between text parts. New text restarts the wait; active generation can last longer. Leave empty to wait indefinitely. Changes apply to the next request.",
 	"setting-response-wait-invalid": "Enter a positive whole number of seconds, or leave empty. The last valid value is kept.",
@@ -73,6 +75,8 @@ export const en = {
 } as const;
 
 export const ru = {
+	"chat-invalid-stream": "Модель-сервер вернул некорректную часть потока.",
+	"chat-stream-error": "Модель-сервер сообщил об ошибке потока.",
 	"setting-response-wait": "Время ожидания ответа",
 	"setting-response-wait-desc": "Секунды ожидания первого текста и каждой паузы между частями текста. Новый текст обновляет отсчёт; активная генерация может длиться дольше. Пустое поле — бесконечное ожидание. Изменения применяются к следующему запросу.",
 	"setting-response-wait-invalid": "Введите целое положительное число секунд или оставьте поле пустым. Последнее корректное значение сохранено.",

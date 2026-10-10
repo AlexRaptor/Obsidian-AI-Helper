@@ -343,7 +343,7 @@ describe("stream transport", () => {
 		} }), { headers: { "Content-Type": "text/event-stream" } });
 	}
 	it("decodes UTF-8 and events across every byte boundary and retains server usage", async () => {
-		const encoded = new TextEncoder().encode(event("Привет 🌍") + event("!", { finish_reason: "stop" }) +
+		const encoded = new TextEncoder().encode(event("Привет 🌍") + event("!") +
 			'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}\r\n\r\ndata: [DONE]\r\n\r\n');
 		const onText = vi.fn();
 		const client = createServerClient(async () => stream(Array.from(encoded, (byte) => new Uint8Array([byte]))));
