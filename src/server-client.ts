@@ -18,7 +18,7 @@ export interface ServerErrorBody {
 
 export type ServerClientResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; error: { message: string } };
+	| { ok: false; error: { message: string; code?: "empty" | "incomplete" } };
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant";
@@ -27,6 +27,7 @@ export interface ChatMessage {
 
 export interface ChatParams {
 	signal?: AbortSignal;
+	onText?: (content: string) => void;
 	apiKey?: string;
 	systemPrompt?: string;
 	temperature?: string;
@@ -190,7 +191,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				...(params?.systemPrompt ? [{ role: "system", content: params.systemPrompt }] : []),
 				...messages,
 			],
-			stream: false,
+			stream: true,
+			stream_options: { include_usage: true },
 		};
 
 		const invalidParams: string[] = [];
@@ -226,21 +228,73 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				return { ok: false, error: { message: await readErrorMessage(response) } };
 			}
 
-			let data: unknown;
+			const fail = (code: "empty" | "incomplete"): ServerClientResult<ChatCompletionResult> => ({
+				ok: false, error: { code, message: code === "empty"
+					? "Model server returned an empty response." : "Model server connection closed before completion." },
+			});
+			if (!response.headers?.get("content-type")?.includes("text/event-stream")) {
+				let data: unknown;
+				try { data = await response.json(); } catch {
+					return { ok: false, error: { message: "Model server returned an unparseable response." } };
+				}
+				if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
+					!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string" ||
+					!data.choices[0].message.content.trim()) return fail("empty");
+				const content = data.choices[0].message.content;
+				if (signal.aborted) return fail("incomplete");
+				params?.onText?.(content);
+				return { ok: true, value: { content, usage: parseUsage(data.usage) } };
+			}
+			if (!response.body) return fail("incomplete");
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			let content = "";
+			let usage: TokenUsage | undefined;
+			let completed = false;
+			let done = false;
+			const event = (raw: string) => {
+				const data = raw.split(/\r\n|\r|\n/).filter((line) => line.startsWith("data:"))
+					.map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+				if (!data) return;
+				if (data.trim() === "[DONE]") { completed = true; done = true; return; }
+				const parsed: unknown = JSON.parse(data);
+				if (!isRecord(parsed)) throw new Error("Model server returned an invalid stream event.");
+				if (isRecord(parsed.error)) throw new Error(typeof parsed.error.message === "string"
+					? parsed.error.message : "Model server returned a stream error.");
+				if (parsed.usage !== undefined) usage = parseUsage(parsed.usage);
+				if (!Array.isArray(parsed.choices)) return;
+				const choice = parsed.choices.find((value: unknown) => isRecord(value) && (value.index === 0 || value.index === undefined));
+				if (!isRecord(choice)) return;
+				if (isRecord(choice.delta) && typeof choice.delta.content === "string" && choice.delta.content) {
+					content += choice.delta.content;
+					if (!signal.aborted) params?.onText?.(content);
+				}
+				if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
+			};
+			const onAbort = () => { void reader.cancel().catch(() => {}); };
+			signal.addEventListener("abort", onAbort, { once: true });
 			try {
-				data = await response.json();
-			} catch {
-				return { ok: false, error: { message: "Model server returned an unparseable response." } };
+				while (!done && !signal.aborted) {
+					const part = await reader.read();
+					buffer += part.done ? decoder.decode() : decoder.decode(part.value, { stream: true });
+					let boundary: RegExpExecArray | null;
+					while (!done && (boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
+						const raw = buffer.slice(0, boundary.index);
+						buffer = buffer.slice(boundary.index + boundary[0].length);
+						event(raw);
+					}
+					if (part.done) break;
+				}
+				if (signal.aborted || !completed) return fail("incomplete");
+				if (!content.trim()) return fail("empty");
+				return { ok: true, value: { content, usage } };
+			} finally {
+				signal.removeEventListener("abort", onAbort);
+				try { await reader.cancel(); } catch { /* closed transport */ }
+				reader.releaseLock();
 			}
 
-			if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
-				!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string") {
-				return { ok: false, error: { message: "Model server returned an empty response." } };
-			}
-
-			const content = data.choices[0].message.content;
-			const usage = parseUsage(data.usage);
-			return { ok: true, value: { content, usage } };
 		}, CHAT_TIMEOUT_MS, params?.signal);
 	}
 

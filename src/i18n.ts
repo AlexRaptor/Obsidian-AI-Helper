@@ -61,6 +61,9 @@ export const en = {
 		"Generation parameters must be numbers. The request was sent without them.",
 	"header-context": "Context window",
 	"header-context-empty": "0 / 0 tokens",
+	"header-context-unavailable": "No data",
+	"chat-empty-response": "Model server returned an empty message.",
+	"chat-incomplete-response": "Connection closed before the model finished.",
 } as const;
 
 export const ru = {
@@ -116,6 +119,9 @@ export const ru = {
 		"Параметры генерации должны быть числами. Запрос отправлен без них.",
 	"header-context": "Окно контекста",
 	"header-context-empty": "0 / 0 токенов",
+	"header-context-unavailable": "Нет данных",
+	"chat-empty-response": "Модель-сервер вернул пустое сообщение.",
+	"chat-incomplete-response": "Соединение закрыто до завершения сообщения модели.",
 } as const;
 
 export type LocaleKey = keyof typeof en;

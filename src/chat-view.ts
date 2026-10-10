@@ -10,7 +10,7 @@ function formatNumber(value: number): string {
 	return value.toLocaleString("en-US");
 }
 
-type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error" };
+type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string };
 
 export class ChatView extends ItemView {
 	plugin: AiHelperPlugin;
@@ -24,7 +24,8 @@ export class ChatView extends ItemView {
 	private clearBtn: HTMLButtonElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
-	private markdownComponents: Component[] = [];
+	private rendered = new Map<DisplayMessage, { div: HTMLElement; branch: HTMLElement; body: HTMLElement; revision: number; signature: string; component?: Component }>();
+	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
 	private renderRevision = 0;
 
@@ -51,7 +52,9 @@ export class ChatView extends ItemView {
 		const limit = raw ? Number(raw) : NaN;
 
 		if (this.contextLabelEl) {
-			if (!Number.isFinite(limit) || limit <= 0) {
+			if (used === undefined) {
+				this.contextLabelEl.setText(this.t("header-context-unavailable"));
+			} else if (!Number.isFinite(limit) || limit <= 0) {
 				this.contextLabelEl.setText(this.t("header-context-empty"));
 			} else {
 				const pct = Math.min(100, Math.round((used / limit) * 100));
@@ -63,7 +66,7 @@ export class ChatView extends ItemView {
 
 		if (this.contextBarEl) {
 			const fill =
-				Number.isFinite(limit) && limit > 0
+				used !== undefined && Number.isFinite(limit) && limit > 0
 					? Math.min(100, (used / limit) * 100)
 					: 0;
 			this.contextBarEl.style.width = `${fill}%`;
@@ -71,6 +74,7 @@ export class ChatView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.detachMarkdown();
 		this.buildStructure();
 		this.bindEvents();
 		this.setThinking(this.thinking);
@@ -167,61 +171,73 @@ export class ChatView extends ItemView {
 	}
 
 	private detachMarkdown(): void {
-		for (const child of this.markdownComponents.splice(0)) {
-			this.removeChild(child);
+		for (const row of this.rendered.values()) {
+			row.revision++;
+			if (row.component) this.removeChild(row.component);
 		}
+		this.rendered.clear();
 	}
 
 	async renderMessages(): Promise<void> {
-		const revision = ++this.renderRevision;
+		const revision = this.renderRevision;
 		const el = this.messagesEl;
 		if (!el) return;
-		this.detachMarkdown();
-		el.empty();
-
-		for (const message of [...this.messages]) {
-			if (revision !== this.renderRevision) return;
-			const div = el.createEl("div", {
-				cls: `ai-helper-message ai-helper-message-${message.role}`,
-			});
-			div.addClass(`ai-helper-message-kind-${message.kind}`);
-
-			const branch = div.createEl("div", { cls: "ai-helper-message-branch" });
-			const body = div.createEl("div", { cls: "ai-helper-message-body" });
-
-			if (message.kind === "error") {
-				branch.addClass("ai-helper-branch-error");
-				const prefix = body.createSpan({ cls: "ai-helper-error-prefix" });
-				prefix.setText(this.t("chat-error-prefix"));
-				body.createSpan({ text: ` ${message.content}` });
-			} else if (message.role !== "model" || message.kind === "thinking") {
-				if (message.kind === "thinking") {
-					branch.addClass("ai-helper-branch-thinking");
-					body.createSpan({ cls: "ai-helper-thinking", text: message.content });
-				} else {
-					body.createSpan({ text: message.content });
-				}
-			} else {
-				const markdown = body.createEl("div", { cls: "ai-helper-markdown" });
-				const component = new Component();
-				component.load();
-				this.addChild(component);
-				this.markdownComponents.push(component);
-				try {
-					await MarkdownRenderer.render(
-						this.app,
-						message.content,
-						markdown,
-						"",
-						component
-					);
-				} catch {
-					if (revision !== this.renderRevision) return;
-					markdown.createEl("pre", { text: message.content });
-				}
+		for (const [message, row] of this.rendered) {
+			if (!this.messages.includes(message)) {
+				row.revision++;
+				if (row.component) this.removeChild(row.component);
+				row.div.remove();
+				this.rendered.delete(message);
 			}
 		}
-		if (revision === this.renderRevision) el.scrollTop = el.scrollHeight;
+		const updates: Promise<void>[] = [];
+		for (const message of this.messages) {
+			let row = this.rendered.get(message);
+			if (!row) {
+				const div = el.createDiv({ cls: `ai-helper-message ai-helper-message-${message.role}` });
+				const branch = div.createDiv({ cls: "ai-helper-message-branch" });
+				row = { div, branch, body: div.createDiv({ cls: "ai-helper-message-body" }), revision: 0, signature: "" };
+				this.rendered.set(message, row);
+			}
+			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${this.t("chat-error-prefix")}`;
+			if (row.signature === signature) continue;
+			row.signature = signature;
+			const current = row;
+			const rowRevision = ++current.revision;
+			if (current.component) { this.removeChild(current.component); current.component = undefined; }
+			current.branch.className = `ai-helper-message-branch${message.kind === "thinking" ? " ai-helper-branch-thinking" : message.kind === "error" || message.error ? " ai-helper-branch-error" : ""}`;
+			current.div.className = `ai-helper-message ai-helper-message-${message.role} ai-helper-message-kind-${message.kind}`;
+			// Render off-tree. A slow renderer cannot replace a newer update or resurrect a cleared row.
+			const staging = current.body.createDiv({ cls: "ai-helper-markdown" });
+			staging.remove();
+			const content = message.content;
+			const error = message.error;
+			const kind = message.kind;
+			const component = new Component();
+			component.load();
+			this.addChild(component);
+			current.component = component;
+			updates.push((async () => {
+				if (message.role === "model" && kind === "text") {
+					try { await MarkdownRenderer.render(this.app, content, staging, "", component); }
+					catch { staging.empty(); staging.createEl("pre", { text: content }); }
+				} else if (kind === "error") {
+					staging.createSpan({ cls: "ai-helper-error-prefix", text: this.t("chat-error-prefix") });
+					staging.createSpan({ text: ` ${content}` });
+				} else staging.createSpan({ cls: kind === "thinking" ? "ai-helper-thinking" : "", text: content });
+				if (error) staging.createDiv({ cls: "ai-helper-error-prefix", text: `${this.t("chat-error-prefix")}: ${error}` });
+				if (revision !== this.renderRevision || current.revision !== rowRevision || this.messagesEl !== el) return;
+				current.body.empty();
+				current.body.appendChild(staging);
+				el.scrollTop = el.scrollHeight;
+			})());
+		}
+		await Promise.all(updates);
+	}
+
+	private clearUpdateTimer(): void {
+		if (this.updateTimer !== null) clearTimeout(this.updateTimer);
+		this.updateTimer = null;
 	}
 
 	private setThinking(thinking: boolean): void {
@@ -235,6 +251,7 @@ export class ChatView extends ItemView {
 	private cancelRequest(): void {
 		const request = this.activeRequest;
 		this.activeRequest = null;
+		this.clearUpdateTimer();
 		request?.abort();
 		this.messages = this.messages.filter((message) => message.kind !== "thinking");
 		this.setThinking(false);
@@ -262,6 +279,17 @@ export class ChatView extends ItemView {
 			maxTokens: settings.maxTokens,
 			topP: settings.topP,
 			signal: request.signal,
+			onText: (content: string) => {
+				if (this.activeRequest !== request) return;
+				const first = pending.kind === "thinking";
+				pending.kind = "text";
+				pending.content = content;
+				if (first) void this.renderMessages();
+				else if (this.updateTimer === null) this.updateTimer = setTimeout(() => {
+					this.updateTimer = null;
+					if (this.activeRequest === request) void this.renderMessages();
+				}, 100);
+			},
 		};
 		const serverUrl = settings.serverUrl.trim();
 		const model = settings.model;
@@ -278,22 +306,26 @@ export class ChatView extends ItemView {
 				// Commit the turn together so failed attempts never enter request history.
 				this.conversation.addMessage({ role: "user", content: text });
 				this.conversation.addMessage({ role: "model", content });
-				if (usage) this.conversation.recordUsage(usage);
+				this.conversation.recordUsage(usage);
 				pending.content = content;
 				pending.kind = "text";
 			} else {
-				pending.content = result.error.message;
-				pending.kind = "error";
+				const message = result.error.code === "empty" ? this.t("chat-empty-response")
+					: result.error.code === "incomplete" ? this.t("chat-incomplete-response") : result.error.message;
+				if (pending.kind === "text") pending.error = message;
+				else { pending.content = message; pending.kind = "error"; }
 				if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
 			}
 		} catch (error) {
 			if (this.activeRequest !== request) return;
-			pending.content = error instanceof Error ? error.message : String(error);
-			pending.kind = "error";
+			const message = error instanceof Error ? error.message : String(error);
+			if (pending.kind === "text") pending.error = message;
+			else { pending.content = message; pending.kind = "error"; }
 			if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
 		} finally {
 			if (this.activeRequest === request) {
 				this.activeRequest = null;
+				this.clearUpdateTimer();
 				this.setThinking(false);
 				this.updateContextIndicators();
 				await this.renderMessages();

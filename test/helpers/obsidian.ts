@@ -2,6 +2,10 @@ type ElementOptions = { cls?: string; text?: string; attr?: Record<string, strin
 
 export class TestElement {
 	children: TestElement[] = [];
+	private parent: TestElement | null = null;
+	className = "";
+	remove(): void { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
+	appendChild(child: TestElement): TestElement { child.remove(); child.parent = this; this.children.push(child); return child; }
 	classes = new Set<string>();
 	attributes: Record<string, string> = {};
 	style: Record<string, string> = {};
@@ -21,6 +25,7 @@ export class TestElement {
 		if (options.cls) child.addClass(options.cls);
 		child.text = options.text ?? "";
 		child.attributes = { ...options.attr };
+		child.parent = this;
 		this.children.push(child);
 		return child;
 	}

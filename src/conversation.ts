@@ -13,21 +13,21 @@ export interface TokenUsage {
 
 export class Conversation {
 	private messages: Message[] = [];
-	private tokensUsed = 0;
+	private tokensUsed: number | undefined = 0;
 
 	addMessage(message: Message): void {
 		this.messages.push(message);
 	}
 
-	recordUsage(usage: TokenUsage): void {
-		this.tokensUsed = usage.totalTokens;
+	recordUsage(usage?: TokenUsage): void {
+		this.tokensUsed = usage?.totalTokens;
 	}
 
 	getMessages(): Message[] {
 		return [...this.messages];
 	}
 
-	getTokensUsed(): number {
+	getTokensUsed(): number | undefined {
 		return this.tokensUsed;
 	}
 
