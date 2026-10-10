@@ -25,10 +25,10 @@ it("indexes only on the explicit active-note command through the public module",
 	const command = commands.mock.calls.find(([command]) => command.id === "index-active-note")![0];
 	Notice.messages.length = 0; command.callback!();
 	await vi.waitFor(() => expect(Notice.messages.join(" ")).toContain("Note indexed locally"));
-	expect(await plugin.noteSearch.search("When?")).toEqual({ path: "Train.md", text: "Train departs at 18:30." });
+	expect(await plugin.noteSearch.search("When?")).toMatchObject({ path: "Train.md", text: "Train\nTrain.md\n\nTrain departs at 18:30." });
 	plugin.settings.noteSearchMinSimilarity = 0.7; await plugin.saveSettings();
 	expect(await plugin.noteSearch.search("When?")).toBeNull();
 	plugin.settings.noteSearchMinSimilarity = 0.5; await plugin.saveSettings();
-	expect(await plugin.noteSearch.search("When?")).toEqual({ path: "Train.md", text: "Train departs at 18:30." });
+	expect(await plugin.noteSearch.search("When?")).toMatchObject({ path: "Train.md", text: "Train\nTrain.md\n\nTrain departs at 18:30." });
 	expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ noteSearchMinSimilarity: 0.5 }));
 });

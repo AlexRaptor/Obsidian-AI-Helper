@@ -1,20 +1,24 @@
 import type { ServerClient } from "./server-client";
 import type { EmbeddingConnection } from "./note-search";
 
-export interface NoteSource { path: string; text: string; }
-export type NoteSearchErrorCode = "search-storage" | "search-rebuild" | "search-note" | "search-long" | "search-empty" | "search-budget" | "search-failed";
+import { noteFragments, DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
+
+export interface NoteSource { path: string; text: string; headings: string[]; contentHash: string; }
+export type NoteSearchErrorCode = "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed";
 export class NoteSearchError extends Error {
 	constructor(public readonly code: NoteSearchErrorCode) { super(code); }
 }
-interface IndexedNote extends NoteSource { fingerprint: string; vector: number[]; }
+interface IndexedFragment { text: string; headings: string[]; vector: number[]; }
+interface IndexedNote { path: string; contentHash: string; fingerprint: string; fragments: IndexedFragment[]; }
 interface NoteSearchEnvironment {
 	vaultPath: string;
 	factory: IDBFactory | undefined;
 	client: ServerClient;
 	read(path: string): Promise<string | null>;
-	open(path: string): Promise<void>;
+	open(path: string, heading?: string): Promise<void>;
+	metadata?(path: string, raw: string): Record<string, unknown>;
 }
-const SOURCE_CHAR_LIMIT = 4000;
+
 // Calibrated on the Russian single-note acceptance scenario with Qwen3 embeddings.
 export const DEFAULT_MIN_SOURCE_SIMILARITY = 0.45;
 export function isValidMinimumSimilarity(value: unknown): value is number {
@@ -25,15 +29,17 @@ async function hash(text: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-// One bounded record in a vault-specific renderer database. No file fallback.
+// Derived data is validated before use, including records from earlier plugin versions.
 function validNote(value: unknown): value is IndexedNote {
 	if (!value || typeof value !== "object") return false;
 	const note = value as Partial<IndexedNote>;
-	return typeof note.path === "string" && note.path.endsWith(".md") && typeof note.text === "string"
-		&& note.text.length > 0 && note.text.length <= SOURCE_CHAR_LIMIT && typeof note.fingerprint === "string"
-		&& Array.isArray(note.vector) && note.vector.length > 0 && note.vector.length <= 65536
-		&& note.vector.every((value) => typeof value === "number" && Number.isFinite(value))
-		&& Number.isFinite(Math.hypot(...note.vector)) && Math.hypot(...note.vector) > 0;
+	return typeof note.path === "string" && /\.md$/i.test(note.path) && typeof note.contentHash === "string"
+		&& typeof note.fingerprint === "string" && Array.isArray(note.fragments) && note.fragments.length > 0
+		&& note.fragments.every((fragment) => fragment !== null && typeof fragment === "object" && typeof fragment.text === "string" && fragment.text.length > 0 && fragment.text.length <= 16000
+			&& Array.isArray(fragment.headings) && fragment.headings.every((heading: unknown) => typeof heading === "string")
+			&& Array.isArray(fragment.vector) && fragment.vector.length > 0 && fragment.vector.length <= 65536
+			&& fragment.vector.every((value: unknown) => typeof value === "number" && Number.isFinite(value))
+			&& Number.isFinite(Math.hypot(...fragment.vector)) && Math.hypot(...fragment.vector) > 0);
 }
 
 function storage(environment: NoteSearchEnvironment) {
@@ -83,11 +89,12 @@ function storage(environment: NoteSearchEnvironment) {
 export function createNoteSearch(environment: NoteSearchEnvironment) {
 	const store = storage(environment);
 	let connection: EmbeddingConnection | undefined;
+	let fragmentOptions = { ...DEFAULT_FRAGMENT_OPTIONS };
 	let minimumSimilarity = DEFAULT_MIN_SOURCE_SIMILARITY;
 	let revision = 0;
 	let writes: Promise<unknown> = Promise.resolve();
 	let disposed = false;
-	const fingerprint = () => hash(JSON.stringify(connection));
+	const fingerprint = () => hash(JSON.stringify({ connection, fragmentOptions, format: 2 }));
 	const check = (version: number, signal?: AbortSignal) => {
 		if (disposed || revision !== version || signal?.aborted) throw new NoteSearchError("search-rebuild");
 	};
@@ -106,12 +113,14 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		return result.value[0];
 	}
 	return {
-		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number }): void {
+		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number } & Partial<FragmentOptions>): void {
+			const options = { noteFragmentSize: next.noteFragmentSize ?? DEFAULT_FRAGMENT_OPTIONS.noteFragmentSize, noteFragmentOverlap: next.noteFragmentOverlap ?? DEFAULT_FRAGMENT_OPTIONS.noteFragmentOverlap };
+			if (!isValidFragmentOptions(options)) throw new NoteSearchError("search-fragment-settings");
 			minimumSimilarity = isValidMinimumSimilarity(next.noteSearchMinSimilarity) ? next.noteSearchMinSimilarity : DEFAULT_MIN_SOURCE_SIMILARITY;
 			const copy = { embeddingServerUrl: next.embeddingServerUrl, embeddingApiKey: next.embeddingApiKey, embeddingModel: next.embeddingModel };
-			if (JSON.stringify(connection) === JSON.stringify(copy)) return;
+			if (JSON.stringify(connection) === JSON.stringify(copy) && JSON.stringify(fragmentOptions) === JSON.stringify(options)) return;
 			const changed = connection !== undefined;
-			connection = copy; revision++;
+			connection = copy; fragmentOptions = options; revision++;
 			if (changed) { writes = writes.catch(() => {}); void write(null); }
 		},
 		dispose(): void { disposed = true; revision++; },
@@ -120,14 +129,25 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			if (!path.toLowerCase().endsWith(".md")) throw new NoteSearchError("search-note");
 			const text = await environment.read(path);
 			if (!text?.trim()) throw new NoteSearchError("search-note");
-			if (text.length > SOURCE_CHAR_LIMIT) throw new NoteSearchError("search-long");
 			const identity = await fingerprint();
-			const vector = await embed(text);
+			const fragments: IndexedFragment[] = [];
+			try {
+				for (const fragment of noteFragments(path, text, environment.metadata?.(path, text) ?? {}, fragmentOptions)) {
+					check(version);
+					fragments.push({ ...fragment, vector: await embed(fragment.text) });
+				}
+			} catch (error) {
+				if (error instanceof NoteSearchError) throw error;
+				throw new NoteSearchError("search-fragment-settings");
+			}
+			if (!fragments.length) throw new NoteSearchError("search-note");
 			check(version);
 			if (await environment.read(path) !== text) throw new NoteSearchError("search-rebuild");
 			check(version);
 			writes = writes.catch(() => {});
-			await write({ path, text, fingerprint: identity, vector });
+			const contentHash = await hash(text);
+			check(version);
+			await write({ path, contentHash, fingerprint: identity, fragments });
 			check(version);
 		},
 		async search(question: string, signal?: AbortSignal): Promise<NoteSource | null> {
@@ -137,20 +157,26 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const note = await store.read();
 			check(version, signal);
 			if (!validNote(note) || note.fingerprint !== await fingerprint()) throw new NoteSearchError("search-rebuild");
-			if (await environment.read(note.path) !== note.text) throw new NoteSearchError("search-rebuild");
+			if (await hash(await environment.read(note.path) ?? "") !== note.contentHash) throw new NoteSearchError("search-rebuild");
 			const vector = await embed(question, signal);
 			check(version, signal);
-			if (await environment.read(note.path) !== note.text) throw new NoteSearchError("search-rebuild");
+			if (await hash(await environment.read(note.path) ?? "") !== note.contentHash) throw new NoteSearchError("search-rebuild");
 			check(version, signal);
-			if (vector.length !== note.vector.length) throw new NoteSearchError("search-rebuild");
 			const norm = (values: number[]) => Math.hypot(...values);
-			const similarity = vector.reduce((sum, value, index) => sum + value * note.vector[index], 0) / (norm(vector) * norm(note.vector));
-			// Allow for floating-point accumulation error, including identical vectors at threshold 1.
-			return similarity + 1e-12 >= threshold ? { path: note.path, text: note.text } : null;
+			let best: IndexedFragment | undefined;
+			let score = -Infinity;
+			for (const fragment of note.fragments) {
+				if (vector.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
+				const similarity = vector.reduce((sum, value, index) => sum + value * fragment.vector[index], 0) / (norm(vector) * norm(fragment.vector));
+				if (similarity + 1e-12 >= threshold && similarity > score) { best = fragment; score = similarity; }
+			}
+			// One bounded fragment per request keeps a long note from consuming the entire context.
+			return best ? { path: note.path, text: best.text, headings: best.headings, contentHash: note.contentHash } : null;
 		},
 		async open(source: NoteSource): Promise<void> {
-			if (await environment.read(source.path) !== source.text) throw new NoteSearchError("search-rebuild");
-			await environment.open(source.path);
+			if (await hash(await environment.read(source.path) ?? "") !== source.contentHash) throw new NoteSearchError("search-rebuild");
+			if (source.headings.length) await environment.open(source.path, source.headings[source.headings.length - 1]);
+			else await environment.open(source.path);
 		},
 	};
 }

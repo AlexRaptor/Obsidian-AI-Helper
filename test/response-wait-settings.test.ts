@@ -275,3 +275,23 @@ it.each(["en", "ru"] as const)("checks the main model without sending history an
 	expect(check.description).toContain(dictionary["model-auth"]);
 	expect((check as unknown as { descEl: TestElement }).descEl.find("ai-helper-connection-status").attributes["data-state"]).toBe("error");
 });
+
+
+it.each(["en", "ru"] as const)("validates advanced fragment settings and saves only compatible values in %s", async (locale) => {
+	setLanguage(locale); const dictionary = locale === "ru" ? ru : en;
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS };
+	const save = vi.fn(async () => {}); Object.assign(plugin, { saveData: save });
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const size = controls.find((control) => control.name === dictionary["setting-fragment-size"])!;
+	const overlap = controls.find((control) => control.name === dictionary["setting-fragment-overlap"])!;
+	await size.input!.change("256");
+	expect(size.input!.inputEl.attributes["aria-invalid"]).toBe("true");
+	expect(plugin.settings.noteFragmentSize).toBe(4000); expect(save).not.toHaveBeenCalled();
+	await overlap.input!.change("32"); await size.input!.change("512");
+	expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ noteFragmentSize: 512, noteFragmentOverlap: 32 }));
+	for (const raw of ["-1", "1.5", "Infinity", "", "129"]) await overlap.input!.change(raw);
+	expect(plugin.settings.noteFragmentOverlap).toBe(32);
+	expect(overlap.description).toContain(dictionary["search-fragment-settings"]);
+	expect(save).toHaveBeenCalledTimes(2);
+});

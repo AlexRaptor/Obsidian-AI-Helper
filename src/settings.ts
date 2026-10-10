@@ -2,6 +2,7 @@ import { App, PluginSettingTab, Setting } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity } from "./note-index";
+import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
 import { parseResponseWait } from "./response-wait";
 import { effectiveContextWindow } from "./context-window";
 import {
@@ -12,7 +13,7 @@ import {
 	type LocaleKey,
 } from "./i18n";
 
-export interface AiHelperSettings extends EmbeddingConnection {
+export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	noteSearchMinSimilarity: number;
 	serverUrl: string;
 	apiKey: string;
@@ -27,6 +28,7 @@ export interface AiHelperSettings extends EmbeddingConnection {
 }
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
+	...DEFAULT_FRAGMENT_OPTIONS,
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	embeddingServerUrl: "",
 	embeddingApiKey: "",
@@ -94,6 +96,23 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 			text.inputEl.setAttribute("inputmode", "decimal");
 		});
+
+		const advanced = this.createGroup(containerEl, "settings-group-fragments");
+		for (const [key, name] of [["noteFragmentSize", "setting-fragment-size"], ["noteFragmentOverlap", "setting-fragment-overlap"]] as const) {
+			const setting = new Setting(advanced).setName(this.t(name)).setDesc(this.t("setting-fragment-options-desc"));
+			setting.addText((text) => {
+				text.setValue(String(this.plugin.settings[key])).onChange(async (raw) => {
+					const next = { ...this.plugin.settings, [key]: Number(raw.trim()) };
+					const valid = /^\d+$/.test(raw.trim()) && isValidFragmentOptions(next);
+					text.inputEl.setAttribute("aria-invalid", String(!valid));
+					setting.setDesc(this.t("setting-fragment-options-desc") + (valid ? "" : ` ${this.t("search-fragment-settings")}`));
+					if (!valid) return;
+					this.plugin.settings[key] = next[key];
+					await this.plugin.saveSettings();
+				});
+				text.inputEl.setAttribute("inputmode", "numeric");
+			});
+		}
 
 		new Setting(general)
 			.setName(this.t("setting-language"))

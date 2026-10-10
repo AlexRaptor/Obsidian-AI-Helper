@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, parseYaml } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -9,6 +9,7 @@ import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, t, type LocaleKey } from "./i18n";
 import { createModelConnection } from "./model-connection";
+import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragments";
 import { createNoteSearchConnection } from "./note-search";
 import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, type NoteSearch } from "./note-index";
 import { StorageProbeModal } from "./storage-probe-modal";
@@ -47,7 +48,12 @@ export class AiHelperPlugin extends Plugin {
 				const file = this.app.vault.getFileByPath(path);
 				return file?.extension === "md" ? this.app.vault.read(file) : null;
 			},
-			open: (path) => this.app.workspace.openLinkText(path, "", false),
+			metadata: (_path, raw) => {
+				const yaml = raw.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/);
+				const value: unknown = yaml ? parseYaml(yaml[1]) : {};
+				return value && typeof value === "object" ? value as Record<string, unknown> : {};
+			},
+			open: (path, heading) => this.app.workspace.openLinkText(heading ? `${path}#${heading}` : path, "", false),
 		});
 		this.noteSearch.configure(this.settings);
 
@@ -90,6 +96,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
 		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
 		this.noteSearchConnection.configure(this.settings);
 		this.modelConnection.configure(this.settings);
