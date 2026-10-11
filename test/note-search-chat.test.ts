@@ -36,7 +36,7 @@ async function setup(mode: "normal" | "unrelated" | "offline" | "pending" | "sim
 	return { view, root, bodies, open, finish: () => finish(new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }))), change: (value: string | null) => { note = value; }, async send(text: string) {
 		root.find("ai-helper-input").value = text; root.find("ai-helper-send").click();
 		// IndexedDB uses task scheduling rather than microtasks.
-		await vi.waitFor(() => expect(root.find("ai-helper-send").text).toBe(t("send"))); await flushPromises();
+		await vi.waitFor(() => expect(root.find("ai-helper-send").attributes["aria-label"]).toBe(t("send"))); await flushPromises();
 	} };
 }
 
@@ -143,7 +143,7 @@ it("does not send a source to the conversation server after exclusion during pen
 	await vi.waitFor(() => expect(bodies).toHaveLength(1));
 	view.plugin.noteSearch.configure({ ...view.plugin.settings, excludedFolders: ["/"] });
 	finish();
-	await vi.waitFor(() => expect(root.find("ai-helper-send").text).toBe("Send"));
+	await vi.waitFor(() => expect(root.find("ai-helper-send").attributes["aria-label"]).toBe("Send"));
 	expect(bodies).toHaveLength(1); expect(view.getMessages()).toEqual([]);
 	await view.onClose();
 });

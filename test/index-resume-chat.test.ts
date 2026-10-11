@@ -29,7 +29,10 @@ it("shows whole-vault coverage in the header, pauses and continues through acces
 	const root = view.contentEl as unknown as TestElement;
 	try {
 		root.find("ai-helper-search-toggle").click();
-		expect(root.find("ai-helper-index-action").getText()).toBe("Index the vault");
+		expect(root.find("ai-helper-index-action").attributes["aria-label"]).toBe("Index the vault");
+		expect(root.find("ai-helper-index-action").text).toBe("");
+		expect(root.find("ai-helper-index-action").attributes["data-icon"]).toBe("play");
+		expect(root.find("ai-helper-send").attributes["data-icon"]).toBe("search");
 		root.find("ai-helper-index-action").click();
 		await vi.waitFor(() => expect(requests).toBe(2));
 		expect(root.find("ai-helper-index-coverage-label").getText()).toBe("50% - 1 / 2");
@@ -71,7 +74,8 @@ it("displays an offline retry, keeps normal chat available and resumes only on a
 		await vi.waitFor(() => expect(embeddings).toBe(2));
 		await vi.waitFor(() => expect(noteSearch.progress.state).toBe("error"));
 		expect(root.find("ai-helper-index-reason").getText()).toContain("Waiting for the embedding server");
-		expect(root.find("ai-helper-index-action").getText()).toBe("Retry");
+		expect(root.find("ai-helper-index-action").attributes["aria-label"]).toBe("Retry");
+		expect(root.find("ai-helper-index-action").attributes["data-icon"]).toBe("rotate-cw");
 		expect(root.find("ai-helper-index-coverage-label").getText()).toBe("0% - 0 / 1");
 		text = "latest text"; await noteSearch.changed("Train.md"); offline = false;
 		await new Promise(resolve => setTimeout(resolve, 60)); expect(embeddings).toBe(2);

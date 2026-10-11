@@ -99,7 +99,7 @@ describe("chat view request lifecycle", () => {
 		await flushPromises();
 		old.resolve(success("old answer"));
 		await flushPromises();
-		expect(send.text).toBe("Stop");
+		expect(send.attributes["aria-label"]).toBe("Stop");
 		expect(root.getText()).not.toContain("old answer");
 		next.resolve(success("new answer"));
 		await flushPromises();
@@ -144,7 +144,9 @@ describe("chat view request lifecycle", () => {
 		await view.refreshLocale();
 		expect(root.find("ai-helper-input").value).toBe("next draft");
 		expect(root.find("ai-helper-send").disabled).toBe(false);
-		expect(root.find("ai-helper-send").text).toBe("Остановить");
+		expect(root.find("ai-helper-send").attributes["aria-label"]).toBe("Остановить");
+		expect(root.find("ai-helper-send").attributes["data-icon"]).toBe("square");
+		expect(root.find("ai-helper-send").text).toBe("");
 		input.keydown("Enter");
 		await flushPromises();
 		expect(chat).toHaveBeenCalledTimes(1);

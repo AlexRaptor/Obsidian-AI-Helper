@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { FileSystemAdapter, type App, type PluginManifest } from "obsidian";
 import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
+import { createNoteSearch } from "../src/note-index";
+import { createServerClient } from "../src/server-client";
 import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
 import { en, ru, setLanguage, t } from "../src/i18n";
 import { deferred, TestElement } from "./helpers/obsidian";
@@ -390,4 +392,29 @@ it("shows the renamed exclusion immediately in open settings and persists it bef
 		expect(plugin.settings.excludedFolders).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		await vi.waitFor(() => expect(saving).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: ["Secrets", "Secrets/Nested", "Private-public"] })));
 	} finally { plugin.onunload(); }
+});
+
+
+it.each(["en", "ru"] as const)("clears the full index and pending updates through settings in %s", async locale => {
+	setLanguage(locale);
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", autoUpdateNotes: false };
+	let text = "original note"; let requests = 0;
+	const client = createServerClient(async () => {
+		requests++; return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	});
+	const environment = { factory: new IDBFactory(), vaultPath: "/settings-clear", client, list: () => ["Note.md"], read: async () => text, open: async () => {} };
+	plugin.noteSearch = createNoteSearch(environment); plugin.noteSearch.configure(plugin.settings);
+	await plugin.noteSearch.indexVault(); await plugin.noteSearch.pause();
+	text = "edited note"; await plugin.noteSearch.changed("Note.md");
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const clear = controls.find(control => control.name === t("search-vault-clear"))!;
+	expect(clear.description).toBe(t("search-clear-desc"));
+	await clear.button!.click();
+	expect(plugin.noteSearch.progress).toMatchObject({ state: "idle", completed: 0, total: 1 });
+	plugin.noteSearch.dispose();
+	const restored = createNoteSearch(environment); restored.configure({ ...plugin.settings, autoUpdateNotes: true });
+	await restored.restore(); await restored.resume(true);
+	expect(restored.progress.state).toBe("idle"); expect(requests).toBe(1); expect(text).toBe("edited note");
+	await expect(restored.search("note")).rejects.toMatchObject({ code: "search-rebuild" }); restored.dispose();
 });

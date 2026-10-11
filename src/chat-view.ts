@@ -187,13 +187,13 @@ export class ChatView extends ItemView {
 			this.searchEnabled = !this.searchEnabled;
 			if (this.searchEnabled) void this.plugin.noteSearch.resume?.().catch(() => {});
 			this.updateIndexStatus();
+			this.setThinking(this.thinking);
 			this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
 		});
 		this.indexStatusEl = header.createDiv({ cls: "ai-helper-index-status" });
 		this.indexCoverageBar = this.indexStatusEl.createDiv({ cls: "ai-helper-index-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
 		this.indexCoverageFill = this.indexCoverageBar.createDiv({ cls: "ai-helper-context-bar-fill" });
 		this.indexCoverageLabel = this.indexStatusEl.createSpan({ cls: "ai-helper-index-coverage-label" });
-		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
 		this.indexAction = this.indexStatusEl.createEl("button", { cls: "ai-helper-index-action", attr: { type: "button" } });
 		this.indexAction.addEventListener("click", () => {
 			if (this.indexActionPending) return;
@@ -209,6 +209,7 @@ export class ChatView extends ItemView {
 		this.indexPause.addEventListener("click", () => {
 			void this.plugin.noteSearch.pause().catch(() => new Notice(this.t("search-storage")));
 		});
+		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
 		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
 
 		const inputRow = container.createDiv({ cls: "ai-helper-input-row" });
@@ -219,7 +220,7 @@ export class ChatView extends ItemView {
 		this.inputEl.value = this.draft;
 		this.sendBtn = inputRow.createEl("button", {
 			cls: "ai-helper-send",
-			text: this.t("send"),
+			attr: { type: "button" },
 		});
 	}
 
@@ -238,12 +239,16 @@ export class ChatView extends ItemView {
 		this.indexReason?.setText(`${this.t(`search-state-${progress.state}`)}${progress.state !== "complete" ? ` — ${this.t("search-partial")}` : ""}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
 		if (this.indexAction) {
 			const key = progress.state === "idle" ? "search-vault-index" : progress.state === "error" ? "search-repeat" : "search-continue";
-			this.indexAction.setText(this.t(key)); this.indexAction.setAttribute("aria-label", this.t(key));
+			setIcon(this.indexAction, progress.state === "error" ? "rotate-cw" : "play");
+			this.indexAction.setAttribute("aria-label", this.t(key));
+			this.indexAction.setAttribute("title", this.t(key));
 			this.indexAction.disabled = this.indexActionPending || progress.state === "indexing";
 			this.indexAction.style.display = progress.state === "complete" || progress.state === "indexing" ? "none" : "";
 		}
 		if (this.indexPause) {
-			this.indexPause.setText(this.t("search-pause")); this.indexPause.setAttribute("aria-label", this.t("search-pause"));
+			setIcon(this.indexPause, "pause");
+			this.indexPause.setAttribute("aria-label", this.t("search-pause"));
+			this.indexPause.setAttribute("title", this.t("search-pause"));
 			this.indexPause.style.display = progress.state === "indexing" ? "" : "none";
 		}
 	}
@@ -441,7 +446,10 @@ export class ChatView extends ItemView {
 		if (this.sendBtn) {
 			this.sendBtn.disabled = false;
 			this.sendBtn.className = `ai-helper-send${thinking ? " ai-helper-stop" : ""}`;
-			this.sendBtn.setText(this.t(thinking ? "stop" : "send"));
+			const label = this.t(thinking ? "stop" : "send");
+			this.sendBtn.setAttribute("aria-label", label);
+			this.sendBtn.setAttribute("title", label);
+			setIcon(this.sendBtn, thinking ? "square" : this.searchEnabled ? "search" : "play");
 		}
 	}
 

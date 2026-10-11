@@ -86,7 +86,7 @@ it("immediately flushes the final text and switches Stop to Send after a finish 
 	input.value = "draft";
 	transport.send(data(delta(" final", "stop"))); await flushPromises();
 	expect(root.getText()).toContain("early final");
-	expect(send.text).toBe("Send");
+	expect(send.attributes["aria-label"]).toBe("Send");
 	expect(input.value).toBe("draft");
 	expect(view.getMessages()).toEqual([{ role: "user", content: "question" }, { role: "model", content: "early final" }]);
 	await vi.advanceTimersByTimeAsync(2000);

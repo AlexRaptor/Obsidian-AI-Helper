@@ -39,10 +39,10 @@ describe("stopping real chat streams", () => {
 		const fetch = vi.fn<Parameters<ClientFetch>, ReturnType<ClientFetch>>().mockResolvedValueOnce(current.response).mockResolvedValueOnce(json("next answer"));
 		const { view, root, input, send, ask } = await setup(fetch);
 		await ask("question");
-		expect(send.disabled).toBe(false); expect(send.text).toBe("Stop");
+		expect(send.disabled).toBe(false); expect(send.attributes["aria-label"]).toBe("Stop");
 		input.value = "next draft";
 		input.keydown("Enter"); await flushPromises();
-		expect(fetch).toHaveBeenCalledTimes(1); expect(send.text).toBe("Stop");
+		expect(fetch).toHaveBeenCalledTimes(1); expect(send.attributes["aria-label"]).toBe("Stop");
 		if (withText) {
 			current.text("partial"); await flushPromises();
 			current.text(" latest"); await flushPromises();
@@ -52,7 +52,7 @@ describe("stopping real chat streams", () => {
 		expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
 		expect(root.getText()).toContain("question"); expect(root.getText()).toContain("Stopped");
 		if (withText) expect(root.getText()).toContain("partial latest");
-		expect(send.text).toBe("Send"); expect(input.value).toBe("next draft");
+		expect(send.attributes["aria-label"]).toBe("Send"); expect(input.value).toBe("next draft");
 		expect(view.getMessages()).toEqual([]);
 		setLanguage("ru"); await view.refreshLocale();
 		expect(root.getText()).toContain("Остановлено"); expect(input.value).toBe("next draft");
@@ -72,7 +72,7 @@ describe("stopping real chat streams", () => {
 		}
 		if (failure === "error") current.fail(); else if (failure === "empty") current.finish(); else current.close();
 		await flushPromises();
-		expect(input.value).toBe("draft"); expect(send.text).toBe("Send");
+		expect(input.value).toBe("draft"); expect(send.attributes["aria-label"]).toBe("Send");
 		expect(root.getText()).toContain(failure === "empty" ? "empty message" : "partial latest");
 		expect(root.getText()).toContain(failure === "error" ? "connection lost" : failure === "incomplete" ? "Connection closed" : "empty message");
 		send.click(); await flushPromises();
@@ -105,7 +105,8 @@ describe("stopping real chat streams", () => {
 		expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
 		await view.onOpen();
 		expect(root.getText()).toContain("partial latest"); expect(root.getText()).toContain("Stopped");
-		expect(root.find("ai-helper-input").value).toBe("draft"); expect(root.find("ai-helper-send").text).toBe("Send");
+		expect(root.find("ai-helper-input").value).toBe("draft"); expect(root.find("ai-helper-send").attributes["aria-label"]).toBe("Send");
+	expect(root.find("ai-helper-send").attributes["data-icon"]).toBe("play");
 		expect(fetch).toHaveBeenCalledTimes(1); await view.onClose();
 	});
 
@@ -115,7 +116,7 @@ describe("stopping real chat streams", () => {
 		const { view, root, input, send, ask } = await setup(fetch);
 		await ask("old question"); root.find("ai-helper-clear-btn").click(); await flushPromises();
 		await ask("new question"); response.resolve(json("late old text")); await flushPromises();
-		expect(root.getText()).not.toContain("old"); expect(send.text).toBe("Stop");
+		expect(root.getText()).not.toContain("old"); expect(send.attributes["aria-label"]).toBe("Stop");
 		const rendering = deferred<void>();
 		vi.spyOn(MarkdownRenderer, "render").mockImplementationOnce(async (_app, _text, element) => {
 			await rendering.promise; element.setText("stale rendered text");
@@ -124,6 +125,6 @@ describe("stopping real chat streams", () => {
 		root.find("ai-helper-clear-btn").click(); await flushPromises();
 		input.value = "draft"; rendering.resolve(); await flushPromises();
 		expect(root.find("ai-helper-messages").getText()).toBe(""); expect(input.value).toBe("draft");
-		expect(view.getMessages()).toEqual([]); expect(send.text).toBe("Send"); await view.onClose();
+		expect(view.getMessages()).toEqual([]); expect(send.attributes["aria-label"]).toBe("Send"); await view.onClose();
 	});
 });
