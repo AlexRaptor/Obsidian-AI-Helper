@@ -16,13 +16,6 @@
 	margin-bottom: 8px;
 }
 
-.ai-helper-header-title {
-	font-weight: 600;
-	white-space: nowrap;
-}
-
-.ai-helper-clear-btn,
-.ai-helper-search-toggle,
 .ai-helper-index-action,
 .ai-helper-index-pause {
 	flex: 0 0 auto;

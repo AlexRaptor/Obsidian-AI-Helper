@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Notice, setIcon, WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Notice, Menu, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -35,14 +35,13 @@ export class ChatView extends ItemView {
 	private indexPause: HTMLButtonElement | null = null;
 	private indexActionPending = false;
 	private unsubscribeIndex: (() => void) | undefined;
-	private searchBtn: HTMLButtonElement | null = null;
+	private searchBtn: HTMLElement | null = null;
 	private messagesEl: HTMLElement | null = null;
-	private headerTitleEl: HTMLElement | null = null;
 	private contextBarEl: HTMLElement | null = null;
 	private contextLabelEl: HTMLElement | null = null;
 	private inputEl: HTMLTextAreaElement | null = null;
 	private sendBtn: HTMLButtonElement | null = null;
-	private clearBtn: HTMLButtonElement | null = null;
+	private clearBtn: HTMLElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
 	private rendered = new Map<DisplayMessage, MessageRow>();
@@ -61,6 +60,21 @@ export class ChatView extends ItemView {
 
 	getViewType(): string {
 		return VIEW_TYPE_CHAT;
+	}
+
+	getIcon(): string { return "message-square"; }
+
+	onPaneMenu(menu: Menu): void {
+		menu.addItem(item => item.setTitle(this.t("clear-conversation")).setIcon("trash-2").onClick(() => this.clearConversation()));
+		menu.addItem(item => item.setTitle(this.t("search-toggle")).setIcon("search").setChecked(this.searchEnabled).onClick(() => this.toggleSearch()));
+	}
+
+	toggleSearch(): void {
+		this.searchEnabled = !this.searchEnabled;
+		if (this.searchEnabled) void this.plugin.noteSearch.resume?.().catch(() => {});
+		this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
+		this.updateIndexStatus();
+		this.setThinking(this.thinking);
 	}
 
 	getDisplayText(): string {
@@ -116,10 +130,9 @@ export class ChatView extends ItemView {
 	async refreshLocale(): Promise<void> {
 		this.updateIndexStatus();
 		this.searchBtn?.setAttribute("aria-label", this.t("search-toggle"));
-		this.searchBtn?.setAttribute("title", this.t("search-toggle"));
-		this.headerTitleEl?.setText(this.t("view-title"));
+		if (this.searchBtn) setTooltip(this.searchBtn, this.t("search-toggle"));
 		this.clearBtn?.setAttribute("aria-label", this.t("clear-conversation"));
-		this.clearBtn?.setAttribute("title", this.t("clear-conversation"));
+		if (this.clearBtn) setTooltip(this.clearBtn, this.t("clear-conversation"));
 		this.inputEl?.setAttribute("placeholder", this.t("input-placeholder"));
 		for (const message of this.messages) {
 			if (message.kind === "thinking") message.content = this.t("thinking");
@@ -142,11 +155,12 @@ export class ChatView extends ItemView {
 		this.detachScrollObserver();
 		this.detachMarkdown();
 		this.messagesEl = null;
+		this.searchBtn?.remove();
 		this.searchBtn = null;
 		this.inputEl = null;
 		this.sendBtn = null;
+		this.clearBtn?.remove();
 		this.clearBtn = null;
-		this.headerTitleEl = null;
 		this.contextBarEl = null;
 		this.contextLabelEl = null;
 	}
@@ -170,28 +184,18 @@ export class ChatView extends ItemView {
 		container.addClass("ai-helper");
 
 		const header = container.createDiv({ cls: "ai-helper-header" });
-		this.headerTitleEl = header.createSpan({
-			cls: "ai-helper-header-title",
-			text: this.t("view-title"),
-		});
 		const contextBar = header.createDiv({ cls: "ai-helper-context-bar" });
 		this.contextBarEl = contextBar.createDiv({ cls: "ai-helper-context-bar-fill" });
 		this.contextLabelEl = header.createSpan({ cls: "ai-helper-context-label" });
-		this.clearBtn = header.createEl("button", {
-			cls: "ai-helper-clear-btn",
-			attr: { type: "button", "aria-label": this.t("clear-conversation"), title: this.t("clear-conversation") },
-		});
-		setIcon(this.clearBtn, "trash-2");
-
-		this.searchBtn = header.createEl("button", { cls: "ai-helper-search-toggle", attr: { type: "button", "aria-label": this.t("search-toggle"), title: this.t("search-toggle"), "aria-pressed": String(this.searchEnabled) } });
-		setIcon(this.searchBtn, "search");
-		this.searchBtn.addEventListener("click", () => {
-			this.searchEnabled = !this.searchEnabled;
-			if (this.searchEnabled) void this.plugin.noteSearch.resume?.().catch(() => {});
-			this.updateIndexStatus();
-			this.setThinking(this.thinking);
-			this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
-		});
+		this.clearBtn?.remove();
+		this.searchBtn?.remove();
+		this.clearBtn = this.addAction("trash-2", this.t("clear-conversation"), () => this.clearConversation());
+		this.clearBtn.addClass("ai-helper-clear-btn");
+		this.searchBtn = this.addAction("search", this.t("search-toggle"), () => this.toggleSearch());
+		this.searchBtn.addClass("ai-helper-search-toggle");
+		this.searchBtn.setAttribute("role", "button");
+		this.searchBtn.setAttribute("aria-label", this.t("search-toggle"));
+		this.searchBtn.setAttribute("aria-pressed", String(this.searchEnabled));
 		this.indexStatusEl = header.createDiv({ cls: "ai-helper-index-status" });
 		this.indexTitleEl = this.indexStatusEl.createSpan({ cls: "ai-helper-index-title" });
 		this.indexCoverageBar = this.indexStatusEl.createDiv({ cls: "ai-helper-index-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
@@ -283,7 +287,6 @@ export class ChatView extends ItemView {
 				this.messageResizeObserver.observe(messages);
 			}
 		}
-		this.clearBtn?.addEventListener("click", () => this.clearConversation());
 		this.sendBtn?.addEventListener("click", () => {
 			if (this.thinking) { this.cancelRequest(); void this.renderMessages(); }
 			else void this.handleSend();

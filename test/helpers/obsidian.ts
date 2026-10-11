@@ -63,6 +63,10 @@ export class Component {
 export class ItemView extends Component {
 	contentEl = new TestElement();
 	app = {};
+	addAction(icon: string, title: string, callback: () => void): TestElement {
+		const action = this.contentEl.createEl("button", { attr: { "aria-label": title } });
+		setIcon(action, icon); setTooltip(action, title); action.addEventListener("click", callback); return action;
+	}
 }
 
 export const MarkdownRenderer = {
@@ -125,3 +129,6 @@ export class SettingGroup {
 	setHeading(_text: string): this { return this; }
 	addClass(cls: string): this { this.listEl.addClass(cls); return this; }
 }
+
+export class Menu {}
+export function setTooltip(el: TestElement, text: string): void { el.setAttribute("data-tooltip", text); }
