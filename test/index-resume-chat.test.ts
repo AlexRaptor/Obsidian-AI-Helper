@@ -29,6 +29,7 @@ it("shows whole-vault coverage in the header, pauses and continues through acces
 	const root = view.contentEl as unknown as TestElement;
 	try {
 		root.find("ai-helper-search-toggle").click();
+		expect(root.find("ai-helper-index-title").getText()).toBe("Indexing");
 		expect(root.find("ai-helper-index-action").attributes["aria-label"]).toBe("Index the vault");
 		expect(root.find("ai-helper-index-action").text).toBe("");
 		expect(root.find("ai-helper-index-action").attributes["data-icon"]).toBe("play");
@@ -43,6 +44,7 @@ it("shows whole-vault coverage in the header, pauses and continues through acces
 		await vi.waitFor(() => expect(root.find("ai-helper-index-action").disabled).toBe(false));
 		expect(Notice.messages).not.toContain(t("search-rebuild"));
 		setLanguage("ru"); await view.refreshLocale();
+		expect(root.find("ai-helper-index-title").getText()).toBe("Индексация");
 		expect(root.find("ai-helper-index-action").attributes["aria-label"]).toBe("Продолжить индексацию");
 		expect(root.find("ai-helper-index-status").getText()).toContain("Индексация приостановлена");
 		root.find("ai-helper-index-action").click(); root.find("ai-helper-index-action").click();

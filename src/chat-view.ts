@@ -26,6 +26,7 @@ export class ChatView extends ItemView {
 	conversation = new Conversation();
 	private searchEnabled = false;
 	private indexStatusEl: HTMLElement | null = null;
+	private indexTitleEl: HTMLElement | null = null;
 	private indexCoverageBar: HTMLElement | null = null;
 	private indexCoverageFill: HTMLElement | null = null;
 	private indexCoverageLabel: HTMLElement | null = null;
@@ -132,6 +133,7 @@ export class ChatView extends ItemView {
 		this.unsubscribeIndex?.();
 		this.unsubscribeIndex = undefined;
 		this.indexStatusEl = null;
+		this.indexTitleEl = null;
 		this.indexCoverageBar = null; this.indexCoverageFill = null; this.indexCoverageLabel = null;
 		this.indexReason = null; this.indexAction = null; this.indexPause = null;
 		this.draft = this.inputEl?.value ?? this.draft;
@@ -191,6 +193,7 @@ export class ChatView extends ItemView {
 			this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
 		});
 		this.indexStatusEl = header.createDiv({ cls: "ai-helper-index-status" });
+		this.indexTitleEl = this.indexStatusEl.createSpan({ cls: "ai-helper-index-title" });
 		this.indexCoverageBar = this.indexStatusEl.createDiv({ cls: "ai-helper-index-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
 		this.indexCoverageFill = this.indexCoverageBar.createDiv({ cls: "ai-helper-context-bar-fill" });
 		this.indexCoverageLabel = this.indexStatusEl.createSpan({ cls: "ai-helper-index-coverage-label" });
@@ -228,6 +231,7 @@ export class ChatView extends ItemView {
 		const progress = this.plugin.noteSearch?.progress;
 		if (!this.indexStatusEl) return;
 		this.indexStatusEl.style.display = this.searchEnabled && progress ? "" : "none";
+		this.indexTitleEl?.setText(this.t("search-state-indexing"));
 		if (!progress) return;
 		const percent = progress.total ? Math.min(100, Math.round(progress.completed / progress.total * 100)) : progress.state === "complete" ? 100 : 0;
 		const label = `${percent}% - ${formatNumber(progress.completed)} / ${formatNumber(progress.total)}`;

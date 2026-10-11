@@ -441,6 +441,11 @@
 	overflow: hidden;
 }
 
+.ai-helper-index-title {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
 .ai-helper-index-coverage-label {
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
