@@ -436,3 +436,12 @@ it("adds absent folders and root, rejects duplicate edits and removes rows", asy
 	expect(plugin.settings.excludedFolders).toEqual(["Private", "/"]);
 	tab.hide();
 });
+
+
+it("defaults missing language to auto and preserves saved manual preferences", async () => {
+	for (const [saved, expected] of [[{}, "auto"], [{ language: "ru" }, "ru"], [{ language: "en" }, "en"], [{ language: "bad" }, "auto"]]) {
+		const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+		vi.spyOn(plugin, "loadData").mockResolvedValue(saved);
+		await plugin.loadSettings(); expect(plugin.settings.language).toBe(expected);
+	}
+});

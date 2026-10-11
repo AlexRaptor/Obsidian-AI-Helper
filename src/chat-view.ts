@@ -10,7 +10,7 @@ import { effectiveContextWindow } from "./context-window";
 export const VIEW_TYPE_CHAT = "ai-helper-chat";
 
 function formatNumber(value: number): string {
-	return value.toLocaleString("en-US");
+	return value.toLocaleString(getLanguage());
 }
 
 type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; source?: NoteSource };

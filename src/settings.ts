@@ -8,10 +8,9 @@ import { DEFAULT_SIMILARITY_APPEARANCE, SIMILARITY_COLORS, validSimilarityBounda
 import { parseResponseWait } from "./response-wait";
 import { effectiveContextWindow } from "./context-window";
 import {
-	setLanguage,
 	LOCALES,
 	LOCALE_NAMES,
-	type Locale,
+	type LanguagePreference,
 	type LocaleKey,
 } from "./i18n";
 
@@ -30,7 +29,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	topP: string;
 	contextWindow: string;
 	responseWait: string;
-	language: Locale;
+	language: LanguagePreference;
 }
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
@@ -52,7 +51,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	topP: "",
 	contextWindow: "",
 	responseWait: "",
-	language: "en",
+	language: "auto",
 };
 
 export type ModelStatus = "idle" | "loaded" | "empty" | "error";
@@ -230,14 +229,14 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			.setName(this.t("setting-language"))
 			.setDesc(this.t("setting-language-desc"))
 			.addDropdown((dropdown) => {
+				dropdown.addOption("auto", this.t("language-auto"));
 				for (const code of LOCALES) {
 					dropdown.addOption(code, LOCALE_NAMES[code]);
 				}
 				dropdown
 					.setValue(this.plugin.settings.language)
 					.onChange(async (value: string) => {
-						this.plugin.settings.language = value as Locale;
-						setLanguage(value as Locale);
+						this.plugin.settings.language = value as LanguagePreference;
 						await this.plugin.saveSettings();
 						await this.plugin.refreshLocale();
 						this.display();

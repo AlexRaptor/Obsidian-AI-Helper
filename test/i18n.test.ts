@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LOCALES, LOCALE_NAMES, setLanguage, getLanguage, t } from "../src/i18n";
+import { LOCALES, LOCALE_NAMES, resolveLanguage, setLanguage, getLanguage, t } from "../src/i18n";
 
 const sampleKeys = ["view-title", "command", "ribbon"] as const;
 
@@ -39,4 +39,8 @@ describe("i18n", () => {
 		setLanguage("ru");
 		expect(getLanguage()).toBe("ru");
 	});
+});
+
+it.each([["auto", "ru", "ru"], ["auto", "en", "en"], ["auto", "de", "en"], ["en", "ru", "en"], ["ru", "en", "ru"]] as const)("resolves %s with app language %s as %s", (choice, app, expected) => {
+	expect(resolveLanguage(choice, app)).toBe(expected);
 });

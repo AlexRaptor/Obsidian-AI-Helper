@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, TFile, type TAbstractFile, parseYaml } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile, type TAbstractFile, parseYaml, getLanguage as getAppLanguage } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -7,7 +7,7 @@ import {
 } from "./settings";
 import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
-import { setLanguage, t, type LocaleKey } from "./i18n";
+import { setLanguage, resolveLanguage, t, type LocaleKey } from "./i18n";
 import { createModelConnection } from "./model-connection";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragments";
 import { createNoteSearchConnection } from "./note-search";
@@ -141,6 +141,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!["auto", "en", "ru"].includes(this.settings.language)) this.settings.language = "auto";
 		this.settings.similarityAppearance = normalizeSimilarityAppearance(this.settings.similarityAppearance);
 		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
 		if (!isValidNoteUpdateDelay(this.settings.noteUpdateDelaySeconds)) this.settings.noteUpdateDelaySeconds = DEFAULT_SETTINGS.noteUpdateDelaySeconds;
@@ -267,7 +268,7 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	applyLanguage(): void {
-		setLanguage(this.settings.language);
+		setLanguage(resolveLanguage(this.settings.language, getAppLanguage()));
 	}
 
 	async toggleView(): Promise<void> {

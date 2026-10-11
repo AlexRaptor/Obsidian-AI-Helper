@@ -135,3 +135,5 @@ export function setTooltip(el: TestElement, text: string): void { el.setAttribut
 
 export class TFolder {}
 export class AbstractInputSuggest<T> { constructor(public app: unknown, _input: unknown) {} close(): void {} }
+
+export function getLanguage(): string { return "en"; }

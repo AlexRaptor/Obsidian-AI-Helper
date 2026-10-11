@@ -1,4 +1,9 @@
 export type Locale = "en" | "ru";
+export type LanguagePreference = Locale | "auto";
+
+export function resolveLanguage(preference: LanguagePreference, appLanguage: string): Locale {
+	return preference === "auto" ? (appLanguage === "ru" ? "ru" : "en") : preference;
+}
 
 export const LOCALES: readonly Locale[] = ["en", "ru"];
 export const DEFAULT_LOCALE: Locale = "en";
@@ -9,6 +14,7 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"language-auto": "Same as Obsidian",
 	"folder-add": "Add excluded folder",
 	"folder-remove": "Remove excluded folder",
 	"settings-group-index-updates": "Index updates",
@@ -206,6 +212,7 @@ export const en = {
 } as const;
 
 export const ru = {
+	"language-auto": "Как в Obsidian",
 	"folder-add": "Добавить исключённую папку",
 	"folder-remove": "Удалить исключённую папку",
 	"settings-group-index-updates": "Обновление индекса",
