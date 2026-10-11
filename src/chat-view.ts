@@ -1,9 +1,10 @@
 import { Component, ItemView, MarkdownRenderer, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 import type { AiHelperPlugin } from "./main";
-import type { LocaleKey } from "./i18n";
+import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
 import { NoteSearchError, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
+import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
 import { effectiveContextWindow } from "./context-window";
 
 export const VIEW_TYPE_CHAT = "ai-helper-chat";
@@ -101,6 +102,8 @@ export class ChatView extends ItemView {
 		this.updateContextIndicators();
 		await this.renderMessages();
 	}
+
+	async refreshSimilarityAppearance(): Promise<void> { await this.renderMessages(); }
 
 	async refreshLocale(): Promise<void> {
 		this.updateIndexStatus();
@@ -324,7 +327,7 @@ export class ChatView extends ItemView {
 				this.messageResizeObserver?.observe(div);
 			}
 			this.updateCopyButton(message, row);
-			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}\0${this.t("search-fragment")}\0${message.source?.path ?? ""}`;
+			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}\0${this.t("search-fragment")}\0${message.source?.path ?? ""}\0${this.t("search-similarity")}\0${message.source?.similarity ?? ""}\0${JSON.stringify(this.plugin.settings.similarityAppearance)}`;
 			if (row.signature === signature) continue;
 			row.signature = signature;
 			const current = row;
@@ -351,6 +354,8 @@ export class ChatView extends ItemView {
 						const button = parent.createEl("button", { cls: "ai-helper-source-link", text: `[1] ${source.path}${source.headings.length ? " → " + source.headings.join(" → ") : ""}` });
 						button.addEventListener("click", () => { void this.plugin.noteSearch.open(source).catch(() => new Notice(this.t("search-rebuild"))); });
 					};
+					const similarityEl = staging.createDiv({ cls: "ai-helper-source-similarity", text: `${this.t("search-similarity")}: ${source.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
+					similarityEl.style.color = similarityColor(source.similarity, normalizeSimilarityAppearance(this.plugin.settings.similarityAppearance));
 					if (source.partial) staging.createDiv({ text: this.t("search-partial") });
 					const parts = content.split("[1]");
 					parts.forEach((part, index) => { if (index) link(staging); staging.createSpan({ text: part }); });

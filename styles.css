@@ -314,6 +314,28 @@
 	resize: vertical;
 }
 
+.ai-helper-settings-card > .ai-helper-excluded-folders {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 12px;
+}
+
+.ai-helper-excluded-folders .setting-item-info {
+	width: 100%;
+	margin: 0;
+}
+
+.ai-helper-excluded-folders .setting-item-control {
+	width: 100%;
+	justify-content: flex-start;
+}
+
+.ai-helper-settings-card .ai-helper-excluded-folders textarea {
+	box-sizing: border-box;
+	min-width: min(100%, 18rem);
+	resize: both;
+}
+
 .ai-helper-settings-card .setting-item-control input,
 .ai-helper-settings-card .setting-item-control select,
 .ai-helper-settings-card .setting-item-control textarea {

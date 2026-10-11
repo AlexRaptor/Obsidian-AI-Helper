@@ -3,7 +3,7 @@ import type { EmbeddingConnection } from "./note-search";
 
 import { noteFragments, DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
 
-export interface NoteSource { path: string; text: string; headings: string[]; contentHash: string; partial?: boolean; }
+export interface NoteSource { path: string; text: string; headings: string[]; contentHash: string; similarity: number; partial?: boolean; }
 export type NoteSearchErrorCode = "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed" | "search-excluded";
 export class NoteSearchError extends Error {
 	constructor(public readonly code: NoteSearchErrorCode) { super(code); }
@@ -292,7 +292,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 					const similarity = vector.reduce((sum, value, index) => sum + value * fragment.vector[index], 0) / (Math.hypot(...vector) * Math.hypot(...fragment.vector));
 					if (similarity + 1e-12 >= threshold && similarity > score) {
 						score = similarity;
-						best = { path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, partial: progress.state !== "complete" || current.length !== notes.length };
+						best = { similarity, path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, partial: progress.state !== "complete" || current.length !== notes.length };
 					}
 				}
 			}

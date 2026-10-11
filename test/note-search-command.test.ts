@@ -33,7 +33,7 @@ it("indexes only on the explicit active-note command through the public module",
 	expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ noteSearchMinSimilarity: 0.5 }));
 });
 
-it("exposes vault indexing, clearing and rebuilding with server disclosure", async () => {
+it("indexes the vault from scratch with one command and server disclosure", async () => {
 	vi.stubGlobal("indexedDB", new IDBFactory());
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/vault-commands";
 	const files = [{ path: "Travel/Train.md", extension: "md" }, { path: "Private/Secret.md", extension: "md" }];
@@ -41,7 +41,12 @@ it("exposes vault indexing, clearing and rebuilding with server disclosure", asy
 	const app = { vault: { adapter, getFileByPath: (path: string) => files.find((f) => f.path === path), getMarkdownFiles: () => files, read }, workspace: { detachLeavesOfType: () => {} } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://embeddings/v1", embeddingModel: "e", serverUrl: "http://conversation/v1", excludedFolders: ["Private"] });
-	plugin.serverClient = createServerClient(async (url) => new Response(JSON.stringify(url.endsWith("/models") ? { data: [] } : { data: [{ index: 0, embedding: [1, 0] }] })));
+	let hold = false;
+	let finish: ((response: Response) => void) | undefined;
+	plugin.serverClient = createServerClient(async (url) => {
+		if (hold && url.endsWith("/embeddings")) return new Promise<Response>((resolve) => { finish = resolve; });
+		return new Response(JSON.stringify(url.endsWith("/models") ? { data: [] } : { data: [{ index: 0, embedding: [1, 0] }] }));
+	});
 	const commands = vi.spyOn(plugin, "addCommand"); await plugin.onload();
 	const invoke = (id: string) => commands.mock.calls.find(([command]) => command.id === id)![0].callback!();
 	Notice.messages.length = 0; invoke("index-vault");
@@ -49,10 +54,18 @@ it("exposes vault indexing, clearing and rebuilding with server disclosure", asy
 	expect(Notice.messages.join(" ")).toContain("http://embeddings/v1");
 	expect(Notice.messages.join(" ")).toContain("http://conversation/v1");
 	expect(read.mock.calls.every(([file]) => file.path === "Travel/Train.md")).toBe(true);
+	expect(commands.mock.calls.some(([command]) => command.id === "rebuild-note-index")).toBe(false);
+	hold = true; invoke("index-vault");
+	await vi.waitFor(() => expect(finish).toBeDefined());
+	await expect(plugin.noteSearch.search("When?")).rejects.toMatchObject({ code: "search-rebuild" });
+	hold = false;
+	finish!(new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+	await vi.waitFor(() => expect(plugin.noteSearch.progress.state).toBe("complete"));
+	expect(await plugin.noteSearch.search("When?")).toMatchObject({ path: "Travel/Train.md" });
 	invoke("clear-note-index");
 	await vi.waitFor(() => expect(Notice.messages.join(" ")).toContain("Index deleted"));
 	await expect(plugin.noteSearch.search("When?")).rejects.toMatchObject({ code: "search-rebuild" });
-	invoke("rebuild-note-index");
+	invoke("index-vault");
 	await vi.waitFor(() => expect(plugin.noteSearch.progress.state).toBe("complete"));
 	expect(await plugin.noteSearch.search("When?")).toMatchObject({ path: "Travel/Train.md" });
 	plugin.onunload();

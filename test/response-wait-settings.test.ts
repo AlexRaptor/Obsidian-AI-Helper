@@ -5,7 +5,7 @@ import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
 import { en, ru, setLanguage, t } from "../src/i18n";
 import { deferred, TestElement } from "./helpers/obsidian";
 
-const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
+const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; picker?: { value: string; disabled: boolean; change: (value: string) => Promise<void> }; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
 vi.mock("obsidian", async () => {
 	const helper = await import("./helpers/obsidian");
 	return { ...helper,
@@ -29,11 +29,18 @@ vi.mock("obsidian", async () => {
 				this.input = input; callback(input); return this;
 			}
 			addDropdown(callback: (dropdown: unknown) => void) {
-				const dropdown = { value: "", options: {} as Record<string, string>, change: async (_value: string) => {},
+				const dropdown = { selectEl: new helper.TestElement(), value: "", options: {} as Record<string, string>, change: async (_value: string) => {},
 					addOption(value: string, label: string) { this.options[value] = label; return this; },
 					setValue(value: string) { this.value = value; return this; },
 					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
 				this.dropdown = dropdown; callback(dropdown); return this;
+			}
+			addColorPicker(callback: (picker: unknown) => void) {
+				const picker = { value: "", disabled: false, change: async (_value: string) => {},
+					setValue(value: string) { this.value = value; return this; },
+					setDisabled(disabled: boolean) { this.disabled = disabled; return this; },
+					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
+				Object.assign(this, { picker }); callback(picker); return this;
 			}
 			addButton(callback: (button: unknown) => void) {
 				const button = { buttonEl: new helper.TestElement(), click: async () => {}, setIcon() { return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
@@ -294,4 +301,41 @@ it.each(["en", "ru"] as const)("validates advanced fragment settings and saves o
 	expect(plugin.settings.noteFragmentOverlap).toBe(32);
 	expect(overlap.description).toContain(dictionary["search-fragment-settings"]);
 	expect(save).toHaveBeenCalledTimes(2);
+});
+
+
+it("configures ordered similarity boundaries and custom HEX colors through settings", async () => {
+	setLanguage("ru");
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: "idle", t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const weak = controls.find((value) => value.name === ru["setting-similarity-weak"])!;
+	const medium = controls.find((value) => value.name === ru["setting-similarity-medium"])!;
+	const strong = controls.find((value) => value.name === ru["setting-similarity-strong"])!;
+	expect(weak.input?.value).toBe("0.3"); expect(medium.input?.value).toBe("0.5"); expect(strong.input).toBeUndefined();
+	expect(weak.dropdown?.value).toBe("red"); expect(medium.dropdown?.value).toBe("orange"); expect(strong.dropdown?.value).toBe("green");
+	for (const raw of ["0,5", "1", "-0.1", "text", ""]) {
+		await weak.input!.change(raw);
+		expect(weak.input!.inputEl.attributes["aria-invalid"]).toBe("true");
+		expect(plugin.settings.similarityAppearance.weakUpper).toBe(0.3);
+	}
+	await weak.input!.change("0,4");
+	await medium.input!.change("0,7");
+	expect(plugin.settings.similarityAppearance).toMatchObject({ weakUpper: 0.4, mediumUpper: 0.7 });
+	await strong.dropdown!.change("custom"); expect(strong.picker!.disabled).toBe(false);
+	await strong.picker!.change("#123abc");
+	expect(plugin.settings.similarityAppearance.strongColor).toBe("#123abc");
+	await strong.dropdown!.change("purple");
+	expect(strong.picker!.disabled).toBe(true); expect(plugin.settings.similarityAppearance.strongColor).toBe("purple");
+	expect(plugin.settings.noteSearchMinSimilarity).toBe(0.45);
+	tab.display();
+	const strongAgain = controls.filter((value) => value.name === ru["setting-similarity-strong"]).at(-1)!;
+	expect(strongAgain.dropdown?.value).toBe("purple");
+});
+
+it("restores valid similarity colors and replaces invalid saved values", async () => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ similarityAppearance: { weakUpper: 0.8, mediumUpper: 0.2, weakColor: "untrusted-css", mediumColor: "blue", strongColor: "#abcdef" } });
+	await plugin.loadSettings();
+	expect(plugin.settings.similarityAppearance).toEqual({ weakUpper: 0.3, mediumUpper: 0.5, weakColor: "red", mediumColor: "blue", strongColor: "#abcdef" });
 });

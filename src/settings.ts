@@ -1,8 +1,9 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting, type ColorComponent } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity } from "./note-index";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
+import { DEFAULT_SIMILARITY_APPEARANCE, SIMILARITY_COLORS, validSimilarityBoundaries, isSimilarityColor, type SimilarityAppearance } from "./similarity-appearance";
 import { parseResponseWait } from "./response-wait";
 import { effectiveContextWindow } from "./context-window";
 import {
@@ -16,6 +17,7 @@ import {
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	noteSearchMinSimilarity: number;
 	excludedFolders: string[];
+	similarityAppearance: SimilarityAppearance;
 	serverUrl: string;
 	apiKey: string;
 	model: string;
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	excludedFolders: [],
+	similarityAppearance: DEFAULT_SIMILARITY_APPEARANCE,
 	embeddingServerUrl: "",
 	embeddingApiKey: "",
 	embeddingModel: "",
@@ -81,7 +84,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const generation = this.createGroup(containerEl, "settings-group-generation");
 		const embedding = this.createGroup(containerEl, "settings-group-embedding");
 		this.renderEmbeddingConnection(embedding, version);
-		new Setting(embedding).setName(this.t("setting-excluded-folders")).setDesc(this.t("setting-excluded-folders-desc"))
+		new Setting(embedding).setClass("ai-helper-excluded-folders").setName(this.t("setting-excluded-folders")).setDesc(this.t("setting-excluded-folders-desc"))
 			.addTextArea((text) => text.setValue(this.plugin.settings.excludedFolders.join("\n")).onChange(async (value) => {
 				this.plugin.settings.excludedFolders = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 				await this.plugin.saveSettings();
@@ -95,9 +98,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			const progress = this.plugin.noteSearch?.progress;
 			if (progress) status.setText(`${this.t(`search-state-${progress.state}`)}: ${progress.completed}/${progress.total}${progress.error ? ` — ${this.t(progress.error)}` : ""}`);
 		};
-		for (const [action, key] of [["index", "search-vault-index"], ["rebuild", "search-vault-rebuild"], ["clear", "search-vault-clear"]] as const) {
-			index.addButton((button) => button.setButtonText(this.t(key)).onClick(async () => { await this.plugin.manageNoteIndex(action); updateIndex(); }));
-		}
+		index.addButton((button) => button.setButtonText(this.t("search-vault-index")).onClick(async () => {
+			await this.plugin.manageNoteIndex("index");
+			updateIndex();
+		}));
 		this.unsubscribeIndex = this.plugin.noteSearch?.subscribe(updateIndex);
 		updateIndex();
 
@@ -120,6 +124,56 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 			text.inputEl.setAttribute("inputmode", "decimal");
 		});
+
+		const appearance = this.createGroup(containerEl, "settings-group-similarity");
+		appearance.createEl("p", { text: this.t("setting-similarity-desc") });
+		for (const level of ["weak", "medium", "strong"] as const) {
+			const setting = new Setting(appearance).setName(this.t(`setting-similarity-${level}`));
+			const description = this.t(level === "strong" ? "setting-similarity-strong-desc" : "setting-similarity-upper-desc");
+			setting.setDesc(description);
+			if (level !== "strong") {
+				const key = level === "weak" ? "weakUpper" : "mediumUpper";
+				setting.addText((text) => {
+					text.setValue(String(this.plugin.settings.similarityAppearance[key])).onChange(async (raw) => {
+						const normalized = raw.trim().replace(",", ".");
+						const next = { ...this.plugin.settings.similarityAppearance, [key]: Number(normalized) };
+						const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) && validSimilarityBoundaries(next.weakUpper, next.mediumUpper);
+						text.inputEl.setAttribute("aria-invalid", String(!valid));
+						setting.setDesc(description + (valid ? "" : ` ${this.t("setting-similarity-invalid")}`));
+						if (!valid) return;
+						this.plugin.settings.similarityAppearance = next;
+						await this.plugin.saveSettings();
+					});
+					text.inputEl.setAttribute("inputmode", "decimal");
+					text.inputEl.setAttribute("aria-label", this.t("setting-similarity-upper-desc"));
+				});
+			}
+			const colorKey = `${level}Color` as const;
+			const selected = this.plugin.settings.similarityAppearance[colorKey];
+			let customColor = selected.startsWith("#") ? selected : level === "weak" ? "#e93147" : level === "medium" ? "#ec7500" : "#08b94e";
+			let picker: ColorComponent;
+			setting.addDropdown((dropdown) => {
+				for (const color of SIMILARITY_COLORS) dropdown.addOption(color, this.t(`similarity-color-${color}`));
+				dropdown.addOption("custom", this.t("similarity-color-custom"));
+				dropdown.setValue(selected.startsWith("#") ? "custom" : selected).onChange(async (value) => {
+					const color = value === "custom" ? customColor : value;
+					if (!isSimilarityColor(color)) return;
+					picker.setDisabled(value !== "custom");
+					this.plugin.settings.similarityAppearance = { ...this.plugin.settings.similarityAppearance, [colorKey]: color };
+					await this.plugin.saveSettings();
+				});
+				dropdown.selectEl.setAttribute("aria-label", this.t("setting-similarity-color"));
+			});
+			setting.addColorPicker((color) => {
+				picker = color;
+				color.setValue(customColor).setDisabled(!selected.startsWith("#")).onChange(async (value) => {
+					if (!isSimilarityColor(value)) return;
+					customColor = value;
+					this.plugin.settings.similarityAppearance = { ...this.plugin.settings.similarityAppearance, [colorKey]: value };
+					await this.plugin.saveSettings();
+				});
+			});
+		}
 
 		const advanced = this.createGroup(containerEl, "settings-group-fragments");
 		for (const [key, name] of [["noteFragmentSize", "setting-fragment-size"], ["noteFragmentOverlap", "setting-fragment-overlap"]] as const) {

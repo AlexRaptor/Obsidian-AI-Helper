@@ -12,6 +12,7 @@ import { createModelConnection } from "./model-connection";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragments";
 import { createNoteSearchConnection } from "./note-search";
 import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, type NoteSearch } from "./note-index";
+import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { StorageProbeModal } from "./storage-probe-modal";
 import { createContextWindowConnection } from "./context-window";
 
@@ -84,7 +85,6 @@ export class AiHelperPlugin extends Plugin {
 		for (const [id, key, action] of [
 			["index-vault", "search-vault-index", "index"],
 			["clear-note-index", "search-vault-clear", "clear"],
-			["rebuild-note-index", "search-vault-rebuild", "rebuild"],
 		] as const) {
 			this.addCommand({ id, name: this.t(key), callback: () => { void this.manageNoteIndex(action); } });
 		}
@@ -106,6 +106,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings.similarityAppearance = normalizeSimilarityAppearance(this.settings.similarityAppearance);
 		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
 		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
 		this.settings.excludedFolders = Array.isArray(this.settings.excludedFolders) ? this.settings.excludedFolders.filter((folder) => typeof folder === "string") : [];
@@ -129,13 +130,12 @@ export class AiHelperPlugin extends Plugin {
 		return `${this.t("search-disclosure-embedding")}: ${this.settings.embeddingServerUrl || this.t("search-server-unset")}.\n${this.t("search-disclosure-conversation")}: ${this.settings.serverUrl || this.t("search-server-unset")}.`;
 	}
 
-	async manageNoteIndex(action: "index" | "clear" | "rebuild"): Promise<void> {
+	async manageNoteIndex(action: "index" | "clear"): Promise<void> {
 		if (action !== "clear" && this.indexingNote) return;
 		if (action !== "clear") { this.indexingNote = true; new Notice(this.noteIndexDisclosure()); }
 		try {
 			if (action === "clear") await this.noteSearch.clear();
-			else if (action === "rebuild") await this.noteSearch.rebuild();
-			else await this.noteSearch.indexVault();
+			else await this.noteSearch.rebuild();
 			new Notice(this.t(action === "clear" ? "search-cleared" : "search-state-complete"));
 		} catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
 		finally { if (action !== "clear") this.indexingNote = false; }
@@ -147,6 +147,9 @@ export class AiHelperPlugin extends Plugin {
 		this.modelConnection.configure(this.settings);
 		if (this.contextWindowConnection.configure(this.settings)) void this.contextWindowConnection.refresh();
 		this.updateContextIndicators();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+			if (leaf.view instanceof ChatView) await leaf.view.refreshSimilarityAppearance();
+		}
 		if (this.embeddingListUrl !== this.settings.embeddingServerUrl.trim() || this.embeddingListKey !== this.settings.embeddingApiKey) {
 			this.embeddingModelRequest?.abort();
 			this.embeddingModelRequest = null;
