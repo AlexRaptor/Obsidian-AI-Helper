@@ -214,7 +214,7 @@ export const en = {
 	"chat-error-prefix": "Request failed",
 	"chat-invalid-params":
 		"Generation parameters must be numbers. Correct the settings and try again.",
-	"header-context": "Context window",
+	"header-context": "Context",
 	"header-context-empty": "0 / 0 tokens",
 	"header-context-unavailable": "No data",
 	"chat-empty-response": "Model server returned an empty message.",
@@ -422,7 +422,7 @@ export const ru = {
 	"chat-error-prefix": "Ошибка запроса",
 	"chat-invalid-params":
 		"Параметры генерации должны быть числами. Исправьте настройки и повторите запрос.",
-	"header-context": "Окно контекста",
+	"header-context": "Контекст",
 	"header-context-empty": "0 / 0 токенов",
 	"header-context-unavailable": "Нет данных",
 	"chat-empty-response": "Модель-сервер вернул пустое сообщение.",

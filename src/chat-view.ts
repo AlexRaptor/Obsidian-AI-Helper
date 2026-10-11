@@ -41,6 +41,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private contextBarEl: HTMLElement | null = null;
 	private contextProgress: ProgressBarComponent | null = null;
 	private contextLabelEl: HTMLElement | null = null;
+	private contextTitleEl: HTMLElement | null = null;
 	private inputEl: HTMLTextAreaElement | null = null;
 	private sendBtn: HTMLButtonElement | null = null;
 	private clearBtn: HTMLElement | null = null;
@@ -134,6 +135,7 @@ export class ChatView extends ItemView implements HoverParent {
 
 	async refreshLocale(): Promise<void> {
 		this.updateIndexStatus();
+		this.contextTitleEl?.setText(this.t("header-context"));
 		this.searchBtn?.setAttribute("aria-label", this.t("search-toggle"));
 		if (this.searchBtn) setTooltip(this.searchBtn, this.t("search-toggle"));
 		this.clearBtn?.setAttribute("aria-label", this.t("clear-conversation"));
@@ -171,6 +173,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.contextBarEl = null;
 		this.contextProgress = null;
 		this.contextLabelEl = null;
+		this.contextTitleEl = null;
 	}
 
 	isGenerating(): boolean { return this.thinking; }
@@ -202,6 +205,7 @@ export class ChatView extends ItemView implements HoverParent {
 		container.addClass("ai-helper");
 
 		const header = container.createDiv({ cls: "ai-helper-header" });
+		this.contextTitleEl = header.createSpan({ cls: "ai-helper-context-title", text: this.t("header-context") });
 		this.contextBarEl = header.createDiv({ cls: "ai-helper-context-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
 		this.contextProgress = new ProgressBarComponent(this.contextBarEl);
 		this.contextLabelEl = header.createSpan({ cls: "ai-helper-context-label" });

@@ -32,6 +32,7 @@
 	min-width: 0;
 }
 
+.ai-helper-context-title,
 .ai-helper-context-label {
 	flex: 0 0 auto;
 	font-size: var(--font-ui-small);
