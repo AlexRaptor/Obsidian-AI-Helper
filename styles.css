@@ -198,43 +198,7 @@
 	font-family: inherit;
 }
 
-.ai-helper-settings-group {
-	margin: 16px 0;
-}
-
-.ai-helper-settings-group:first-of-type {
-	margin-top: 8px;
-}
-
-.ai-helper-settings-group-heading {
-	font-size: var(--font-ui-small);
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-	color: var(--text-muted);
-	margin: 0 0 8px;
-}
-
-.ai-helper-settings-card {
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 10px;
-	padding: 0 16px;
-}
-
-.ai-helper-settings-card > .setting-item {
-	margin: 0;
-	padding: 16px 0;
-	border: 0;
-	border-radius: 0;
-	background: transparent;
-}
-
-.ai-helper-settings-card > .setting-item + .setting-item {
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.ai-helper-settings-card .setting-item-control {
+.ai-helper-settings-group .setting-item-control {
 	min-width: 0;
 	flex-wrap: wrap;
 }
@@ -247,8 +211,8 @@
 	overflow-wrap: anywhere;
 }
 
-.ai-helper-settings-card > .ai-helper-connection-check,
-.ai-helper-settings-card > .ai-helper-index-control {
+.ai-helper-settings-group > .ai-helper-connection-check,
+.ai-helper-settings-group > .ai-helper-index-control {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(0, auto);
 	align-items: center;
@@ -282,7 +246,7 @@
 	white-space: normal;
 }
 
-.ai-helper-settings-card > .ai-helper-index-control {
+.ai-helper-settings-group > .ai-helper-index-control {
 	grid-template-columns: minmax(0, 1fr) minmax(0, 40%);
 }
 
@@ -307,7 +271,7 @@
 	grid-row: 2;
 }
 
-.ai-helper-settings-card .ai-helper-model-controls {
+.ai-helper-settings-group .ai-helper-model-controls {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
 	gap: 8px;
@@ -324,13 +288,13 @@
 	grid-row: 2;
 }
 
-.ai-helper-settings-card .setting-item-control textarea {
+.ai-helper-settings-group .setting-item-control textarea {
 	width: 100%;
 	min-height: 96px;
 	resize: vertical;
 }
 
-.ai-helper-settings-card > .ai-helper-settings-textarea {
+.ai-helper-settings-group > .ai-helper-settings-textarea {
 	flex-direction: column;
 	align-items: stretch;
 	gap: 12px;
@@ -346,15 +310,15 @@
 	justify-content: flex-start;
 }
 
-.ai-helper-settings-card .ai-helper-settings-textarea textarea {
+.ai-helper-settings-group .ai-helper-settings-textarea textarea {
 	box-sizing: border-box;
 	min-width: min(100%, 18rem);
 	resize: both;
 }
 
-.ai-helper-settings-card .setting-item-control input,
-.ai-helper-settings-card .setting-item-control select,
-.ai-helper-settings-card .setting-item-control textarea {
+.ai-helper-settings-group .setting-item-control input,
+.ai-helper-settings-group .setting-item-control select,
+.ai-helper-settings-group .setting-item-control textarea {
 	max-width: 100%;
 }
 

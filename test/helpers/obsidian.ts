@@ -118,3 +118,10 @@ export function deferred<T>() {
 export async function flushPromises(): Promise<void> {
 	for (let i = 0; i < 30; i++) await Promise.resolve();
 }
+
+export class SettingGroup {
+	listEl: TestElement;
+	constructor(parent: TestElement) { this.listEl = parent.createDiv(); }
+	setHeading(_text: string): this { return this; }
+	addClass(cls: string): this { this.listEl.addClass(cls); return this; }
+}

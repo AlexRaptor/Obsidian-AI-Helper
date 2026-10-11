@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, type ColorComponent, type TextAreaComponent } from "obsidian";
+import { App, PluginSettingTab, Setting, SettingGroup, type ColorComponent, type TextAreaComponent } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
@@ -528,11 +528,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	private createGroup(parent: HTMLElement, headingKey: LocaleKey): HTMLElement {
-		const group = parent.createEl("div", { cls: "ai-helper-settings-group" });
-		group.createEl("h3", { text: this.t(headingKey) }).addClass(
-			"ai-helper-settings-group-heading"
-		);
-		return group.createDiv({ cls: "ai-helper-settings-card" });
+		return new SettingGroup(parent).setHeading(this.t(headingKey)).addClass("ai-helper-settings-group").listEl;
 	}
 
 	private async refreshModels(): Promise<void> {
