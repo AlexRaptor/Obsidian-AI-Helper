@@ -17,6 +17,7 @@ import {
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	noteSearchMinSimilarity: number;
 	excludedFolders: string[];
+	autoUpdateNotes: boolean;
 	similarityAppearance: SimilarityAppearance;
 	serverUrl: string;
 	apiKey: string;
@@ -34,6 +35,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	excludedFolders: [],
+	autoUpdateNotes: true,
 	similarityAppearance: DEFAULT_SIMILARITY_APPEARANCE,
 	embeddingServerUrl: "",
 	embeddingApiKey: "",
@@ -88,7 +90,21 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			.addTextArea((text) => text.setValue(this.plugin.settings.excludedFolders.join("\n")).onChange(async (value) => {
 				this.plugin.settings.excludedFolders = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 				await this.plugin.saveSettings();
+				updateWarnings();
 			}));
+		const warning = embedding.createDiv({ attr: { "aria-live": "polite" } });
+		const updateWarnings = () => {
+			const missing = this.plugin.settings.excludedFolders.filter(path => !this.app?.vault?.getAbstractFileByPath?.(path));
+			warning.setText(missing.length ? `${this.t("search-missing-folder")}: ${missing.join(", ")}` : "");
+		};
+		updateWarnings();
+		new Setting(embedding).setName(this.t("search-auto-update")).setDesc(this.t("search-auto-update-desc"))
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.autoUpdateNotes).onChange(async value => {
+				this.plugin.settings.autoUpdateNotes = value; await this.plugin.saveSettings();
+			}));
+		new Setting(embedding).setName(this.t("search-retry")).addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => {
+			try { await this.plugin.noteSearch.resume(true); } catch { /* The index status displays the error. */ }
+		}));
 		const index = new Setting(embedding).setClass("ai-helper-index-control").setName(this.t("search-vault-index"));
 		const disclosure = index.descEl.createDiv();
 		const status = index.descEl.createDiv({ attr: { "aria-live": "polite" } });

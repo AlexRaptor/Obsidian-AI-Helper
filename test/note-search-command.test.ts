@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { FileSystemAdapter, type App, type PluginManifest } from "obsidian";
+import { FileSystemAdapter, TFile, type App, type PluginManifest } from "obsidian";
 import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
 import { createServerClient } from "../src/server-client";
@@ -13,7 +13,7 @@ it("indexes only on the explicit active-note command through the public module",
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/command-vault";
 	const file = { path: "Train.md", extension: "md" };
 	const read = vi.fn(async () => "Train departs at 18:30.");
-	const app = { vault: { adapter, getFileByPath: () => file, read }, workspace: { getActiveFile: () => file } } as unknown as App;
+	const app = { vault: { adapter, getFileByPath: () => file, getMarkdownFiles: () => [file], read }, workspace: { getActiveFile: () => file } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" });
 	let embeddings = 0;
@@ -69,4 +69,38 @@ it("indexes the vault from scratch with one command and server disclosure", asyn
 	await vi.waitFor(() => expect(plugin.noteSearch.progress.state).toBe("complete"));
 	expect(await plugin.noteSearch.search("When?")).toMatchObject({ path: "Travel/Train.md" });
 	plugin.onunload();
+});
+
+
+it("updates through vault events and indexes the menu-selected file rather than the active note", async () => {
+	vi.stubGlobal("indexedDB", new IDBFactory());
+	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/event-vault";
+	const file = Object.assign(new TFile(), { path: "Train.md", extension: "md" });
+	const other = Object.assign(new TFile(), { path: "Other.md", extension: "md" });
+	const files = [file, other]; let text = "initial train";
+	const handlers = new Map<string, (...args: any[]) => void>();
+	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, callback); return {}; };
+	const app = { vault: { adapter, on, getFileByPath: (path: string) => files.find(f => f.path === path), getMarkdownFiles: () => files,
+		read: async (f: TFile) => f === file ? text : "boat" }, workspace: { on, getActiveFile: () => other, detachLeavesOfType: () => {} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" });
+	const inputs: string[] = [];
+	plugin.serverClient = createServerClient(async (url, init) => {
+		if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [] }));
+		const { input } = JSON.parse(String(init?.body)); inputs.push(...input);
+		return new Response(JSON.stringify({ data: [{ index: 0, embedding: input[0].includes("boat") ? [0, 1] : [1, 0] }] }));
+	});
+	await plugin.onload(); await plugin.noteSearch.indexVault(); inputs.length = 0;
+	text = "updated train"; handlers.get("modify")!(file);
+	await vi.waitFor(() => expect(inputs).toHaveLength(1));
+	await vi.waitFor(() => expect(plugin.noteSearch.progress.state).toBe("complete"));
+	expect(inputs[0]).toContain("updated train");
+	plugin.settings.autoUpdateNotes = false; Object.assign(plugin, { saveData: async () => {} }); await plugin.saveSettings();
+	text = "manual train"; handlers.get("modify")!(file);
+	let click!: () => void;
+	const item = { setTitle: () => item, setIcon: () => item, onClick: (callback: () => void) => { click = callback; return item; } };
+	handlers.get("file-menu")!({ addItem: (callback: (item: unknown) => void) => callback(item) }, file);
+	inputs.length = 0; Notice.messages.length = 0; click();
+	await vi.waitFor(() => expect(Notice.messages.join(" ")).toContain("Note indexed locally"));
+	expect(inputs).toHaveLength(1); expect(inputs[0]).toContain("manual train"); expect(inputs[0]).not.toContain("boat"); plugin.onunload();
 });

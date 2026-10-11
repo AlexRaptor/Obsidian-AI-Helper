@@ -9,6 +9,11 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"search-auto-update": "Automatically update notes",
+	"search-auto-update-desc": "After the first explicit indexing, update changed and new notes. Turn off to pause; manual updates remain available. After a connection failure, use Retry pending updates or enable note search to reconnect.",
+	"search-retry": "Retry pending note updates",
+	"search-missing-folder": "Excluded folder is missing; its path remains excluded",
+
 	"model-check": "Check model",
 	"model-check-desc": "Sends a short sample message to check the selected model. Your conversation and notes are not sent.",
 	"model-idle": "Connection has not been verified.",
@@ -188,6 +193,11 @@ export const en = {
 } as const;
 
 export const ru = {
+	"search-auto-update": "Автоматически обновлять заметки",
+	"search-auto-update-desc": "После первой явной индексации обновлять изменённые и новые заметки. Выключите для паузы; ручное обновление остаётся доступным. После ошибки связи используйте повтор ожидающих обновлений или включите поиск по заметкам.",
+	"search-retry": "Повторить ожидающие обновления заметок",
+	"search-missing-folder": "Исключённая папка отсутствует; её путь остаётся исключённым",
+
 	"model-check": "Проверить модель",
 	"model-check-desc": "Отправляет короткое пробное сообщение выбранной модели. История диалога и заметки не отправляются.",
 	"model-idle": "Подключение ещё не проверено.",

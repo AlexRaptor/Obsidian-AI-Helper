@@ -93,7 +93,7 @@ it("restores progress on opening the module before a search and removes saved ex
 	const restored = createNoteSearch(environment);
 	restored.configure({ ...connection, excludedFolders: ["Private", "Travel"] });
 	await restored.restore();
-	expect(restored.progress.state).toBe("partial");
+	expect(restored.progress).toMatchObject({ state: "complete", completed: 1, total: 1 });
 	const reopened = createNoteSearch(environment); reopened.configure(connection);
 	expect(await reopened.search("boat")).toBeNull();
 	expect(await reopened.search("train")).toMatchObject({ path: "Private-public/train.md" });

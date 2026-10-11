@@ -21,6 +21,9 @@ vi.mock("obsidian", async () => {
 			setClass() { return this; }
 			setName(name: string) { this.name = name; return this; }
 			setDesc(description: string) { this.descEl.setText(description); return this; }
+			addToggle(callback: (toggle: unknown) => void) {
+				callback({ setValue() { return this; }, onChange() { return this; } }); return this;
+			}
 			addText(callback: (text: unknown) => void) { return this.addTextArea(callback); }
 			addTextArea(callback: (text: unknown) => void) {
 				const input = { value: "", inputEl: new helper.TestElement(), change: async (_value: string) => {},

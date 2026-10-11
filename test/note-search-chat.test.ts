@@ -59,7 +59,9 @@ it("keeps search off by default, sends fresh source data per turn and opens only
 });
 
 it("stops before generation on stale search and allows retry after rebuilding", async () => {
-	const { view, root, bodies, change, send } = await setup(); root.find("ai-helper-search-toggle").click();
+	const { view, root, bodies, change, send } = await setup();
+	view.plugin.noteSearch.configure({ ...view.plugin.settings, autoUpdateNotes: false });
+	root.find("ai-helper-search-toggle").click();
 	change("Changed note."); await send("When?");
 	expect(root.getText()).toContain("outdated"); expect(bodies).toHaveLength(0); expect(view.getMessages()).toEqual([]);
 	expect(root.find("ai-helper-input").value).toBe("When?");

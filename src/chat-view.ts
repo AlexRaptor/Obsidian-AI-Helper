@@ -176,6 +176,7 @@ export class ChatView extends ItemView {
 		setIcon(this.searchBtn, "search");
 		this.searchBtn.addEventListener("click", () => {
 			this.searchEnabled = !this.searchEnabled;
+			if (this.searchEnabled) void this.plugin.noteSearch.resume?.().catch(() => {});
 			this.updateIndexStatus();
 			this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
 		});

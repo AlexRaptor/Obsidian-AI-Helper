@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, parseYaml } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile, type TAbstractFile, parseYaml } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -58,8 +58,26 @@ export class AiHelperPlugin extends Plugin {
 			open: (path, heading) => this.app.workspace.openLinkText(heading ? `${path}#${heading}` : path, "", false),
 		});
 		this.noteSearch.configure(this.settings);
+		const updateError = (error: unknown) => { if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); };
+		if (this.app.vault?.on) {
+			const changed = (file: TAbstractFile) => {
+				if (file instanceof TFile && file.extension === "md") void this.noteSearch.changed(file.path).catch(updateError);
+			};
+			this.registerEvent(this.app.vault.on("create", changed));
+			this.registerEvent(this.app.vault.on("modify", changed));
+			this.registerEvent(this.app.vault.on("delete", file => { void this.noteSearch.removed(file.path).catch(updateError); }));
+			this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+				void this.noteSearch.renamed(file.path, oldPath).then(async folders => {
+					this.settings.excludedFolders = folders; await this.saveSettings();
+				}).catch(updateError);
+			}));
+			this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
+			}));
+		}
 		try { await this.noteSearch.restore(); }
 		catch { new Notice(this.t("search-storage")); }
+		this.app.workspace.onLayoutReady?.(() => { void this.noteSearch.resume().catch(updateError); });
 
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
@@ -73,6 +91,7 @@ export class AiHelperPlugin extends Plugin {
 			callback: () => this.toggleView(),
 		});
 		this.addSettingTab(new AiHelperSettingsTab(this.app, this));
+		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.noteSearch.resume(true).catch(updateError); } });
 		this.addCommand({
 			id: "local-storage-probe",
 			name: this.t("probe-title"),
@@ -119,9 +138,14 @@ export class AiHelperPlugin extends Plugin {
 		if (this.indexingNote) return;
 		const file = this.app.workspace.getActiveFile();
 		if (!file || file.extension !== "md") { new Notice(this.t("search-note")); return; }
+		await this.indexNote(file.path);
+	}
+
+	async indexNote(path: string): Promise<void> {
+		if (this.indexingNote) return;
 		this.indexingNote = true;
 		new Notice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`);
-		try { await this.noteSearch.index(file.path); new Notice(this.t("search-indexed")); }
+		try { await this.noteSearch.index(path); new Notice(this.t("search-indexed")); }
 		catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
 		finally { this.indexingNote = false; }
 	}

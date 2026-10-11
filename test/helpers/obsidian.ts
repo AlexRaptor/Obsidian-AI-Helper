@@ -88,6 +88,7 @@ export class Plugin extends Component {
 		testApp.workspace.getLeavesOfType ??= () => [];
 	}
 	register(_callback: () => void): void {}
+	registerEvent(_event: unknown): void {}
 	async loadData(): Promise<unknown> { return {}; }
 	registerView(): void {}
 	addRibbonIcon(): void {}
@@ -106,6 +107,7 @@ export class Modal {
 }
 
 export class FileSystemAdapter {}
+export class TFile {}
 
 export function deferred<T>() {
 	let resolve!: (value: T) => void;
