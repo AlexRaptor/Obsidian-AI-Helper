@@ -1,3 +1,4 @@
+import type { PaneType } from "obsidian";
 import type { ServerClient } from "./server-client";
 import type { EmbeddingConnection } from "./note-search";
 
@@ -16,7 +17,7 @@ interface NoteSearchEnvironment {
 	client: ServerClient;
 	read(path: string): Promise<string | null>;
 	list?(): string[];
-	open(path: string, heading?: string): Promise<void>;
+	open(path: string, heading?: string, newLeaf?: boolean | PaneType): Promise<void>;
 	metadata?(path: string, raw: string): Record<string, unknown>;
 }
 
@@ -522,13 +523,20 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			check(version, signal);
 			return best;
 		},
-		async open(source: NoteSource): Promise<void> {
+		async validateSource(source: NoteSource): Promise<void> {
 			const version = revision;
 			if (pending.has(source.path)) throw new NoteSearchError("search-rebuild");
 			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
 			if (await hash(await environment.read(source.path) ?? "") !== source.contentHash) throw new NoteSearchError("search-rebuild");
 			check(version);
-			if (source.headings.length) await environment.open(source.path, source.headings[source.headings.length - 1]);
+		},
+		async open(source: NoteSource, newLeaf: boolean | PaneType = false): Promise<void> {
+			const version = revision;
+			await this.validateSource(source);
+			check(version);
+			const heading = source.headings[source.headings.length - 1];
+			if (newLeaf) await environment.open(source.path, heading, newLeaf);
+			else if (heading) await environment.open(source.path, heading);
 			else await environment.open(source.path);
 		},
 	};

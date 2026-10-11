@@ -59,7 +59,7 @@ export class AiHelperPlugin extends Plugin {
 				const value: unknown = yaml ? parseYaml(yaml[1]) : {};
 				return value && typeof value === "object" ? value as Record<string, unknown> : {};
 			},
-			open: (path, heading) => this.app.workspace.openLinkText(heading ? `${path}#${heading}` : path, "", false),
+			open: (path, heading, newLeaf = false) => this.app.workspace.openLinkText(heading ? `${path}#${heading}` : path, "", newLeaf),
 		});
 		this.noteSearch.configure(this.settings);
 		const updateError = (error: unknown) => { if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); };
@@ -93,6 +93,7 @@ export class AiHelperPlugin extends Plugin {
 		};
 		if (this.app.workspace.onLayoutReady) this.app.workspace.onLayoutReady(restoreIndex);
 
+		this.registerHoverLinkSource(VIEW_TYPE_CHAT, { display: this.t("view-title"), defaultMod: true });
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
 			"message-square",

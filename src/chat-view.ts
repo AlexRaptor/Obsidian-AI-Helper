@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Notice, Menu, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Notice, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -21,7 +21,8 @@ type MessageRow = {
 	copyTimer?: ReturnType<typeof setTimeout>;
 };
 
-export class ChatView extends ItemView {
+export class ChatView extends ItemView implements HoverParent {
+	hoverPopover: HoverPopover | null = null;
 	plugin: AiHelperPlugin;
 	conversation = new Conversation();
 	private searchEnabled = false;
@@ -147,6 +148,8 @@ export class ChatView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.hoverPopover?.unload();
+		this.hoverPopover = null;
 		this.unsubscribeIndex?.();
 		this.unsubscribeIndex = undefined;
 		this.indexStatusEl = null;
@@ -417,8 +420,35 @@ export class ChatView extends ItemView {
 					// Search answers are rendered as text: model-supplied Markdown/wiki links cannot bypass source validation.
 					const source = message.source;
 					const link = (parent: HTMLElement) => {
-						const button = parent.createEl("button", { cls: "ai-helper-source-link", text: `[1] ${source.path}${source.headings.length ? " → " + source.headings.join(" → ") : ""}` });
-						button.addEventListener("click", () => { void this.plugin.noteSearch.open(source).catch(() => new Notice(this.t("search-rebuild"))); });
+						const linktext = source.path + (source.headings.length ? `#${source.headings[source.headings.length - 1]}` : "");
+						const button = parent.createEl("a", { cls: "ai-helper-source-link internal-link", text: `[1] ${source.path}${source.headings.length ? " → " + source.headings.join(" → ") : ""}`, attr: { href: "#", "data-href": linktext } });
+						const open = (evt: MouseEvent) => {
+							evt.preventDefault(); evt.stopPropagation();
+							void this.plugin.noteSearch.open(source, Keymap.isModEvent(evt)).catch(() => new Notice(this.t("search-rebuild")));
+						};
+						component.registerDomEvent(button, "click", open);
+						component.registerDomEvent(button, "auxclick", evt => { if (evt.button === 1) open(evt); });
+						let hovered = false;
+						component.registerDomEvent(button, "mouseleave", () => { hovered = false; });
+						component.registerDomEvent(button, "mouseover", evt => {
+							evt.stopPropagation();
+							hovered = true;
+							void this.plugin.noteSearch.validateSource(source).then(() => {
+								if (!hovered || this.rendered.get(message) !== current || current.revision !== rowRevision) return;
+								this.app.workspace.trigger("hover-link", { event: evt, source: VIEW_TYPE_CHAT, hoverParent: this, targetEl: button, linktext, sourcePath: "" });
+							}).catch(() => {});
+						});
+						component.registerDomEvent(button, "contextmenu", evt => {
+							evt.preventDefault(); evt.stopPropagation();
+							void this.plugin.noteSearch.validateSource(source).then(() => {
+								if (this.rendered.get(message) !== current || current.revision !== rowRevision) return;
+								const menu = new Menu();
+								// Every opening action returns through validation, including context-menu actions.
+								menu.addItem(item => item.setTitle(this.t("source-open")).setIcon("file-text").onClick(() => { void this.plugin.noteSearch.open(source).catch(() => new Notice(this.t("search-rebuild"))); }));
+								menu.addItem(item => item.setTitle(this.t("source-open-tab")).setIcon("file-plus").onClick(() => { void this.plugin.noteSearch.open(source, true).catch(() => new Notice(this.t("search-rebuild"))); }));
+								menu.showAtMouseEvent(evt);
+							}).catch(() => new Notice(this.t("search-rebuild")));
+						});
 					};
 					if (source.partial) staging.createDiv({ cls: "ai-helper-search-info ai-helper-search-partial", text: this.t("search-partial") });
 					const similarityEl = staging.createDiv({ cls: "ai-helper-source-similarity", text: `${this.t("search-similarity")}: ${source.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });

@@ -194,3 +194,23 @@ it("puts the partial index notice before similarity and the coverage note after 
 	expect(view.getMessages().some((message) => message.content.includes("Данный ответ"))).toBe(false);
 	await view.onClose(); setLanguage("en");
 });
+
+
+it("opens verified links in new tabs and suppresses preview for stale sources", async () => {
+	const { view, root, open, change, send } = await setup();
+	const trigger = vi.fn(); Object.assign(view, { app: { workspace: { trigger } } });
+	view.toggleSearch(); await send("When?");
+	const link = root.find("ai-helper-source-link");
+	const event = (type: string, options = {}) => ({ type, preventDefault() {}, stopPropagation() {}, ...options });
+	link.dispatchEvent(event("click", { ctrlKey: true }));
+	await vi.waitFor(() => expect(open).toHaveBeenCalledWith("Train.md", undefined, true));
+	link.dispatchEvent(event("mouseover"));
+	await vi.waitFor(() => expect(trigger).toHaveBeenCalledWith("hover-link", expect.objectContaining({ linktext: "Train.md", source: "ai-helper-chat" })));
+	trigger.mockClear(); change("Changed");
+	link.dispatchEvent(event("mouseover"));
+	await new Promise(resolve => setTimeout(resolve, 30));
+	expect(trigger).not.toHaveBeenCalled();
+	open.mockClear(); link.dispatchEvent(event("auxclick", { button: 1 }));
+	await new Promise(resolve => setTimeout(resolve, 30));
+	expect(open).not.toHaveBeenCalled(); await view.onClose();
+});

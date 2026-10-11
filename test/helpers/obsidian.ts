@@ -39,7 +39,7 @@ export class TestElement {
 		this.listeners.get(event.type)?.forEach((callback) => callback(event));
 	}
 	click(): void {
-		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback({}));
+		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback({ preventDefault() {}, stopPropagation() {} }));
 	}
 	keydown(key: string, shiftKey = false): void {
 		this.listeners.get("keydown")?.forEach((callback) => callback({ key, shiftKey, preventDefault() {} }));
@@ -55,6 +55,7 @@ export class TestElement {
 }
 
 export class Component {
+	registerDomEvent(el: TestElement, event: string, callback: (evt: any) => void): void { el.addEventListener(event, callback); }
 	load(): void {}
 	addChild<T>(child: T): T { return child; }
 	removeChild<T>(child: T): T { return child; }
@@ -94,6 +95,7 @@ export class Plugin extends Component {
 	register(_callback: () => void): void {}
 	registerEvent(_event: unknown): void {}
 	async loadData(): Promise<unknown> { return {}; }
+	registerHoverLinkSource(): void {}
 	registerView(): void {}
 	addRibbonIcon(): void {}
 	addCommand(): void {}
@@ -143,3 +145,5 @@ export class ProgressBarComponent {
 	constructor(parent: TestElement) { this.fill = parent.createDiv({ cls: "progress-bar" }); }
 	setValue(value: number): this { this.fill.style.width = `${value}%`; return this; }
 }
+
+export class Keymap { static isModEvent(evt: { button?: number; ctrlKey?: boolean; metaKey?: boolean }): boolean { return evt.button === 1 || !!evt.ctrlKey || !!evt.metaKey; } }
