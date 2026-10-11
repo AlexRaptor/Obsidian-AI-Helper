@@ -244,34 +244,47 @@
 	overflow-wrap: anywhere;
 }
 
-.ai-helper-settings-card > .ai-helper-connection-check {
+.ai-helper-settings-card > .ai-helper-connection-check,
+.ai-helper-settings-card > .ai-helper-index-control {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(0, auto);
 	align-items: center;
 	gap: 16px;
 }
 
-.ai-helper-connection-check .setting-item-info {
+.ai-helper-connection-check .setting-item-info,
+.ai-helper-index-control .setting-item-info {
 	width: 100%;
 	min-width: 0;
 	margin: 0;
 }
 
-.ai-helper-connection-check .setting-item-description {
+.ai-helper-connection-check .setting-item-description,
+.ai-helper-index-control .setting-item-description {
 	white-space: pre-line;
 	overflow-wrap: anywhere;
 }
 
-.ai-helper-connection-check .setting-item-control {
+.ai-helper-connection-check .setting-item-control,
+.ai-helper-index-control .setting-item-control {
 	justify-content: flex-end;
 	width: auto;
 }
 
-.ai-helper-connection-check button {
+.ai-helper-connection-check button,
+.ai-helper-index-control button {
 	max-width: 100%;
 	height: auto;
 	min-height: var(--input-height);
 	white-space: normal;
+}
+
+.ai-helper-settings-card > .ai-helper-index-control {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 40%);
+}
+
+.ai-helper-index-control button {
+	overflow-wrap: anywhere;
 }
 
 .ai-helper-connection-status {
@@ -314,23 +327,23 @@
 	resize: vertical;
 }
 
-.ai-helper-settings-card > .ai-helper-excluded-folders {
+.ai-helper-settings-card > .ai-helper-settings-textarea {
 	flex-direction: column;
 	align-items: stretch;
 	gap: 12px;
 }
 
-.ai-helper-excluded-folders .setting-item-info {
+.ai-helper-settings-textarea .setting-item-info {
 	width: 100%;
 	margin: 0;
 }
 
-.ai-helper-excluded-folders .setting-item-control {
+.ai-helper-settings-textarea .setting-item-control {
 	width: 100%;
 	justify-content: flex-start;
 }
 
-.ai-helper-settings-card .ai-helper-excluded-folders textarea {
+.ai-helper-settings-card .ai-helper-settings-textarea textarea {
 	box-sizing: border-box;
 	min-width: min(100%, 18rem);
 	resize: both;
@@ -383,4 +396,17 @@
 .ai-helper-message-content:has(.ai-helper-source) .ai-helper-markdown {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+
+.ai-helper-search-info {
+	color: var(--color-blue);
+	font-size: var(--font-ui-small);
+}
+
+.ai-helper-search-partial {
+	margin-bottom: 6px;
+}
+
+.ai-helper-search-coverage {
+	margin-top: 8px;
 }

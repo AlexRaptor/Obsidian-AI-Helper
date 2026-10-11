@@ -36,7 +36,7 @@ async function setup(mode: "normal" | "unrelated" | "offline" | "pending" | "sim
 	return { view, root, bodies, open, finish: () => finish(new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }))), change: (value: string | null) => { note = value; }, async send(text: string) {
 		root.find("ai-helper-input").value = text; root.find("ai-helper-send").click();
 		// IndexedDB uses task scheduling rather than microtasks.
-		await vi.waitFor(() => expect(root.find("ai-helper-send").text).toBe("Send")); await flushPromises();
+		await vi.waitFor(() => expect(root.find("ai-helper-send").text).toBe(t("send"))); await flushPromises();
 	} };
 }
 
@@ -174,4 +174,21 @@ it.each([
 	await view.refreshSimilarityAppearance();
 	expect(root.find("ai-helper-source-similarity").style.color).toBe("var(--color-purple)");
 	await view.onClose();
+});
+
+it("puts the partial index notice before similarity and the coverage note after the used fragment", async () => {
+	const { view, root, send } = await setup();
+	setLanguage("ru"); await view.refreshLocale();
+	root.find("ai-helper-search-toggle").click(); await send("Когда отправляется поезд?");
+	const text = root.getText();
+	const warning = root.find("ai-helper-search-partial");
+	const footer = root.find("ai-helper-search-coverage");
+	expect(warning.getText()).toBe("Индекс неполный: поиск охватывает только завершённые доступные заметки.");
+	expect(warning.classes.has("ai-helper-search-info")).toBe(true);
+	expect(footer.getText()).toBe("Данный ответ охватывает только проиндексированные заметки.");
+	expect(footer.classes.has("ai-helper-search-info")).toBe(true);
+	expect(text.indexOf(warning.getText())).toBeLessThan(text.indexOf("Сходство:"));
+	expect(text.indexOf(footer.getText())).toBeGreaterThan(text.indexOf(root.find("ai-helper-source").getText()));
+	expect(view.getMessages().some((message) => message.content.includes("Данный ответ"))).toBe(false);
+	await view.onClose(); setLanguage("en");
 });

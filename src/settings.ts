@@ -84,12 +84,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const generation = this.createGroup(containerEl, "settings-group-generation");
 		const embedding = this.createGroup(containerEl, "settings-group-embedding");
 		this.renderEmbeddingConnection(embedding, version);
-		new Setting(embedding).setClass("ai-helper-excluded-folders").setName(this.t("setting-excluded-folders")).setDesc(this.t("setting-excluded-folders-desc"))
+		new Setting(embedding).setClass("ai-helper-settings-textarea").setName(this.t("setting-excluded-folders")).setDesc(this.t("setting-excluded-folders-desc"))
 			.addTextArea((text) => text.setValue(this.plugin.settings.excludedFolders.join("\n")).onChange(async (value) => {
 				this.plugin.settings.excludedFolders = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 				await this.plugin.saveSettings();
 			}));
-		const index = new Setting(embedding).setName(this.t("search-vault-index"));
+		const index = new Setting(embedding).setClass("ai-helper-index-control").setName(this.t("search-vault-index"));
 		const disclosure = index.descEl.createDiv();
 		const status = index.descEl.createDiv({ attr: { "aria-live": "polite" } });
 		const updateIndex = () => {
@@ -281,6 +281,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		updateContext();
 
 		new Setting(generation)
+			.setClass("ai-helper-settings-textarea")
 			.setName(this.t("setting-system-prompt"))
 			.setDesc(this.t("setting-system-prompt-desc"))
 			.addTextArea((textarea) => {
