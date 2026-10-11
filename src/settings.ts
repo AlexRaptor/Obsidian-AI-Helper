@@ -100,11 +100,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			warning.setText(missing.length ? `${this.t("search-missing-folder")}: ${missing.join(", ")}` : "");
 		};
 		updateWarnings();
-		new Setting(embedding).setName(this.t("search-auto-update")).setDesc(this.t("search-auto-update-desc"))
+		const updates = this.createGroup(containerEl, "settings-group-index-updates");
+		new Setting(updates).setName(this.t("search-auto-update")).setDesc(this.t("search-auto-update-desc"))
 			.addToggle(toggle => toggle.setValue(this.plugin.settings.autoUpdateNotes).onChange(async value => {
 				this.plugin.settings.autoUpdateNotes = value; await this.plugin.saveSettings();
 			}));
-		const updateDelay = new Setting(embedding).setName(this.t("search-update-delay")).setDesc(this.t("search-update-delay-desc"));
+		const updateDelay = new Setting(updates).setName(this.t("search-update-delay")).setDesc(this.t("search-update-delay-desc"));
 		updateDelay.addText(text => {
 			text.setValue(String(this.plugin.settings.noteUpdateDelaySeconds)).onChange(async raw => {
 				const normalized = raw.trim().replace(",", ".");
@@ -118,7 +119,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 			text.inputEl.setAttribute("inputmode", "decimal");
 		});
-		new Setting(embedding).setName(this.t("search-retry")).addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => {
+		new Setting(updates).setName(this.t("search-retry")).addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => {
 			try { await this.plugin.noteSearch.resume(true); } catch { /* The index status displays the error. */ }
 		}));
 		const index = new Setting(embedding).setClass("ai-helper-index-control").setName(this.t("search-vault-index"));
