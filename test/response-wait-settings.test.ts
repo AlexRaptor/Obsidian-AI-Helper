@@ -49,7 +49,7 @@ vi.mock("obsidian", async () => {
 				Object.assign(this, { picker }); callback(picker); return this;
 			}
 			addButton(callback: (button: unknown) => void) {
-				const button = { buttonEl: new helper.TestElement(), click: async () => {}, setIcon() { return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
+				const button = { buttonEl: new helper.TestElement(), click: async () => {}, setIcon() { return this; }, setWarning() { this.buttonEl.addClass("mod-warning"); return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
 				(this as unknown as { button: typeof button }).button = button;
 				callback(button); return this;
 			}

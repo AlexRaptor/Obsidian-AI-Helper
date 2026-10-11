@@ -141,10 +141,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			await this.plugin.manageNoteIndex("index");
 			updateIndex();
 		}));
-		new Setting(embedding).setName(this.t("search-vault-clear")).setDesc(this.t("search-clear-desc"))
+		new Setting(embedding).setClass("ai-helper-index-control").setName(this.t("search-vault-clear")).setDesc(this.t("search-clear-desc"))
 			.addButton(button => {
-				button.buttonEl.addClass("mod-warning");
-				button.setButtonText(this.t("search-vault-clear")).onClick(async () => {
+				button.setWarning().setButtonText(this.t("search-vault-clear")).onClick(async () => {
 					await this.plugin.manageNoteIndex("clear");
 					updateIndex();
 				});
