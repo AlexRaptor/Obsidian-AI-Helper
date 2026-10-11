@@ -133,7 +133,7 @@ it("preserves completed notes and error progress after a server failure", async 
 it("updates live progress after removing a processed folder and resets it on incompatible settings", async () => {
 	const { search } = fixture(); await search.indexVault();
 	search.configure({ ...connection, excludedFolders: ["Private", "Travel"] });
-	await vi.waitFor(() => expect(search.progress).toMatchObject({ state: "partial", completed: 1, total: 2 }));
+	await vi.waitFor(() => expect(search.progress).toMatchObject({ state: "complete", completed: 1, total: 1 }));
 	search.configure({ ...connection, embeddingModel: "new-model", excludedFolders: ["Private", "Travel"] });
-	expect(search.progress).toMatchObject({ state: "idle", completed: 0, total: 0 });
+	expect(search.progress).toMatchObject({ state: "idle", completed: 0, total: 1, error: "search-rebuild" });
 });

@@ -173,7 +173,7 @@ it("keeps the index cleared when background restoration finishes a delayed note 
 	restored.configure(connection); const restoring = restored.restore();
 	await vi.waitFor(() => expect(reading).toBe(true));
 	await restored.clear(); finish("old train"); await restoring;
-	expect(restored.progress).toMatchObject({ state: "idle", completed: 0, total: 0 }); restored.dispose();
+	expect(restored.progress).toMatchObject({ state: "idle", completed: 0, total: 2 }); restored.dispose();
 	const reopened = createNoteSearch(environment); reopened.configure(connection); await reopened.restore();
 	expect(reopened.progress.state).toBe("idle"); reopened.dispose();
 });
@@ -203,6 +203,6 @@ it("treats a clear during storage opening as cancellation rather than a storage 
 		await vi.waitFor(() => expect(opening).toBe(true));
 		const clearing = restored.clear(); finish();
 		await clearing; expect(await restoring).toBeNull();
-		expect(restored.progress).toMatchObject({ state: "idle", completed: 0, total: 0 });
+		expect(restored.progress).toMatchObject({ state: "idle", completed: 0, total: 2 });
 	} finally { restored.dispose(); openingRequest.mockRestore(); }
 });

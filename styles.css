@@ -7,6 +7,7 @@
 }
 
 .ai-helper-header {
+	flex-wrap: wrap;
 	flex: 0 0 auto;
 	display: flex;
 	justify-content: space-between;
@@ -409,4 +410,32 @@
 
 .ai-helper-search-coverage {
 	margin-top: 8px;
+}
+
+.ai-helper-index-status {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.ai-helper-index-bar {
+	flex: 1 1 auto;
+	min-width: 40px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+}
+
+.ai-helper-index-coverage-label {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.ai-helper-index-reason {
+	flex: 1 0 100%;
 }

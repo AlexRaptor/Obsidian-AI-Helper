@@ -26,6 +26,13 @@ export class ChatView extends ItemView {
 	conversation = new Conversation();
 	private searchEnabled = false;
 	private indexStatusEl: HTMLElement | null = null;
+	private indexCoverageBar: HTMLElement | null = null;
+	private indexCoverageFill: HTMLElement | null = null;
+	private indexCoverageLabel: HTMLElement | null = null;
+	private indexReason: HTMLElement | null = null;
+	private indexAction: HTMLButtonElement | null = null;
+	private indexPause: HTMLButtonElement | null = null;
+	private indexActionPending = false;
 	private unsubscribeIndex: (() => void) | undefined;
 	private searchBtn: HTMLButtonElement | null = null;
 	private messagesEl: HTMLElement | null = null;
@@ -125,6 +132,8 @@ export class ChatView extends ItemView {
 		this.unsubscribeIndex?.();
 		this.unsubscribeIndex = undefined;
 		this.indexStatusEl = null;
+		this.indexCoverageBar = null; this.indexCoverageFill = null; this.indexCoverageLabel = null;
+		this.indexReason = null; this.indexAction = null; this.indexPause = null;
 		this.draft = this.inputEl?.value ?? this.draft;
 		this.cancelRequest();
 		this.renderRevision++;
@@ -180,7 +189,26 @@ export class ChatView extends ItemView {
 			this.updateIndexStatus();
 			this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
 		});
-		this.indexStatusEl = container.createDiv({ cls: "ai-helper-index-status", attr: { "aria-live": "polite" } });
+		this.indexStatusEl = header.createDiv({ cls: "ai-helper-index-status" });
+		this.indexCoverageBar = this.indexStatusEl.createDiv({ cls: "ai-helper-index-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
+		this.indexCoverageFill = this.indexCoverageBar.createDiv({ cls: "ai-helper-context-bar-fill" });
+		this.indexCoverageLabel = this.indexStatusEl.createSpan({ cls: "ai-helper-index-coverage-label" });
+		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
+		this.indexAction = this.indexStatusEl.createEl("button", { cls: "ai-helper-index-action", attr: { type: "button" } });
+		this.indexAction.addEventListener("click", () => {
+			if (this.indexActionPending) return;
+			this.indexActionPending = true;
+			const first = this.plugin.noteSearch.progress.state === "idle";
+			this.updateIndexStatus();
+			const action = first ? this.plugin.manageNoteIndex("index") : this.plugin.noteSearch.resume(true);
+			void action.catch(error => {
+				if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"));
+			}).finally(() => { this.indexActionPending = false; this.updateIndexStatus(); });
+		});
+		this.indexPause = this.indexStatusEl.createEl("button", { cls: "ai-helper-index-pause", attr: { type: "button" } });
+		this.indexPause.addEventListener("click", () => {
+			void this.plugin.noteSearch.pause().catch(() => new Notice(this.t("search-storage")));
+		});
 		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
 
 		const inputRow = container.createDiv({ cls: "ai-helper-input-row" });
@@ -197,7 +225,27 @@ export class ChatView extends ItemView {
 
 	private updateIndexStatus(): void {
 		const progress = this.plugin.noteSearch?.progress;
-		this.indexStatusEl?.setText(this.searchEnabled && progress ? `${this.t(`search-state-${progress.state}`)}: ${progress.completed}/${progress.total}${progress.state !== "complete" ? ` — ${this.t("search-partial")}` : ""}${progress.error ? ` — ${this.t(progress.error)}` : ""}` : "");
+		if (!this.indexStatusEl) return;
+		this.indexStatusEl.style.display = this.searchEnabled && progress ? "" : "none";
+		if (!progress) return;
+		const percent = progress.total ? Math.min(100, Math.round(progress.completed / progress.total * 100)) : progress.state === "complete" ? 100 : 0;
+		const label = `${percent}% - ${formatNumber(progress.completed)} / ${formatNumber(progress.total)}`;
+		this.indexCoverageLabel?.setText(label);
+		this.indexCoverageBar?.setAttribute("aria-label", this.t("search-coverage"));
+		this.indexCoverageBar?.setAttribute("aria-valuenow", String(percent));
+		this.indexCoverageBar?.setAttribute("aria-valuetext", label);
+		if (this.indexCoverageFill) this.indexCoverageFill.style.width = `${percent}%`;
+		this.indexReason?.setText(`${this.t(`search-state-${progress.state}`)}${progress.state !== "complete" ? ` — ${this.t("search-partial")}` : ""}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
+		if (this.indexAction) {
+			const key = progress.state === "idle" ? "search-vault-index" : progress.state === "error" ? "search-repeat" : "search-continue";
+			this.indexAction.setText(this.t(key)); this.indexAction.setAttribute("aria-label", this.t(key));
+			this.indexAction.disabled = this.indexActionPending || progress.state === "indexing";
+			this.indexAction.style.display = progress.state === "complete" || progress.state === "indexing" ? "none" : "";
+		}
+		if (this.indexPause) {
+			this.indexPause.setText(this.t("search-pause")); this.indexPause.setAttribute("aria-label", this.t("search-pause"));
+			this.indexPause.style.display = progress.state === "indexing" ? "" : "none";
+		}
 	}
 
 	private detachScrollObserver(): void {

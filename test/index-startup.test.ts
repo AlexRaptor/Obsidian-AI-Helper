@@ -109,3 +109,35 @@ it.each(["note", "vault"] as const)("keeps the saved index when an awaited %s co
 	const reopened = createNoteSearch(environment); reopened.configure(settings); await reopened.restore();
 	expect(reopened.progress).toMatchObject({ state: "complete", completed: 1, total: 1 }); expect(embeddings).toBe(0); reopened.dispose();
 });
+it.each([
+	{ automatic: true, paused: false, expected: "error", attempts: 1 },
+	{ automatic: false, paused: false, expected: "partial", attempts: 0 },
+	{ automatic: true, paused: true, expected: "paused", attempts: 0 },
+])("respects saved pause and automation on startup: $automatic/$paused", async ({ automatic, paused, expected, attempts }) => {
+	const factory = new IDBFactory(); vi.stubGlobal("indexedDB", factory);
+	const settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", autoUpdateNotes: automatic, noteUpdateDelaySeconds: 0.01 };
+	let text = "original"; let offline = false; let embeddings = 0;
+	const client = createServerClient(async url => {
+		if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [] }));
+		embeddings++; if (offline) throw new Error("offline");
+		return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	});
+	const environment = { factory, vaultPath: "/startup-controls", client, list: () => ["Train.md"], read: async () => text, open: async () => {} };
+	const saved = createNoteSearch(environment); saved.configure(settings); await saved.indexVault();
+	if (paused) await saved.pause(); saved.dispose(); text = "edited while closed"; offline = true; embeddings = 0;
+	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => environment.vaultPath;
+	const note = { path: "Train.md", extension: "md" }; let ready!: () => void;
+	const app = { vault: { adapter, getMarkdownFiles: () => [note], getFileByPath: () => note, read: async () => text },
+		workspace: { onLayoutReady: (callback: () => void) => { ready = callback; }, detachLeavesOfType: () => {} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest); plugin.serverClient = client;
+	vi.spyOn(plugin, "loadData").mockResolvedValue(settings);
+	try {
+		await plugin.onload(); ready();
+		await vi.waitFor(() => expect(plugin.noteSearch.progress).toMatchObject({ state: expected, completed: 0, total: 1 }));
+		expect(embeddings).toBe(attempts);
+		text = "latest after startup"; await plugin.noteSearch.changed("Train.md"); offline = false;
+		await new Promise(resolve => setTimeout(resolve, 60)); expect(embeddings).toBe(attempts);
+		await plugin.noteSearch.resume(true); expect(embeddings).toBe(attempts + 1);
+		expect(plugin.noteSearch.progress).toMatchObject({ state: "complete", completed: 1, total: 1 });
+	} finally { plugin.onunload(); }
+});

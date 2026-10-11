@@ -49,13 +49,13 @@ function validNote(value: unknown): value is IndexedNote {
 }
 
 export interface IndexProgress {
-	state: "idle" | "indexing" | "partial" | "complete" | "error";
+	state: "idle" | "indexing" | "paused" | "partial" | "complete" | "error";
 	completed: number;
 	total: number;
 	error?: NoteSearchErrorCode;
 }
 interface SavedProgress extends IndexProgress { fingerprint: string; }
-interface SavedUpdates { initialized: boolean; pending: string[]; failed: boolean; }
+interface SavedUpdates { initialized: boolean; pending: string[]; failed: boolean; paused?: boolean; }
 function storage(environment: NoteSearchEnvironment) {
 	async function access<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore, set: (value: T) => void) => void): Promise<T> {
 		if (!environment.vaultPath || !environment.factory) throw new NoteSearchError("search-storage");
@@ -116,9 +116,12 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	let writes: Promise<unknown> = Promise.resolve();
 	let disposed = false;
 	let initialized = false;
+	let updatesLoaded = false;
 	let automatic = true;
 	let updateDelaySeconds = DEFAULT_NOTE_UPDATE_DELAY_SECONDS;
 	let failed = false;
+	let paused = false;
+	let operation: Promise<void> | undefined;
 	const pending = new Set<string>();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let draining: Promise<void> | undefined;
@@ -139,25 +142,53 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		void writes.catch(() => {});
 		return operation;
 	}
-	function saveUpdates() {
-		const saved: SavedUpdates = { initialized, pending: [...pending], failed };
+	async function settleWrites(): Promise<void> {
+		try { await writes; }
+		catch (error) {
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) throw error;
+		}
+	}
+
+	function restoreUpdates(saved: Awaited<ReturnType<typeof store.read>>, identity: string) {
+		if (updatesLoaded) return;
+		const compatible = saved.progress?.fingerprint === identity;
+		initialized = compatible && (saved.updates ? saved.updates.initialized === true : saved.progress?.state !== "idle");
+		paused = compatible && saved.updates?.paused === true;
+		failed = compatible && (saved.updates?.failed === true || saved.progress?.state === "error");
+		if (compatible && Array.isArray(saved.updates?.pending)) for (const path of saved.updates.pending) if (typeof path === "string" && allowed(path)) pending.add(path);
+		updatesLoaded = true;
+	}
+	async function loadUpdates(): Promise<void> {
+		if (updatesLoaded) return;
+		const version = revision;
+		await settleWrites();
+		const saved = await store.read();
+		const identity = await fingerprint(); check(version);
+		restoreUpdates(saved, identity);
+	}
+
+	async function saveUpdates() {
+		await loadUpdates();
+		const saved: SavedUpdates = { initialized, pending: [...pending], failed, paused };
 		return write((store) => store.put(saved, "updates"));
 	}
 	async function coverage() {
 		const version = revision;
-		await writes;
+		await settleWrites();
 		const saved = await store.read();
 		const identity = await fingerprint();
+		check(version); restoreUpdates(saved, identity);
 		const paths = environment.list?.().filter(allowed) ?? saved.notes.filter(validNote).map(note => note.path).filter(allowed);
 		const pathSet = new Set(paths);
 		const completed = saved.notes.filter(validNote).filter(note => pathSet.has(note.path) && note.fingerprint === identity && !pending.has(note.path)).length;
 		if (version !== revision || disposed) return;
-		progress = { state: failed ? "error" : pending.size || completed < paths.length ? "partial" : "complete", completed, total: paths.length, ...(failed ? { error: progress.error ?? "search-failed" } : {}) };
+		progress = { state: !initialized ? "idle" : paused ? "paused" : failed ? "error" : pending.size || completed < paths.length ? "partial" : "complete", completed, total: paths.length, ...(failed ? { error: progress.error ?? "search-failed" } : {}) };
+		if (!initialized) await saveUpdates();
 		await saveProgress(version, identity);
 	}
 	async function reconcile() {
 		let version = revision;
-		await writes;
+		await settleWrites();
 		const saved = await store.read();
 		const identity = await fingerprint();
 		check(version);
@@ -176,11 +207,11 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		check(version);
 		// Apply a complete snapshot only if no intervening vault event, clear,
 		// settings change or unload invalidated it. Commit cleanup in one batch.
-		if (discarded.size || nextPending.size !== pending.size) cancel();
+		if (controller && (discarded.size || nextPending.size !== pending.size)) cancel();
 		version = revision;
 		pending.clear(); for (const path of nextPending) pending.add(path);
 		clearTimeout(timer); timer = undefined;
-		const updates: SavedUpdates = { initialized, pending: [...pending], failed };
+		const updates: SavedUpdates = { initialized, pending: [...pending], failed, paused };
 		await write(store => {
 			check(version);
 			for (const path of discarded) store.delete(path);
@@ -192,13 +223,13 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 
 	function schedule() {
 		clearTimeout(timer); timer = undefined;
-		if (!initialized || !automatic || failed || disposed) return;
+		if (!initialized || !automatic || paused || failed || disposed) return;
 		timer = setTimeout(() => { timer = undefined; void drain().catch(() => {}); }, updateDelaySeconds * 1000);
 	}
 	async function drain(manual = false): Promise<void> {
-		if (draining) { await draining; if (pending.size && !failed && automatic) return drain(manual); return; }
+		if (draining) { await draining; if (pending.size && !paused && !failed && (automatic || manual)) return drain(manual); return; }
 		draining = (async () => {
-			while (pending.size && !failed && !disposed && (automatic || manual)) {
+			while (pending.size && !paused && !failed && !disposed && (automatic || manual)) {
 				const path = pending.values().next().value as string;
 				try { await run([path], false); }
 				catch (error) {
@@ -212,16 +243,20 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		try { await draining; } finally { draining = undefined; }
 	}
 	async function changed(path: string): Promise<void> {
-		if (!initialized || disposed || !allowed(path)) return;
+		if (disposed || !allowed(path)) return;
+		await loadUpdates();
+		if (!initialized) { await coverage(); return; }
 		clearTimeout(timer); timer = undefined;
 		pending.add(path); cancel();
-		progress = { ...progress, state: failed ? "error" : "partial" }; notify();
+		progress = { ...progress, state: paused ? "paused" : failed ? "error" : "partial" }; notify();
 		await saveUpdates();
 		await write(store => store.delete(path));
 		await coverage();
 		schedule();
 	}
 	async function removed(path: string): Promise<void> {
+		if (disposed) return;
+		await loadUpdates();
 		cancel();
 		const matches = (value: string) => value === path || value.startsWith(path + "/");
 		for (const value of pending) if (matches(value)) pending.delete(value);
@@ -230,7 +265,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const cursor = store.openCursor();
 			cursor.onsuccess = () => { const entry = cursor.result; if (!entry) return; if (validNote(entry.value) && matches(entry.value.path)) entry.delete(); entry.continue(); };
 		});
-		if (initialized) await coverage();
+		await coverage();
 		schedule();
 	}
 	async function saveProgress(version: number, identity: string, note?: IndexedNote) {
@@ -307,8 +342,14 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			throw error;
 		} finally { if (version === revision) controller = undefined; }
 	}
+	function operate(action: () => Promise<void>): Promise<void> {
+		if (operation) return operation;
+		const result = action().finally(() => { if (operation === result) operation = undefined; });
+		operation = result;
+		return result;
+	}
 	function restoreProgress(saved: SavedProgress | undefined, identity: string) {
-		if (saved?.fingerprint !== identity || !["idle", "indexing", "partial", "complete", "error"].includes(saved.state)
+		if (saved?.fingerprint !== identity || !["idle", "indexing", "paused", "partial", "complete", "error"].includes(saved.state)
 			|| !Number.isSafeInteger(saved.completed) || !Number.isSafeInteger(saved.total) || saved.completed < 0 || saved.total < saved.completed) return;
 		progress = { state: saved.state === "indexing" ? "partial" : saved.state, completed: saved.completed, total: saved.total, error: saved.error }; notify();
 	}
@@ -335,57 +376,47 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const changed = connection !== undefined;
 			connection = copy; fragmentOptions = options; excludedFolders = folders; cancel();
 			for (const path of pending) if (!allowed(path) || incompatible) pending.delete(path);
-			if (changed && incompatible) { initialized = false; failed = false; clearTimeout(timer); timer = undefined; }
-			if (changed || folders.length) {
-				if (changed) { progress = incompatible ? { state: "idle", completed: 0, total: 0 } : { ...progress, state: "partial" }; notify(); }
+			if (changed && incompatible) { updatesLoaded = true; initialized = false; failed = false; paused = false; operation = undefined; clearTimeout(timer); timer = undefined; }
+			if (changed && incompatible) {
+				progress = { state: "idle", completed: 0, total: environment.list?.().filter(allowed).length ?? 0, error: "search-rebuild" }; notify();
+				void write(store => store.clear()).catch(() => {});
+			} else if (changed || folders.length) {
 				const version = revision;
-				let updated: SavedProgress | undefined;
-				const identity = fingerprint();
-				void write((store) => {
-					if (changed && incompatible) { store.clear(); return; }
-					let removed = 0;
-					let saved: SavedProgress | undefined;
+				void write(store => {
 					const cursor = store.openCursor();
 					cursor.onsuccess = () => {
-						const entry = cursor.result;
-						if (!entry) {
-							if (saved && (removed || changed)) {
-								updated = { ...saved, state: "partial", completed: Math.max(0, saved.completed - removed) };
-								store.put(updated, "progress");
-							}
-							return;
-						}
-						if (entry.key === "progress") saved = entry.value;
-						else if (entry.key === "updates") {
-							const updates = entry.value as SavedUpdates;
-							if (Array.isArray(updates.pending)) entry.update({ ...updates, pending: updates.pending.filter(path => permitted(path, folders)) });
-						}
-						else if (!validNote(entry.value) || !permitted(entry.value.path, folders)) { entry.delete(); removed++; }
+						const entry = cursor.result; if (!entry) return;
+						if (entry.key === "updates" && Array.isArray(entry.value?.pending)) {
+							entry.update({ ...entry.value, pending: entry.value.pending.filter((path: string) => permitted(path, folders)) });
+						} else if (entry.key !== "progress" && entry.key !== "updates" && (!validNote(entry.value) || !permitted(entry.value.path, folders))) entry.delete();
 						entry.continue();
 					};
 				}).then(async () => {
-					const currentIdentity = await identity;
-					if (version === revision && !disposed && updated) restoreProgress(updated, currentIdentity);
+					if (!changed || version !== revision || disposed) return;
+					if (initialized) { await reconcile(); schedule(); }
+					else await coverage();
 				}).catch(() => {});
 			}
-			if (changed && !incompatible) void saveUpdates().then(schedule).catch(() => {});
 		},
 		dispose(): void { clearTimeout(timer); timer = undefined; disposed = true; cancel(); listeners.clear(); },
 		async restore(): Promise<void> {
 			while (!disposed) {
 				const version = revision;
 				try {
-					try { await writes; } catch (error) {
+					try { await settleWrites(); } catch (error) {
 						if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) throw new NoteSearchError("search-storage");
 					}
 					const saved = await store.read();
 					const identity = await fingerprint();
 					check(version);
 					restoreProgress(saved.progress, identity);
-					initialized = saved.updates?.initialized === true || !!saved.progress && saved.progress.fingerprint === identity;
-					failed = saved.updates?.failed === true || saved.progress?.state === "error";
-					if (Array.isArray(saved.updates?.pending)) for (const path of saved.updates.pending) if (typeof path === "string" && allowed(path)) pending.add(path);
+					const compatible = saved.progress?.fingerprint === identity;
+					restoreUpdates(saved, identity);
 					if (initialized && environment.list) await reconcile();
+					else if (compatible && !initialized) { progress = { state: "idle", completed: 0, total: environment.list?.().filter(allowed).length ?? 0 }; notify(); }
+					else if (!compatible) {
+						progress = { state: "idle", completed: 0, total: environment.list?.().filter(allowed).length ?? 0, ...(saved.progress ? { error: "search-rebuild" as const } : {}) }; notify();
+					}
 					return;
 				} catch (error) {
 					if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) throw error;
@@ -404,20 +435,33 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			for (const value of paths) if (value === path || value.startsWith(path + "/")) await changed(value);
 			return [...folders];
 		},
+		async pause(): Promise<void> {
+			if (disposed || !initialized) return;
+			paused = true; operation = undefined; clearTimeout(timer); timer = undefined; cancel();
+			progress = { ...progress, state: "paused" }; notify();
+			await saveUpdates(); await coverage();
+		},
 		async resume(manual = false): Promise<void> {
-			if (!initialized || disposed || (!manual && !automatic)) return;
-			clearTimeout(timer); timer = undefined;
-			await reconcile();
-			clearTimeout(timer); timer = undefined; failed = false; await saveUpdates();
-			await drain(manual);
+			if (!initialized || disposed || (!manual && (!automatic || paused))) return;
+			return operate(async () => {
+				clearTimeout(timer); timer = undefined;
+				await reconcile();
+				if (disposed || (!manual && paused)) return;
+				clearTimeout(timer); timer = undefined; failed = false;
+				if (manual) paused = false;
+				await saveUpdates(); await drain(manual);
+			});
 		},
 		async index(path: string): Promise<void> {
 			if (!/\.md$/i.test(path)) throw new NoteSearchError("search-note");
 			if (!allowed(path)) throw new NoteSearchError("search-excluded");
 			clearTimeout(timer); timer = undefined;
 			const wasFailed = failed;
-			initialized = true; pending.add(path); await saveUpdates();
-			await write(store => store.delete(path));
+			updatesLoaded = true; initialized = true; pending.add(path);
+			const version = revision;
+			await saveUpdates(); check(version);
+			await write(store => { check(version); store.delete(path); });
+			check(version);
 			await run([path], false);
 			failed = wasFailed; await saveUpdates();
 			if (environment.list) await coverage();
@@ -425,23 +469,27 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		async indexVault(): Promise<void> {
 			if (!environment.list) throw new NoteSearchError("search-note");
-			clearTimeout(timer); timer = undefined; initialized = true; failed = false;
-			const paths = [...new Set(environment.list())].filter(allowed);
-			for (const path of paths) pending.add(path);
-			await saveUpdates();
-			await run(paths, true);
-			schedule();
+			if (disposed) return;
+			return operate(async () => {
+				clearTimeout(timer); timer = undefined; updatesLoaded = true; initialized = true; failed = false; paused = false;
+				const version = revision;
+				const paths = [...new Set(environment.list!())].filter(allowed);
+				for (const path of paths) pending.add(path);
+				await saveUpdates(); check(version);
+				await run(paths, true);
+				schedule();
+			});
 		},
 		async clear(): Promise<void> {
-			clearTimeout(timer); timer = undefined; initialized = false; failed = false; pending.clear();
-			cancel(); progress = { state: "idle", completed: 0, total: 0 }; notify();
+			clearTimeout(timer); timer = undefined; updatesLoaded = true; initialized = false; failed = false; paused = false; operation = undefined; pending.clear();
+			cancel(); progress = { state: "idle", completed: 0, total: environment.list?.().filter(allowed).length ?? 0 }; notify();
 			await write((store) => store.clear());
 		},
 		async rebuild(): Promise<void> { await this.clear(); await this.indexVault(); },
 		async search(question: string, signal?: AbortSignal): Promise<NoteSource | null> {
 			const version = revision;
 			const threshold = minimumSimilarity;
-			try { await writes; } catch { throw new NoteSearchError("search-storage"); }
+			try { await settleWrites(); } catch { throw new NoteSearchError("search-storage"); }
 			const saved = await store.read();
 			check(version, signal);
 			const identity = await fingerprint();

@@ -163,7 +163,9 @@ export class AiHelperPlugin extends Plugin {
 		this.indexingNote = true;
 		new Notice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`);
 		try { await this.indexRestore; if (this.unloading) return; await this.noteSearch.index(path); new Notice(this.t("search-indexed")); }
-		catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
+		catch (error) {
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"));
+		}
 		finally { this.indexingNote = false; }
 	}
 
@@ -178,7 +180,9 @@ export class AiHelperPlugin extends Plugin {
 			if (action === "clear") await this.noteSearch.clear();
 			else { await this.indexRestore; if (this.unloading) return; await this.noteSearch.rebuild(); }
 			new Notice(this.t(action === "clear" ? "search-cleared" : "search-state-complete"));
-		} catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
+		} catch (error) {
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"));
+		}
 		finally { if (action !== "clear") this.indexingNote = false; }
 	}
 
