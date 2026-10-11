@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { App, PluginManifest } from "obsidian";
 import { AiHelperPlugin } from "../src/main";
 import { DEFAULT_SETTINGS } from "../src/settings";
-import { VIEW_TYPE_CHAT } from "../src/chat-view";
+import { ChatView, VIEW_TYPE_CHAT } from "../src/chat-view";
 import { deferred, flushPromises } from "./helpers/obsidian";
 import type { ServerClientResult } from "../src/server-client";
 
@@ -105,4 +105,32 @@ it("ignores an old embedding model list after the key changes and keeps the main
 		expect(plugin.models).toEqual([]);
 		expect(plugin.settings.model).toBe("chat-model");
 	} finally { vi.unstubAllGlobals(); }
+});
+
+
+it("targets the active chat and disables commands when no matching state exists", async () => {
+	const first = new ChatView({} as never, {} as never);
+	const second = new ChatView({} as never, {} as never);
+	vi.spyOn(first, "updateContextIndicators").mockImplementation(() => {});
+	vi.spyOn(second, "updateContextIndicators").mockImplementation(() => {});
+	let active: ChatView | null = second;
+	let leaves = [{ view: first }, { view: second }];
+	const workspace = { getActiveViewOfType: () => active, getLeavesOfType: () => leaves, revealLeaf: vi.fn(async () => {}), ensureSideLeaf: vi.fn(async () => ({ view: first })) };
+	const plugin = new AiHelperPlugin({ workspace } as unknown as App, {} as PluginManifest);
+	const commands = vi.spyOn(plugin, "addCommand"); await plugin.onload();
+	const stop = commands.mock.calls.find(([command]) => command.id === "stop-generation")![0];
+	const toggle = commands.mock.calls.find(([command]) => command.id === "toggle-note-search")![0];
+	const cancel = vi.spyOn(second, "stopGeneration").mockImplementation(() => {});
+	const generating = vi.spyOn(second, "isGenerating").mockReturnValue(false);
+	expect(stop.checkCallback!(true)).toBe(false);
+	generating.mockReturnValue(true); expect(stop.checkCallback!(true)).toBe(true); expect(cancel).not.toHaveBeenCalled();
+	stop.checkCallback!(false); expect(cancel).toHaveBeenCalledOnce();
+	const search = vi.spyOn(second, "toggleSearch").mockImplementation(() => {});
+	expect(toggle.checkCallback!(true)).toBe(true); expect(search).not.toHaveBeenCalled();
+	toggle.checkCallback!(false); expect(search).toHaveBeenCalledOnce();
+	const clearFirst = vi.spyOn(first, "clearConversation").mockImplementation(() => {});
+	const clearSecond = vi.spyOn(second, "clearConversation").mockImplementation(() => {});
+	await plugin.newConversation(); expect(clearSecond).toHaveBeenCalledOnce(); expect(clearFirst).not.toHaveBeenCalled();
+	active = null; leaves = []; expect(toggle.checkCallback!(true)).toBe(false); expect(stop.checkCallback!(true)).toBe(false);
+	await plugin.newConversation(); expect(workspace.ensureSideLeaf).toHaveBeenCalledOnce(); expect(clearFirst).toHaveBeenCalledOnce();
 });

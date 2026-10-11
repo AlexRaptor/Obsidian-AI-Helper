@@ -173,6 +173,14 @@ export class ChatView extends ItemView implements HoverParent {
 		this.contextLabelEl = null;
 	}
 
+	isGenerating(): boolean { return this.thinking; }
+
+	stopGeneration(): void {
+		if (!this.thinking) return;
+		this.cancelRequest();
+		void this.renderMessages();
+	}
+
 	getMessages(): Message[] {
 		return this.conversation.getMessages();
 	}
@@ -296,7 +304,7 @@ export class ChatView extends ItemView implements HoverParent {
 			}
 		}
 		this.sendBtn?.addEventListener("click", () => {
-			if (this.thinking) { this.cancelRequest(); void this.renderMessages(); }
+			if (this.thinking) this.stopGeneration();
 			else void this.handleSend();
 		});
 		this.inputEl?.addEventListener("keydown", (e) => {

@@ -105,6 +105,19 @@ export class AiHelperPlugin extends Plugin {
 			name: this.t("command"),
 			callback: () => this.toggleView(),
 		});
+		this.addCommand({ id: "new-conversation", name: this.t("command-new-conversation"), callback: () => { void this.newConversation(); } });
+		this.addCommand({ id: "stop-generation", name: this.t("command-stop-generation"), checkCallback: checking => {
+			const view = this.getChatView();
+			if (!view?.isGenerating()) return false;
+			if (!checking) view.stopGeneration();
+			return true;
+		} });
+		this.addCommand({ id: "toggle-note-search", name: this.t("search-toggle"), checkCallback: checking => {
+			const view = this.getChatView();
+			if (!view) return false;
+			if (!checking) view.toggleSearch();
+			return true;
+		} });
 		this.settingsTab = new AiHelperSettingsTab(this.app, this);
 		this.addSettingTab(this.settingsTab);
 		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.indexRestore.then(() => this.noteSearch.resume(true)).catch(updateError); } });
@@ -270,6 +283,23 @@ export class AiHelperPlugin extends Plugin {
 
 	applyLanguage(): void {
 		setLanguage(resolveLanguage(this.settings.language, getAppLanguage()));
+	}
+
+	private getChatView(): ChatView | undefined {
+		const active = this.app.workspace.getActiveViewOfType?.(ChatView);
+		if (active) return active;
+		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT).find(leaf => leaf.view instanceof ChatView);
+		return leaf?.view instanceof ChatView ? leaf.view : undefined;
+	}
+
+	async newConversation(): Promise<void> {
+		let view = this.getChatView();
+		if (view) await this.app.workspace.revealLeaf(view.leaf);
+		else {
+			const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
+			if (leaf.view instanceof ChatView) view = leaf.view;
+		}
+		view?.clearConversation();
 	}
 
 	async toggleView(): Promise<void> {

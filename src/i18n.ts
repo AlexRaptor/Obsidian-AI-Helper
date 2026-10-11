@@ -14,6 +14,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"command-new-conversation": "New conversation",
+	"command-stop-generation": "Stop generation",
 	"source-open": "Open source",
 	"source-open-tab": "Open source in new tab",
 	"use-server-top-p": "Use model server default for top P",
@@ -216,6 +218,8 @@ export const en = {
 } as const;
 
 export const ru = {
+	"command-new-conversation": "Новый диалог",
+	"command-stop-generation": "Остановить генерацию",
 	"source-open": "Открыть источник",
 	"source-open-tab": "Открыть источник в новой вкладке",
 	"use-server-top-p": "Использовать значение top P модель-сервера",
