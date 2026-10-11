@@ -93,7 +93,7 @@ export class AiHelperPlugin extends Plugin {
 		};
 		if (this.app.workspace.onLayoutReady) this.app.workspace.onLayoutReady(restoreIndex);
 
-		this.registerHoverLinkSource(VIEW_TYPE_CHAT, { display: this.t("view-title"), defaultMod: true });
+		this.registerHoverLinkSource(VIEW_TYPE_CHAT, { display: this.manifest.name, defaultMod: true });
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
 			"message-square",

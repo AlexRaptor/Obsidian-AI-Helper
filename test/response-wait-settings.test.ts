@@ -11,9 +11,7 @@ import { deferred, TestElement } from "./helpers/obsidian";
 const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; toggle?: { change: (value: boolean) => Promise<void> }; slider?: { value: number; change: (value: number) => Promise<void> }; picker?: { value: string; disabled: boolean; change: (value: string) => Promise<void> }; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
 vi.mock("obsidian", async () => {
 	const helper = await import("./helpers/obsidian");
-	return { ...helper,
-		PluginSettingTab: class { containerEl = new helper.TestElement(); constructor(public app: unknown) {} },
-		Setting: class {
+	const MockSetting = class {
 			name = ""; get description() { return this.descEl.getText(); } controlEl = new helper.TestElement(); descEl = new helper.TestElement();
 			input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> };
 			dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> };
@@ -25,11 +23,11 @@ vi.mock("obsidian", async () => {
 			setName(name: string) { this.name = name; return this; }
 			setDesc(description: string) { this.descEl.setText(description); return this; }
 			addToggle(callback: (toggle: unknown) => void) {
-				const toggle = { change: async (_value: boolean) => {}, setValue() { return this; }, onChange(change: (value: boolean) => Promise<void>) { this.change = change; return this; } };
+				const toggle = { toggleEl: new helper.TestElement(), setTooltip() { return this; }, change: async (_value: boolean) => {}, setValue() { return this; }, onChange(change: (value: boolean) => Promise<void>) { this.change = change; return this; } };
 				Object.assign(this, { toggle }); callback(toggle); return this;
 			}
 			addSlider(callback: (slider: unknown) => void) {
-				const slider = { value: 0, change: async (_value: number) => {}, setLimits() { return this; }, setDynamicTooltip() { return this; }, setDisabled() { return this; }, setValue(value: number) { this.value = value; return this; }, onChange(change: (value: number) => Promise<void>) { this.change = change; return this; } };
+				const slider = { sliderEl: new helper.TestElement(), setDisplayFormat() { return this; }, value: 0, change: async (_value: number) => {}, setLimits() { return this; }, setDynamicTooltip() { return this; }, setDisabled() { return this; }, setValue(value: number) { this.value = value; return this; }, onChange(change: (value: number) => Promise<void>) { this.change = change; return this; } };
 				Object.assign(this, { slider }); callback(slider); return this;
 			}
 			addSearch(callback: (text: unknown) => void) { return this.addTextArea(callback); }
@@ -59,8 +57,8 @@ vi.mock("obsidian", async () => {
 				(this as unknown as { button: typeof button }).button = button;
 				callback(button); return this;
 			}
-		},
-	};
+		};
+	return { ...helper, Setting: MockSetting, PluginSettingTab: class extends helper.PluginSettingTab { createSetting(parent: TestElement) { return new MockSetting(); } } };
 });
 afterEach(() => { controls.length = 0; setLanguage("en"); vi.unstubAllGlobals(); });
 
@@ -394,7 +392,7 @@ it("shows the renamed exclusion immediately in open settings and persists it bef
 	const setting = controls.find(value => value.name === en["setting-excluded-folders"])!;
 	handlers.get("rename")!({ path: "Secrets" }, "Private");
 	try {
-		expect(controls.filter(value => value.name === en["setting-excluded-folders"]).map(value => value.input!.value)).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
+		expect(controls.filter(value => value.name === en["setting-excluded-folders"]).slice(-3).map(value => value.input!.value)).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		expect(plugin.settings.excludedFolders).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		await vi.waitFor(() => expect(saving).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: ["Secrets", "Secrets/Nested", "Private-public"] })));
 	} finally { plugin.onunload(); }
@@ -427,17 +425,16 @@ it.each(["en", "ru"] as const)("clears the full index and pending updates throug
 
 
 it("adds absent folders and root, rejects duplicate edits and removes rows", async () => {
-	const plugin = { settings: { ...DEFAULT_SETTINGS, excludedFolders: ["Private"] }, noteSearchConnection: { status: { state: "idle" }, cancel: vi.fn() }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
+	const plugin = { settings: { ...DEFAULT_SETTINGS, excludedFolders: ["Private"] }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
 	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
-	const add = () => controls.filter(row => row.name === en["folder-add"]).slice(-1)[0]!;
-	add().input!.value = "Missing"; await add().button!.click();
-	add().input!.value = "/"; await add().button!.click();
-	add().input!.value = "Missing"; await add().button!.click();
+	const list = () => (tab.getSettingDefinitions().find(def => "type" in def && def.type === "page" && def.name === en["settings-page-search"]) as any).items.find((def: any) => def.type === "list");
+	list().addItem.action(); await tab.setControlValue("excluded-folder:new", "Missing");
+	list().addItem.action(); await tab.setControlValue("excluded-folder:new", "/");
+	list().addItem.action(); await tab.setControlValue("excluded-folder:new", "Missing");
 	expect(plugin.settings.excludedFolders).toEqual(["Private", "Missing", "/"]);
-	const rows = controls.filter(row => row.name === en["setting-excluded-folders"]).slice(-3);
-	await rows[0].input!.change("Missing");
+	await tab.setControlValue("excluded-folder:0", "Missing");
 	expect(plugin.settings.excludedFolders[0]).toBe("Private");
-	await rows[1].button!.click();
+	list().onDelete(1); await Promise.resolve();
 	expect(plugin.settings.excludedFolders).toEqual(["Private", "/"]);
 	tab.hide();
 });
@@ -456,11 +453,45 @@ it("preserves exact top P values and server defaults while validating manual edi
 	const plugin = { settings: { ...DEFAULT_SETTINGS, topP: "0.12345" }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
 	new AiHelperSettingsTab({} as App, plugin).display();
 	const row = controls.find(row => row.name === en["setting-top-p"])!;
-	const toggle = controls.find(row => row.name === en["use-server-top-p"])!.toggle!;
+	const toggle = row.toggle!;
 	expect(plugin.settings.topP).toBe("0.12345");
 	await row.input!.change("1.2"); expect(plugin.settings.topP).toBe("0.12345");
 	await row.input!.change("0,23456"); expect(plugin.settings.topP).toBe("0.23456");
 	await toggle.change(true); expect(plugin.settings.topP).toBe(""); expect(row.input!.inputEl.disabled).toBe(true);
 	await toggle.change(false); expect(plugin.settings.topP).toBe("0.23456");
 	await row.slider!.change(0.7); expect(plugin.settings.topP).toBe("0.7"); expect(row.input!.value).toBe("0.7");
+});
+
+
+it("indexes all pages without rendering, requesting models or subscribing", () => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	const tab = new AiHelperSettingsTab({} as App, plugin);
+	const network = vi.spyOn(plugin.serverClient, "listModels");
+	const subscribe = vi.spyOn(plugin.contextWindowConnection, "subscribe");
+	const walk = (items: any[]): any[] => items.flatMap(item => [item, ...walk(item.items ?? [])]);
+	const definitions = tab.getSettingDefinitions();
+	expect(definitions.filter(def => "type" in def && def.type === "page").map(def => (def as any).name)).toEqual([en["settings-page-conversation"], en["settings-page-search"], en["settings-page-advanced"]]);
+	const names = walk(definitions).map(def => def.name);
+	for (const key of ["setting-response-wait", "setting-model", "setting-embedding-model", "setting-fragment-size", "setting-top-p"]) expect(names).toContain(en[key as keyof typeof en]);
+	expect(network).not.toHaveBeenCalled(); expect(subscribe).not.toHaveBeenCalled(); expect(controls).toHaveLength(0);
+});
+
+it("cleans subscriptions on redisplay and hide while status updates retain controls", async () => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	let updateIndex!: () => void;
+	const cleanup = vi.fn();
+	Object.assign(plugin, { noteSearch: { progress: { state: "idle", completed: 0, total: 0 }, subscribe: vi.fn((callback: () => void) => { updateIndex = callback; return cleanup; }) } });
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const count = controls.length; updateIndex(); expect(controls).toHaveLength(count);
+	tab.display(); expect(cleanup).toHaveBeenCalledTimes(1);
+	tab.hide(); expect(cleanup).toHaveBeenCalledTimes(2);
+});
+
+it("renders a draft folder without persisting an empty exclusion", () => {
+	const plugin = { settings: { ...DEFAULT_SETTINGS, excludedFolders: [] }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const page = tab.getSettingDefinitions().find(def => "type" in def && def.type === "page" && def.name === en["settings-page-search"]) as any;
+	page.items.find((def: any) => def.type === "list").addItem.action();
+	expect(controls.filter(row => row.name === en["setting-excluded-folders"]).slice(-1)[0].input!.value).toBe("");
+	expect(plugin.settings.excludedFolders).toEqual([]); expect(plugin.saveSettings).not.toHaveBeenCalled();
 });

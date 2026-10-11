@@ -186,6 +186,8 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	clearConversation(): void {
+		this.hoverPopover?.unload();
+		this.hoverPopover = null;
 		this.cancelRequest(false);
 		this.conversation.clear();
 		this.messages = [];

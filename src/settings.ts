@@ -1,5 +1,4 @@
-import { App, PluginSettingTab, Setting, SettingGroup, type ColorComponent, type SliderComponent, type TextComponent, type SearchComponent } from "obsidian";
-import { FolderSuggest } from "./folder-suggest";
+import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
@@ -8,8 +7,8 @@ import { DEFAULT_SIMILARITY_APPEARANCE, SIMILARITY_COLORS, validSimilarityBounda
 import { parseResponseWait } from "./response-wait";
 import { effectiveContextWindow } from "./context-window";
 import {
-	LOCALES,
 	LOCALE_NAMES,
+	getLanguage,
 	type LanguagePreference,
 	type LocaleKey,
 } from "./i18n";
@@ -57,104 +56,268 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 export type ModelStatus = "idle" | "loaded" | "empty" | "error";
 
 export class AiHelperSettingsTab extends PluginSettingTab {
-	plugin: AiHelperPlugin;
-	private displayVersion = 0;
-	private unsubscribeIndex: (() => void) | undefined;
-	private unsubscribeContext: (() => void) | undefined;
-	private excludedFoldersInputs: SearchComponent[] = [];
-	private folderSuggests: FolderSuggest[] = [];
-	private updateExcludedFoldersWarning?: () => void;
+	private modelSetting?: Setting;
+	private embeddingModelSetting?: Setting;
+	private updateModelStatus?: () => void;
+	private updateEmbeddingStatus?: () => void;
+	private folderDraft?: string;
+	private updateFolderWarnings?: () => void;
 
-	constructor(app: App, plugin: AiHelperPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
+	constructor(app: App, public plugin: AiHelperPlugin) { super(app, plugin); this.icon = "message-square"; }
+
+	t(key: LocaleKey): string { return this.plugin.t(key); }
+
+	private row(name: LocaleKey, desc: LocaleKey | undefined, render: (setting: Setting) => void | (() => void)): SettingDefinition {
+		return { name: this.t(name), desc: desc ? this.t(desc) : undefined, render };
 	}
 
-	t(key: LocaleKey): string {
-		return this.plugin.t(key);
+	private text(key: string, name: LocaleKey, desc: LocaleKey, placeholder?: LocaleKey, textarea = false): SettingDefinition {
+		return { name: this.t(name), desc: this.t(desc), control: {
+			type: textarea ? "textarea" : "text", key, placeholder: placeholder ? this.t(placeholder) : undefined,
+		} };
 	}
 
-	display(): void {
-		this.closeFolderSuggests();
-		this.unsubscribeIndex?.();
-		this.unsubscribeContext?.();
-		if (this.plugin.noteSearchConnection?.status.state === "checking") this.plugin.noteSearchConnection.cancel();
-		if (this.plugin.modelConnection?.status.state === "checking") this.plugin.modelConnection.cancel();
-		const version = ++this.displayVersion;
-		const { containerEl } = this;
-		containerEl.empty();
+	private group(heading: LocaleKey, items: SettingDefinition[]): SettingDefinitionGroup {
+		return { type: "group", heading: this.t(heading), cls: "ai-helper-settings-group", items };
+	}
 
-		const title = containerEl.createEl("h2", { text: this.t("settings-title") });
-		title.addClass("ai-helper-settings-title");
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		// Definitions are also read for search indexing: no DOM, subscriptions or requests here.
+		return [
+			{ name: this.t("setting-language"), desc: this.t("setting-language-desc"), control: {
+				type: "dropdown", key: "language", options: { auto: this.t("language-auto"), ...LOCALE_NAMES },
+			} },
+			{ type: "page", name: this.t("settings-page-conversation"), items: [
+				this.group("settings-group-model", [
+					this.text("serverUrl", "setting-server-url", "setting-server-url-desc", "setting-server-url-placeholder"),
+					this.text("apiKey", "setting-api-key", "setting-api-key-desc", "setting-api-key-placeholder"),
+					this.row("setting-model", "setting-model-desc", setting => {
+						this.modelSetting = setting;
+						this.renderModels(setting, () => this.updateModelStatus?.());
+						return () => { if (this.modelSetting === setting) this.modelSetting = undefined; };
+					}),
+					this.row("model-check", "model-check-desc", setting => this.renderCheck(setting, false)),
+					this.row("setting-context-window", "setting-context-window-desc", setting => this.renderContext(setting)),
+				]),
+				this.group("settings-group-generation", [
+					this.text("systemPrompt", "setting-system-prompt", "setting-system-prompt-desc", "setting-system-prompt-placeholder", true),
+					this.text("temperature", "setting-temperature", "setting-temperature-desc", "setting-temperature-placeholder"),
+					{ ...this.row("setting-top-p", "setting-top-p-desc", setting => this.renderTopP(setting)), aliases: [this.t("use-server-top-p")] },
+					this.text("maxTokens", "setting-max-tokens", "setting-max-tokens-desc", "setting-max-tokens-placeholder"),
+					{ name: this.t("setting-response-wait"), desc: this.t("setting-response-wait-desc"), control: {
+						type: "text", key: "responseWait", validate: value => { if (!parseResponseWait(value).valid) return this.t("setting-response-wait-invalid"); },
+					} },
+				]),
+			] },
+			{ type: "page", name: this.t("settings-page-search"), items: [
+				this.group("settings-group-embedding", [
+					this.text("embeddingServerUrl", "setting-embedding-server-url", "setting-embedding-server-url-desc"),
+					this.row("setting-embedding-api-key", "setting-api-key-desc", setting => { setting.addText(text => {
+						text.inputEl.type = "password";
+						text.setValue(this.plugin.settings.embeddingApiKey).onChange(value => this.setControlValue("embeddingApiKey", value));
+					}); }),
+					this.row("setting-embedding-model", "setting-embedding-model-desc", setting => {
+						this.embeddingModelSetting = setting;
+						this.renderEmbeddingModel(setting, () => this.updateEmbeddingStatus?.());
+						return () => { if (this.embeddingModelSetting === setting) this.embeddingModelSetting = undefined; };
+					}),
+					this.row("embedding-check", "embedding-check-desc", setting => this.renderCheck(setting, true)),
+					this.row("search-vault-index", undefined, setting => this.renderIndex(setting)),
+					this.row("search-vault-clear", "search-clear-desc", setting => { setting.setClass("ai-helper-index-control").addButton(button => button.setWarning().setButtonText(this.t("search-vault-clear")).onClick(() => this.plugin.manageNoteIndex("clear"))); }),
+					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
+				]),
+				this.folderDefinitions(),
+				{ ...this.row("search-missing-folder", undefined, setting => this.renderFolderWarnings(setting)), searchable: false, visible: () => this.missingFolders().length > 0 },
+				this.group("settings-group-index-updates", [
+					{ name: this.t("search-auto-update"), desc: this.t("search-auto-update-desc"), control: { type: "toggle", key: "autoUpdateNotes" } },
+					this.row("search-update-delay", "search-update-delay-desc", setting => this.renderDelay(setting)),
+					this.row("search-retry", undefined, setting => { setting.addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => { try { await this.plugin.noteSearch.resume(true); } catch { /* Status displays the error. */ } })); }),
+				]),
+			] },
+			{ type: "page", name: this.t("settings-page-advanced"), items: [
+				this.group("settings-group-fragments", [
+					this.row("setting-fragment-size", "setting-fragment-options-desc", setting => this.renderFragment(setting, "noteFragmentSize")),
+					this.row("setting-fragment-overlap", "setting-fragment-options-desc", setting => this.renderFragment(setting, "noteFragmentOverlap")),
+				]),
+				this.group("settings-group-similarity", (["weak", "medium", "strong"] as const).map(level => this.row(`setting-similarity-${level}`, "setting-similarity-desc", setting => this.renderAppearance(setting, level)))),
+			] },
+		];
+	}
 
-		const general = this.createGroup(containerEl, "settings-group-general");
-		const model = this.createGroup(containerEl, "settings-group-model");
-		const generation = this.createGroup(containerEl, "settings-group-generation");
-		const embedding = this.createGroup(containerEl, "settings-group-embedding");
-		this.renderEmbeddingConnection(embedding, version);
-		this.renderExcludedFolders(embedding);
-		const updates = this.createGroup(containerEl, "settings-group-index-updates");
-		new Setting(updates).setName(this.t("search-auto-update")).setDesc(this.t("search-auto-update-desc"))
-			.addToggle(toggle => toggle.setValue(this.plugin.settings.autoUpdateNotes).onChange(async value => {
-				this.plugin.settings.autoUpdateNotes = value; await this.plugin.saveSettings();
-			}));
-		const updateDelay = new Setting(updates).setName(this.t("search-update-delay")).setDesc(this.t("search-update-delay-desc"));
-		updateDelay.addText(text => {
-			text.setValue(String(this.plugin.settings.noteUpdateDelaySeconds)).onChange(async raw => {
-				const normalized = raw.trim().replace(",", ".");
-				const seconds = Number(normalized);
-				const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) && isValidNoteUpdateDelay(seconds);
-				text.inputEl.setAttribute("aria-invalid", String(!valid));
-				updateDelay.setDesc(this.t("search-update-delay-desc") + (valid ? "" : ` ${this.t("search-update-delay-invalid")}`));
-				if (!valid) return;
-				this.plugin.settings.noteUpdateDelaySeconds = seconds;
-				await this.plugin.saveSettings();
-			});
-			text.inputEl.setAttribute("inputmode", "decimal");
-		});
-		new Setting(updates).setName(this.t("search-retry")).addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => {
-			try { await this.plugin.noteSearch.resume(true); } catch { /* The index status displays the error. */ }
+	getControlValue(key: string): unknown {
+		if (key === "excluded-folder:new") return this.folderDraft ?? "";
+		if (key.startsWith("excluded-folder:")) return this.plugin.settings.excludedFolders[Number(key.split(":")[1])];
+		return super.getControlValue(key);
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		if (key.startsWith("excluded-folder:")) {
+			if (typeof value !== "string" || !value.trim()) return;
+			const path = value.trim();
+			const index = key === "excluded-folder:new" ? -1 : Number(key.split(":")[1]);
+			if (this.plugin.settings.excludedFolders.some((folder, other) => folder === path && other !== index)) return;
+			if (index === -1) { this.plugin.settings.excludedFolders.push(path); this.folderDraft = undefined; }
+			else if (Number.isInteger(index) && index >= 0 && index < this.plugin.settings.excludedFolders.length) this.plugin.settings.excludedFolders[index] = path;
+			else return;
+			await this.plugin.saveSettings();
+			if (index === -1) this.update();
+			else { this.updateFolderWarnings?.(); this.refreshDomState(); }
+			return;
+		}
+		if (!(key in this.plugin.settings)) return;
+		if (key === "language") {
+			if (value !== "auto" && value !== "en" && value !== "ru") return;
+			this.plugin.settings.language = value;
+		} else if (key === "autoUpdateNotes") {
+			if (typeof value !== "boolean") return;
+			this.plugin.settings.autoUpdateNotes = value;
+		} else {
+			if (typeof value !== "string" || typeof this.getControlValue(key) !== "string") return;
+			let normalized = key === "systemPrompt" ? value : value.trim();
+			if (key === "responseWait") { const parsed = parseResponseWait(value); if (!parsed.valid) return; normalized = parsed.value; }
+			Object.assign(this.plugin.settings, { [key]: normalized });
+		}
+		const saving = this.plugin.saveSettings();
+		this.updateModelStatus?.(); this.updateEmbeddingStatus?.();
+		if (key === "embeddingServerUrl" || key === "embeddingApiKey") {
+			if (this.embeddingModelSetting) this.renderEmbeddingModel(this.embeddingModelSetting, () => this.updateEmbeddingStatus?.());
+		}
+		await saving;
+		if (key === "language") { await this.plugin.refreshLocale(); this.update(); }
+		if (key === "serverUrl") {
+			await this.plugin.refreshModels();
+			if (this.modelSetting) this.renderModels(this.modelSetting, () => this.updateModelStatus?.());
+		}
+	}
+
+	private folderDefinitions(): SettingDefinitionList {
+		const paths = [...this.plugin.settings.excludedFolders];
+		if (this.folderDraft !== undefined) paths.push(this.folderDraft);
+		return {
+			type: "list", heading: this.t("setting-excluded-folders"), cls: "ai-helper-settings-group",
+			addItem: { name: this.t("folder-add"), action: () => { this.folderDraft = ""; this.update(); } },
+			onDelete: index => {
+				if (index === this.plugin.settings.excludedFolders.length) { this.folderDraft = undefined; this.update(); return; }
+				this.plugin.settings.excludedFolders.splice(index, 1);
+				void this.plugin.saveSettings().then(() => this.update());
+			},
+			items: paths.map((path, index) => ({
+				name: this.t("setting-excluded-folders"),
+				desc: this.t("setting-excluded-folders-desc"),
+				control: { type: "folder", key: index === this.plugin.settings.excludedFolders.length ? "excluded-folder:new" : `excluded-folder:${index}`, includeRoot: true,
+					validate: value => { if (!value.trim() || this.plugin.settings.excludedFolders.some((folder, other) => other !== index && folder === value.trim())) return this.t("folder-invalid"); },
+				},
+			})),
+		};
+	}
+
+	private missingFolders(): string[] {
+		return this.plugin.settings.excludedFolders.filter(path => path !== "/" && !this.app?.vault?.getFolderByPath?.(path));
+	}
+
+	private renderFolderWarnings(setting: Setting): () => void {
+		setting.descEl.setAttribute("aria-live", "polite");
+		const update = () => setting.setDesc(this.missingFolders().join(", "));
+		this.updateFolderWarnings = update; update();
+		return () => { if (this.updateFolderWarnings === update) this.updateFolderWarnings = undefined; };
+	}
+
+	refreshExcludedFolders(): void { this.update(); }
+
+	hide(): void {
+		this.folderDraft = undefined;
+		this.plugin.noteSearchConnection?.cancel(); this.plugin.modelConnection?.cancel();
+		super.hide();
+	}
+
+	private renderCheck(setting: Setting, embedding: boolean): () => void {
+		setting.setClass("ai-helper-connection-check");
+		const destination = embedding ? setting.descEl.createDiv({ cls: "ai-helper-embedding-destination" }) : undefined;
+		const statusEl = setting.descEl.createDiv({ cls: "ai-helper-connection-status", attr: { "aria-live": "polite" } });
+		let active = true;
+		const connection = embedding ? this.plugin.noteSearchConnection : this.plugin.modelConnection;
+		if (connection?.status.state === "checking") connection.cancel();
+		const update = () => {
+			if (!active) return;
+			const url = this.plugin.settings.embeddingServerUrl;
+			destination?.setText(url ? `${this.t("embedding-destination")} ${url}` : this.t("embedding-destination-empty"));
+			const status = connection?.status ?? { state: "idle" };
+			const message = status.state === "error" ? this.t(status.code)
+				: embedding ? status.state === "verified" && "dimensions" in status ? `${this.t("embedding-verified")} ${status.dimensions}` : this.t(status.state === "checking" ? "embedding-checking" : "embedding-idle")
+				: this.t(status.state === "verified" ? "model-verified" : status.state === "checking" ? "model-checking" : "model-idle");
+			statusEl.setText(message); statusEl.setAttribute("data-state", status.state);
+		};
+		if (embedding) this.updateEmbeddingStatus = update; else this.updateModelStatus = update;
+		setting.addButton(button => button.setButtonText(this.t(embedding ? "embedding-check" : "model-check")).onClick(async () => {
+			connection.configure(this.plugin.settings);
+			const checking = connection.verify(); update(); await checking; update();
+			if (!embedding && active) await this.plugin.contextWindowConnection?.refresh();
 		}));
-		const index = new Setting(embedding).setClass("ai-helper-index-control").setName(this.t("search-vault-index"));
-		const disclosure = index.descEl.createDiv();
-		const status = index.descEl.createDiv({ attr: { "aria-live": "polite" } });
-		const updateIndex = () => {
-			if (version !== this.displayVersion) return;
+		update();
+		return () => {
+			active = false; connection?.cancel();
+			if (embedding && this.updateEmbeddingStatus === update) this.updateEmbeddingStatus = undefined;
+			if (!embedding && this.updateModelStatus === update) this.updateModelStatus = undefined;
+		};
+	}
+
+	private renderContext(setting: Setting): () => void {
+		const status = setting.descEl.createDiv({ attr: { "aria-live": "polite" } });
+		let active = true;
+		const update = () => {
+			if (!active) return;
+			const connection = this.plugin.contextWindowConnection;
+			const manual = this.plugin.settings.contextWindow;
+			const tokens = effectiveContextWindow(manual, connection?.value);
+			status.setText(manual ? (tokens ? `${this.t("context-manual")}: ${tokens}` : this.t("context-invalid"))
+				: connection?.checking ? this.t("context-checking") : tokens ? `${this.t("context-auto")}: ${tokens} (${connection?.value?.source})` : this.t("context-unknown"));
+		};
+		const unsubscribe = this.plugin.contextWindowConnection?.subscribe(update);
+		setting.addText(text => text.setPlaceholder(this.t("setting-context-window-placeholder")).setValue(this.plugin.settings.contextWindow).onChange(async value => {
+			const valid = !value.trim() || effectiveContextWindow(value) !== undefined;
+			text.inputEl.setAttribute("aria-invalid", String(!valid));
+			if (!valid) { status.setText(this.t("context-invalid")); return; }
+			this.plugin.settings.contextWindow = value.trim(); await this.plugin.saveSettings(); update();
+		})).addButton(button => button.setIcon("refresh-cw").setTooltip(this.t("context-refresh")).onClick(() => this.plugin.contextWindowConnection.refresh()));
+		update(); return () => { active = false; unsubscribe?.(); };
+	}
+
+	private renderIndex(setting: Setting): () => void {
+		setting.setClass("ai-helper-index-control");
+		const disclosure = setting.descEl.createDiv();
+		const status = setting.descEl.createDiv({ attr: { "aria-live": "polite" } });
+		const progressBar = new ProgressBarComponent(setting.descEl);
+		let active = true;
+		const update = () => {
+			if (!active) return;
 			disclosure.setText(this.plugin.noteIndexDisclosure?.() ?? "");
 			const progress = this.plugin.noteSearch?.progress;
-			if (progress) status.setText(`${this.t(`search-state-${progress.state}`)}: ${progress.completed}/${progress.total}${progress.error ? ` — ${this.t(progress.error)}` : ""}`);
+			if (progress) {
+				status.setText(`${this.t(`search-state-${progress.state}`)}: ${progress.completed.toLocaleString(getLanguage())}/${progress.total.toLocaleString(getLanguage())}${progress.error ? ` — ${this.t(progress.error)}` : ""}`);
+				progressBar.setValue(progress.total ? Math.min(100, progress.completed / progress.total * 100) : progress.state === "complete" ? 100 : 0);
+			}
 		};
-		index.addButton((button) => button.setButtonText(this.t("search-vault-index")).onClick(async () => {
-			await this.plugin.manageNoteIndex("index");
-			updateIndex();
-		}));
-		new Setting(embedding).setClass("ai-helper-index-control").setName(this.t("search-vault-clear")).setDesc(this.t("search-clear-desc"))
-			.addButton(button => {
-				button.setWarning().setButtonText(this.t("search-vault-clear")).onClick(async () => {
-					await this.plugin.manageNoteIndex("clear");
-					updateIndex();
-				});
-			});
-		this.unsubscribeIndex = this.plugin.noteSearch?.subscribe(updateIndex);
-		updateIndex();
+		const unsubscribe = this.plugin.noteSearch?.subscribe(update);
+		setting.addButton(button => button.setButtonText(this.t("search-vault-index")).onClick(async () => { await this.plugin.manageNoteIndex("index"); update(); }));
+		update(); return () => { active = false; unsubscribe?.(); };
+	}
 
-		const similarity = new Setting(embedding)
-			.setName(this.t("setting-search-min-similarity"))
-			.setDesc(this.t("setting-search-min-similarity-desc"));
+	private renderSimilarity(setting: Setting): void {
 		let similarityInput: TextComponent;
 		let similaritySlider: SliderComponent;
-		similarity.addText((text) => {
+		setting.addText((text) => {
 			similarityInput = text;
+			text.inputEl.setAttribute("aria-label", this.t("setting-search-min-similarity"));
 			text.setValue(String(this.plugin.settings.noteSearchMinSimilarity)).onChange(async (value) => {
 				const normalized = value.trim().replace(",", ".");
 				const threshold = Number(normalized);
 				if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) || !isValidMinimumSimilarity(threshold)) {
-					similarity.setDesc(`${this.t("setting-search-min-similarity-desc")} ${this.t("setting-search-min-similarity-invalid")}`);
+					setting.setDesc(`${this.t("setting-search-min-similarity-desc")} ${this.t("setting-search-min-similarity-invalid")}`);
 					text.inputEl.setAttribute("aria-invalid", "true");
 					return;
 				}
 				text.inputEl.setAttribute("aria-invalid", "false");
-				similarity.setDesc(this.t("setting-search-min-similarity-desc"));
+				setting.setDesc(this.t("setting-search-min-similarity-desc"));
 				this.plugin.settings.noteSearchMinSimilarity = threshold;
 				similaritySlider.setValue(threshold);
 				await this.plugin.saveSettings();
@@ -162,302 +325,143 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			text.inputEl.setAttribute("inputmode", "decimal");
 		});
 
-		similarity.addSlider(slider => {
+		setting.addSlider(slider => {
 			similaritySlider = slider;
-			slider.setLimits(0, 1, 0.01).setValue(this.plugin.settings.noteSearchMinSimilarity).setDynamicTooltip()
+			slider.sliderEl.setAttribute("aria-label", this.t("setting-search-min-similarity"));
+			slider.setLimits(0, 1, 0.01).setValue(this.plugin.settings.noteSearchMinSimilarity).setDisplayFormat(value => value.toLocaleString(getLanguage(), { maximumFractionDigits: 2 }))
 				.onChange(async value => {
 					this.plugin.settings.noteSearchMinSimilarity = value;
 					similarityInput.setValue(String(value));
 					similarityInput.inputEl.setAttribute("aria-invalid", "false");
-					similarity.setDesc(this.t("setting-search-min-similarity-desc"));
+					setting.setDesc(this.t("setting-search-min-similarity-desc"));
 					await this.plugin.saveSettings();
 				});
 		});
 
-		const appearance = this.createGroup(containerEl, "settings-group-similarity");
-		appearance.createEl("p", { text: this.t("setting-similarity-desc") });
-		for (const level of ["weak", "medium", "strong"] as const) {
-			const setting = new Setting(appearance).setName(this.t(`setting-similarity-${level}`));
-			const description = this.t(level === "strong" ? "setting-similarity-strong-desc" : "setting-similarity-upper-desc");
-			setting.setDesc(description);
-			if (level !== "strong") {
-				const key = level === "weak" ? "weakUpper" : "mediumUpper";
-				setting.addText((text) => {
-					text.setValue(String(this.plugin.settings.similarityAppearance[key])).onChange(async (raw) => {
-						const normalized = raw.trim().replace(",", ".");
-						const next = { ...this.plugin.settings.similarityAppearance, [key]: Number(normalized) };
-						const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) && validSimilarityBoundaries(next.weakUpper, next.mediumUpper);
-						text.inputEl.setAttribute("aria-invalid", String(!valid));
-						setting.setDesc(description + (valid ? "" : ` ${this.t("setting-similarity-invalid")}`));
-						if (!valid) return;
-						this.plugin.settings.similarityAppearance = next;
-						await this.plugin.saveSettings();
-					});
-					text.inputEl.setAttribute("inputmode", "decimal");
-					text.inputEl.setAttribute("aria-label", this.t("setting-similarity-upper-desc"));
-				});
-			}
-			const colorKey = `${level}Color` as const;
-			const selected = this.plugin.settings.similarityAppearance[colorKey];
-			let customColor = selected.startsWith("#") ? selected : level === "weak" ? "#e93147" : level === "medium" ? "#ec7500" : "#08b94e";
-			let picker: ColorComponent;
-			setting.addDropdown((dropdown) => {
-				for (const color of SIMILARITY_COLORS) dropdown.addOption(color, this.t(`similarity-color-${color}`));
-				dropdown.addOption("custom", this.t("similarity-color-custom"));
-				dropdown.setValue(selected.startsWith("#") ? "custom" : selected).onChange(async (value) => {
-					const color = value === "custom" ? customColor : value;
-					if (!isSimilarityColor(color)) return;
-					picker.setDisabled(value !== "custom");
-					this.plugin.settings.similarityAppearance = { ...this.plugin.settings.similarityAppearance, [colorKey]: color };
-					await this.plugin.saveSettings();
-				});
-				dropdown.selectEl.setAttribute("aria-label", this.t("setting-similarity-color"));
-			});
-			setting.addColorPicker((color) => {
-				picker = color;
-				color.setValue(customColor).setDisabled(!selected.startsWith("#")).onChange(async (value) => {
-					if (!isSimilarityColor(value)) return;
-					customColor = value;
-					this.plugin.settings.similarityAppearance = { ...this.plugin.settings.similarityAppearance, [colorKey]: value };
-					await this.plugin.saveSettings();
-				});
-			});
-		}
+	}
 
-		const advanced = this.createGroup(containerEl, "settings-group-fragments");
-		for (const [key, name] of [["noteFragmentSize", "setting-fragment-size"], ["noteFragmentOverlap", "setting-fragment-overlap"]] as const) {
-			const setting = new Setting(advanced).setName(this.t(name)).setDesc(this.t("setting-fragment-options-desc"));
+	private renderAppearance(setting: Setting, level: "weak" | "medium" | "strong"): void {
+		const description = this.t(level === "strong" ? "setting-similarity-strong-desc" : "setting-similarity-upper-desc");
+		setting.setDesc(description);
+		if (level !== "strong") {
+			const key = level === "weak" ? "weakUpper" : "mediumUpper";
 			setting.addText((text) => {
-				text.setValue(String(this.plugin.settings[key])).onChange(async (raw) => {
-					const next = { ...this.plugin.settings, [key]: Number(raw.trim()) };
-					const valid = /^\d+$/.test(raw.trim()) && isValidFragmentOptions(next);
+				text.setValue(String(this.plugin.settings.similarityAppearance[key])).onChange(async (raw) => {
+					const normalized = raw.trim().replace(",", ".");
+					const next = { ...this.plugin.settings.similarityAppearance, [key]: Number(normalized) };
+					const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) && validSimilarityBoundaries(next.weakUpper, next.mediumUpper);
 					text.inputEl.setAttribute("aria-invalid", String(!valid));
-					setting.setDesc(this.t("setting-fragment-options-desc") + (valid ? "" : ` ${this.t("search-fragment-settings")}`));
+					setting.setDesc(description + (valid ? "" : ` ${this.t("setting-similarity-invalid")}`));
 					if (!valid) return;
-					this.plugin.settings[key] = next[key];
+					this.plugin.settings.similarityAppearance = next;
 					await this.plugin.saveSettings();
 				});
-				text.inputEl.setAttribute("inputmode", "numeric");
+				text.inputEl.setAttribute("inputmode", "decimal");
+				text.inputEl.setAttribute("aria-label", this.t("setting-similarity-upper-desc"));
 			});
 		}
-
-		new Setting(general)
-			.setName(this.t("setting-language"))
-			.setDesc(this.t("setting-language-desc"))
-			.addDropdown((dropdown) => {
-				dropdown.addOption("auto", this.t("language-auto"));
-				for (const code of LOCALES) {
-					dropdown.addOption(code, LOCALE_NAMES[code]);
-				}
-				dropdown
-					.setValue(this.plugin.settings.language)
-					.onChange(async (value: string) => {
-						this.plugin.settings.language = value as LanguagePreference;
-						await this.plugin.saveSettings();
-						await this.plugin.refreshLocale();
-						this.display();
-					});
+		const colorKey = `${level}Color` as const;
+		const selected = this.plugin.settings.similarityAppearance[colorKey];
+		let customColor = selected.startsWith("#") ? selected : level === "weak" ? "#e93147" : level === "medium" ? "#ec7500" : "#08b94e";
+		let picker: ColorComponent;
+		setting.addDropdown((dropdown) => {
+			for (const color of SIMILARITY_COLORS) dropdown.addOption(color, this.t(`similarity-color-${color}`));
+			dropdown.addOption("custom", this.t("similarity-color-custom"));
+			dropdown.setValue(selected.startsWith("#") ? "custom" : selected).onChange(async (value) => {
+				const color = value === "custom" ? customColor : value;
+				if (!isSimilarityColor(color)) return;
+				picker.setDisabled(value !== "custom");
+				this.plugin.settings.similarityAppearance = { ...this.plugin.settings.similarityAppearance, [colorKey]: color };
+				await this.plugin.saveSettings();
 			});
-
-		new Setting(model)
-			.setName(this.t("setting-server-url"))
-			.setDesc(this.t("setting-server-url-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-server-url-placeholder"))
-					.setValue(this.plugin.settings.serverUrl)
-					.onChange(async (value) => {
-						this.plugin.settings.serverUrl = value.trim();
-						const save = this.plugin.saveSettings();
-						updateModelCheck();
-						await save;
-						await this.refreshModels();
-					});
-			});
-
-		new Setting(model)
-			.setName(this.t("setting-api-key"))
-			.setDesc(this.t("setting-api-key-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-api-key-placeholder"))
-					.setValue(this.plugin.settings.apiKey)
-					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
-						const save = this.plugin.saveSettings();
-						updateModelCheck();
-						await save;
-					});
-			});
-
-		const modelSetting = new Setting(model)
-			.setName(this.t("setting-model"))
-			.setDesc(this.t("setting-model-desc"));
-		const updateModelCheck = this.renderModelCheck(model, version);
-		this.renderModels(modelSetting, updateModelCheck);
-
-		const contextSetting = new Setting(model)
-			.setName(this.t("setting-context-window"))
-			.setDesc(this.t("setting-context-window-desc"));
-		const contextStatus = contextSetting.descEl.createDiv({ attr: { "aria-live": "polite" } });
-		const updateContext = () => {
-			if (version !== this.displayVersion) return;
-			const connection = this.plugin.contextWindowConnection;
-			const manual = this.plugin.settings.contextWindow;
-			const tokens = effectiveContextWindow(manual, connection?.value);
-			contextStatus.setText(manual ? (tokens ? `${this.t("context-manual")}: ${tokens}` : this.t("context-invalid"))
-				: connection?.checking ? this.t("context-checking")
-				: tokens ? `${this.t("context-auto")}: ${tokens} (${connection?.value?.source})` : this.t("context-unknown"));
-		};
-		this.unsubscribeContext = this.plugin.contextWindowConnection?.subscribe(updateContext);
-		contextSetting
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-context-window-placeholder"))
-					.setValue(this.plugin.settings.contextWindow)
-					.onChange(async (value) => {
-						const valid = !value.trim() || effectiveContextWindow(value) !== undefined;
-						text.inputEl.setAttribute("aria-invalid", String(!valid));
-						if (!valid) { contextStatus.setText(this.t("context-invalid")); return; }
-						this.plugin.settings.contextWindow = value.trim();
-						await this.plugin.saveSettings();
-						updateContext();
-					});
-			})
-			.addButton((button) => button.setIcon("refresh-cw").setTooltip(this.t("context-refresh")).onClick(async () => {
-				await this.plugin.contextWindowConnection.refresh();
-			}));
-		updateContext();
-
-		new Setting(generation)
-			.setClass("ai-helper-settings-textarea")
-			.setName(this.t("setting-system-prompt"))
-			.setDesc(this.t("setting-system-prompt-desc"))
-			.addTextArea((textarea) => {
-				textarea
-					.setPlaceholder(this.t("setting-system-prompt-placeholder"))
-					.setValue(this.plugin.settings.systemPrompt)
-					.onChange(async (value) => {
-						this.plugin.settings.systemPrompt = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(generation)
-			.setName(this.t("setting-temperature"))
-			.setDesc(this.t("setting-temperature-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-temperature-placeholder"))
-					.setValue(this.plugin.settings.temperature)
-					.onChange(async (value) => {
-						this.plugin.settings.temperature = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
-
-		this.renderTopP(generation);
-
-		new Setting(generation)
-			.setName(this.t("setting-max-tokens"))
-			.setDesc(this.t("setting-max-tokens-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-max-tokens-placeholder"))
-					.setValue(this.plugin.settings.maxTokens)
-					.onChange(async (value) => {
-						this.plugin.settings.maxTokens = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
-
-		const responseWait = new Setting(generation)
-			.setName(this.t("setting-response-wait"))
-			.setDesc(this.t("setting-response-wait-desc"));
-		responseWait.addText((text) => {
-			text.setValue(this.plugin.settings.responseWait).onChange(async (raw) => {
-				const parsed = parseResponseWait(raw);
-				const valid = parsed.valid;
-				text.inputEl.setAttribute("aria-invalid", String(!valid));
-				responseWait.setDesc(this.t("setting-response-wait-desc") + (valid ? "" : ` ${this.t("setting-response-wait-invalid")}`));
-				if (!parsed.valid) return;
-				this.plugin.settings.responseWait = parsed.value;
+			dropdown.selectEl.setAttribute("aria-label", this.t("setting-similarity-color"));
+		});
+		setting.addColorPicker((color) => {
+			picker = color;
+			color.setValue(customColor).setDisabled(!selected.startsWith("#")).onChange(async (value) => {
+				if (!isSimilarityColor(value)) return;
+				customColor = value;
+				this.plugin.settings.similarityAppearance = { ...this.plugin.settings.similarityAppearance, [colorKey]: value };
 				await this.plugin.saveSettings();
 			});
 		});
 	}
 
-	private renderEmbeddingConnection(parent: HTMLElement, version: number): void {
-		const destination = parent.createDiv({ cls: "ai-helper-embedding-destination", attr: { "aria-live": "polite" } });
-		const update = () => {
-			if (version !== this.displayVersion) return;
-			const url = this.plugin.settings.embeddingServerUrl;
-			destination.setText(url ? `${this.t("embedding-destination")} ${url}` : this.t("embedding-destination-empty"));
-			const status = this.plugin.noteSearchConnection?.status ?? { state: "idle" };
-			const message = status.state === "verified" ? `${this.t("embedding-verified")} ${status.dimensions}`
-				: status.state === "error" ? this.t(status.code)
-				: this.t(status.state === "checking" ? "embedding-checking" : "embedding-idle");
-			this.updateConnectionStatus(statusEl, status.state, message);
-		};
-		const fields: Array<{ key: keyof EmbeddingConnection; name: LocaleKey; description: LocaleKey }> = [
-			{ key: "embeddingServerUrl", name: "setting-embedding-server-url", description: "setting-embedding-server-url-desc" },
-			{ key: "embeddingApiKey", name: "setting-embedding-api-key", description: "setting-api-key-desc" },
-		];
-		for (const field of fields) {
-			new Setting(parent).setName(this.t(field.name)).setDesc(this.t(field.description)).addText((text) => {
-				text.setValue(this.plugin.settings[field.key]).onChange(async (value) => {
-					this.plugin.settings[field.key] = value.trim();
-					const save = this.plugin.saveSettings();
-					this.renderEmbeddingModel(modelSetting, update, version);
-					update();
-					await save;
-				});
-				if (field.key === "embeddingApiKey") text.inputEl.type = "password";
+	private renderFragment(setting: Setting, key: "noteFragmentSize" | "noteFragmentOverlap"): void {
+		setting.addText((text) => {
+			text.setValue(String(this.plugin.settings[key])).onChange(async (raw) => {
+				const next = { ...this.plugin.settings, [key]: Number(raw.trim()) };
+				const valid = /^\d+$/.test(raw.trim()) && isValidFragmentOptions(next);
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				setting.setDesc(this.t("setting-fragment-options-desc") + (valid ? "" : ` ${this.t("search-fragment-settings")}`));
+				if (!valid) return;
+				this.plugin.settings[key] = next[key];
+				await this.plugin.saveSettings();
 			});
-		}
-		const modelSetting = new Setting(parent).setName(this.t("setting-embedding-model")).setDesc(this.t("setting-embedding-model-desc"));
-		this.renderEmbeddingModel(modelSetting, update, version);
-		const check = new Setting(parent).setName(this.t("embedding-check")).setDesc(this.t("embedding-check-desc")).setClass("ai-helper-connection-check");
-		const statusEl = check.descEl.createDiv({ cls: "ai-helper-connection-status", attr: { "aria-live": "polite" } });
-		check.addButton((button) => button.setButtonText(this.t("embedding-check")).onClick(async () => {
-			this.plugin.noteSearchConnection.configure(this.plugin.settings);
-			const checking = this.plugin.noteSearchConnection.verify();
-			update();
-			await checking;
-			update();
-		}));
-		update();
+			text.inputEl.setAttribute("inputmode", "numeric");
+		});
 	}
 
-	private updateConnectionStatus(el: HTMLElement, state: "idle" | "checking" | "verified" | "error", message: string): void {
-		el.setText(message);
-		el.setAttribute("data-state", state);
+	private renderDelay(setting: Setting): void {
+		setting.addText(text => {
+			text.setValue(String(this.plugin.settings.noteUpdateDelaySeconds)).onChange(async raw => {
+				const normalized = raw.trim().replace(",", ".");
+				const seconds = Number(normalized);
+				const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) && isValidNoteUpdateDelay(seconds);
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				setting.setDesc(this.t("search-update-delay-desc") + (valid ? "" : ` ${this.t("search-update-delay-invalid")}`));
+				if (!valid) return;
+				this.plugin.settings.noteUpdateDelaySeconds = seconds;
+				await this.plugin.saveSettings();
+			});
+			text.inputEl.setAttribute("inputmode", "decimal");
+		});
 	}
 
-	private renderModelCheck(parent: HTMLElement, version: number): () => void {
-		const check = new Setting(parent).setName(this.t("model-check")).setDesc(this.t("model-check-desc")).setClass("ai-helper-connection-check");
-		const statusEl = check.descEl.createDiv({ cls: "ai-helper-connection-status", attr: { "aria-live": "polite" } });
-		const update = () => {
-			if (version !== this.displayVersion) return;
-			const status = this.plugin.modelConnection?.status ?? { state: "idle" };
-			const message = status.state === "error" ? this.t(status.code)
-				: this.t(status.state === "verified" ? "model-verified" : status.state === "checking" ? "model-checking" : "model-idle");
-			this.updateConnectionStatus(statusEl, status.state, message);
+	private renderTopP(setting: Setting): void {
+		let input: TextComponent;
+		let slider: SliderComponent;
+		let lastManual = this.plugin.settings.topP || "1";
+		const disabled = () => {
+			const useServer = this.plugin.settings.topP === "";
+			input.setDisabled(useServer); slider.setDisabled(useServer);
 		};
-		check.addButton((button) => button.setButtonText(this.t("model-check")).onClick(async () => {
-			this.plugin.modelConnection.configure(this.plugin.settings);
-			const checking = this.plugin.modelConnection.verify();
-			update();
-			await checking;
-			update();
-			await this.plugin.contextWindowConnection?.refresh();
-			update();
-		}));
-		update();
-		return update;
+		setting.addText(text => {
+			input = text;
+			text.inputEl.setAttribute("aria-label", this.t("setting-top-p"));
+			text.setValue(this.plugin.settings.topP).onChange(async raw => {
+				const value = raw.trim().replace(",", ".");
+				const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) && Number(value) >= 0 && Number(value) <= 1;
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				setting.setDesc(this.t("setting-top-p-desc") + (valid ? "" : ` ${this.t("unit-interval-invalid")}`));
+				if (!valid) return;
+				this.plugin.settings.topP = lastManual = value;
+				slider.setValue(Number(value)); await this.plugin.saveSettings();
+			});
+			text.inputEl.setAttribute("inputmode", "decimal");
+		});
+		setting.addSlider(control => {
+			slider = control;
+			control.sliderEl.setAttribute("aria-label", this.t("setting-top-p"));
+			control.setLimits(0, 1, 0.01).setValue(Number(lastManual)).setDisplayFormat(value => value.toLocaleString(getLanguage(), { maximumFractionDigits: 2 })).onChange(async value => {
+				this.plugin.settings.topP = lastManual = String(value);
+				input.setValue(lastManual); input.inputEl.setAttribute("aria-invalid", "false");
+				setting.setDesc(this.t("setting-top-p-desc")); await this.plugin.saveSettings();
+			});
+		});
+		setting.controlEl.createSpan({ text: this.t("use-server-top-p") });
+		setting.addToggle(toggle => {
+			toggle.toggleEl.setAttribute("aria-label", this.t("use-server-top-p"));
+			toggle.setTooltip(this.t("use-server-top-p")).setValue(!this.plugin.settings.topP).onChange(async useServer => {
+			this.plugin.settings.topP = useServer ? "" : lastManual;
+			input.setValue(this.plugin.settings.topP); input.inputEl.setAttribute("aria-invalid", "false");
+			setting.setDesc(this.t("setting-top-p-desc")); disabled(); await this.plugin.saveSettings();
+			});
+		});
+		disabled();
 	}
 
-	private renderEmbeddingModel(setting: Setting, onChange: () => void, version: number, manual?: boolean): void {
+	private renderEmbeddingModel(setting: Setting, onChange: () => void, manual?: boolean): void {
 		setting.controlEl.empty();
 		setting.controlEl.addClass("ai-helper-model-controls");
 		const models = this.plugin.embeddingModels ?? [];
@@ -475,7 +479,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						save = this.plugin.saveSettings();
 						onChange();
 					}
-					this.renderEmbeddingModel(setting, onChange, version, !value);
+					this.renderEmbeddingModel(setting, onChange, !value);
 					await save;
 				});
 			});
@@ -494,128 +498,13 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		setting.addButton((button) => {
 			button.setIcon("refresh-cw").setTooltip(this.t("setting-refresh-models")).onClick(async () => {
 				await this.plugin.refreshEmbeddingModels();
-				if (version === this.displayVersion) this.display();
+				if (this.embeddingModelSetting === setting) this.renderEmbeddingModel(setting, onChange);
 			});
 			button.buttonEl.setAttribute("aria-label", this.t("setting-refresh-models"));
 		});
 		setting.setDesc(this.t("setting-embedding-model-desc") + (loaded ? ` ${this.t("setting-embedding-models-hint")}`
 			: this.plugin.embeddingModelStatus === "empty" ? ` ${this.t("setting-models-empty")}`
 			: this.plugin.embeddingModelStatus === "error" ? ` ${this.t("setting-models-load-error")}` : ""));
-	}
-
-	private renderTopP(parent: HTMLElement): void {
-		const setting = new Setting(parent).setName(this.t("setting-top-p")).setDesc(this.t("setting-top-p-desc"));
-		let input: TextComponent;
-		let slider: SliderComponent;
-		let lastManual = this.plugin.settings.topP || "1";
-		const disabled = () => {
-			const useServer = this.plugin.settings.topP === "";
-			input.setDisabled(useServer); slider.setDisabled(useServer);
-		};
-		setting.addText(text => {
-			input = text;
-			text.setValue(this.plugin.settings.topP).onChange(async raw => {
-				const value = raw.trim().replace(",", ".");
-				const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) && Number(value) >= 0 && Number(value) <= 1;
-				text.inputEl.setAttribute("aria-invalid", String(!valid));
-				setting.setDesc(this.t("setting-top-p-desc") + (valid ? "" : ` ${this.t("unit-interval-invalid")}`));
-				if (!valid) return;
-				this.plugin.settings.topP = lastManual = value;
-				slider.setValue(Number(value)); await this.plugin.saveSettings();
-			});
-			text.inputEl.setAttribute("inputmode", "decimal");
-		});
-		setting.addSlider(control => {
-			slider = control;
-			control.setLimits(0, 1, 0.01).setValue(Number(lastManual)).setDynamicTooltip().onChange(async value => {
-				this.plugin.settings.topP = lastManual = String(value);
-				input.setValue(lastManual); input.inputEl.setAttribute("aria-invalid", "false");
-				setting.setDesc(this.t("setting-top-p-desc")); await this.plugin.saveSettings();
-			});
-		});
-		new Setting(parent).setName(this.t("use-server-top-p")).addToggle(toggle => toggle.setValue(!this.plugin.settings.topP).onChange(async useServer => {
-			this.plugin.settings.topP = useServer ? "" : lastManual;
-			input.setValue(this.plugin.settings.topP); input.inputEl.setAttribute("aria-invalid", "false");
-			setting.setDesc(this.t("setting-top-p-desc")); disabled(); await this.plugin.saveSettings();
-		}));
-		disabled();
-	}
-
-	private closeFolderSuggests(): void {
-		for (const suggest of this.folderSuggests) suggest.close();
-		this.folderSuggests = [];
-		this.excludedFoldersInputs = [];
-	}
-
-	private renderExcludedFolders(parent: HTMLElement): void {
-		const list = parent.createDiv();
-		const render = () => {
-			this.closeFolderSuggests();
-			list.empty();
-			const warning = list.createDiv({ attr: { "aria-live": "polite" } });
-			const updateWarnings = () => {
-				const missing = this.plugin.settings.excludedFolders.filter(path => path !== "/" && !this.app?.vault?.getFolderByPath?.(path));
-				warning.setText(missing.length ? `${this.t("search-missing-folder")}: ${missing.join(", ")}` : "");
-			};
-			this.updateExcludedFoldersWarning = updateWarnings;
-			for (const [index, path] of this.plugin.settings.excludedFolders.entries()) {
-				const setting = new Setting(list).setName(this.t("setting-excluded-folders"));
-				setting.addSearch(input => {
-					const change = async (raw: string) => {
-						const value = raw.trim();
-						const valid = !!value && !this.plugin.settings.excludedFolders.some((folder, other) => other !== index && folder === value);
-						input.inputEl.setAttribute("aria-invalid", String(!valid));
-						if (!valid) return;
-						this.plugin.settings.excludedFolders[index] = value;
-						await this.plugin.saveSettings(); updateWarnings();
-					};
-					input.setValue(path).onChange(change);
-					this.excludedFoldersInputs.push(input);
-					this.folderSuggests.push(new FolderSuggest(this.app, input, value => { void change(value); }));
-				}).addButton(button => button.setIcon("trash-2").setTooltip(this.t("folder-remove")).onClick(async () => {
-					this.plugin.settings.excludedFolders.splice(index, 1);
-					await this.plugin.saveSettings(); render();
-				}));
-			}
-			let candidate: SearchComponent;
-			new Setting(list).setName(this.t("folder-add")).setDesc(this.t("setting-excluded-folders-desc"))
-				.addSearch(input => {
-					candidate = input;
-					this.folderSuggests.push(new FolderSuggest(this.app, input, value => { input.setValue(value); }));
-				}).addButton(button => button.setIcon("plus").setTooltip(this.t("folder-add")).onClick(async () => {
-					const path = candidate.getValue().trim();
-					if (!path || this.plugin.settings.excludedFolders.includes(path)) return;
-					this.plugin.settings.excludedFolders.push(path);
-					await this.plugin.saveSettings(); render();
-				}));
-			updateWarnings();
-		};
-		render();
-	}
-
-	refreshExcludedFolders(): void {
-		this.excludedFoldersInputs.forEach((input, index) => input.setValue(this.plugin.settings.excludedFolders[index] ?? ""));
-		this.updateExcludedFoldersWarning?.();
-	}
-
-	hide(): void {
-		this.closeFolderSuggests();
-		this.updateExcludedFoldersWarning = undefined;
-		this.unsubscribeIndex?.();
-		this.unsubscribeContext?.();
-		this.unsubscribeContext = undefined;
-		this.displayVersion++;
-		this.plugin.noteSearchConnection.cancel();
-		this.plugin.modelConnection?.cancel();
-	}
-
-	private createGroup(parent: HTMLElement, headingKey: LocaleKey): HTMLElement {
-		return new SettingGroup(parent).setHeading(this.t(headingKey)).addClass("ai-helper-settings-group").listEl;
-	}
-
-	private async refreshModels(): Promise<void> {
-		await this.plugin.refreshModels();
-		this.display();
 	}
 
 	private renderModels(modelSetting: Setting, onChange: () => void): void {
@@ -666,7 +555,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			button
 				.setIcon("refresh-cw")
 				.setTooltip(this.t("setting-refresh-models"))
-				.onClick(async () => { await this.refreshModels(); });
+				.onClick(async () => { await this.plugin.refreshModels(); if (this.modelSetting === modelSetting) this.renderModels(modelSetting, onChange); });
 			button.buttonEl.setAttribute("aria-label", this.t("setting-refresh-models"));
 		});
 	}

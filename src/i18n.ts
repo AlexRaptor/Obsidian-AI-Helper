@@ -14,6 +14,10 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"settings-page-conversation": "Connection and conversation",
+	"settings-page-search": "Note search",
+	"settings-page-advanced": "Advanced settings",
+	"folder-invalid": "Enter a unique, non-empty folder path.",
 	"command-new-conversation": "New conversation",
 	"command-stop-generation": "Stop generation",
 	"source-open": "Open source",
@@ -218,6 +222,10 @@ export const en = {
 } as const;
 
 export const ru = {
+	"settings-page-conversation": "Подключение и диалог",
+	"settings-page-search": "Поиск по заметкам",
+	"settings-page-advanced": "Дополнительные параметры",
+	"folder-invalid": "Введите непустой путь папки без дубликатов.",
 	"command-new-conversation": "Новый диалог",
 	"command-stop-generation": "Остановить генерацию",
 	"source-open": "Открыть источник",
