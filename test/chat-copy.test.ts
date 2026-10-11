@@ -137,7 +137,7 @@ describe("copying chat messages", () => {
 		expect(button.attributes["data-icon"]).toBe("check");
 		await vi.advanceTimersByTimeAsync(1);
 		expect(button.attributes["data-icon"]).toBe("copy");
-		expect(button.attributes.title).toBe("Копировать сообщение");
+		expect(button.attributes["data-tooltip"]).toBe("Копировать сообщение");
 	});
 
 	it.each(["en", "ru"] as const)("reports clipboard rejection in %s and allows retry", async (locale) => {

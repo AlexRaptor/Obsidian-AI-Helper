@@ -249,14 +249,14 @@ export class ChatView extends ItemView {
 			const key = progress.state === "idle" ? "search-vault-index" : progress.state === "error" ? "search-repeat" : "search-continue";
 			setIcon(this.indexAction, progress.state === "error" ? "rotate-cw" : "play");
 			this.indexAction.setAttribute("aria-label", this.t(key));
-			this.indexAction.setAttribute("title", this.t(key));
+			setTooltip(this.indexAction, this.t(key));
 			this.indexAction.disabled = this.indexActionPending || progress.state === "indexing";
 			this.indexAction.style.display = progress.state === "complete" || progress.state === "indexing" ? "none" : "";
 		}
 		if (this.indexPause) {
 			setIcon(this.indexPause, "pause");
 			this.indexPause.setAttribute("aria-label", this.t("search-pause"));
-			this.indexPause.setAttribute("title", this.t("search-pause"));
+			setTooltip(this.indexPause, this.t("search-pause"));
 			this.indexPause.style.display = progress.state === "indexing" ? "" : "none";
 		}
 	}
@@ -333,7 +333,7 @@ export class ChatView extends ItemView {
 		row.copyBtn.disabled = this.activeMessage === message || !!row.copying;
 		const label = this.t(row.copied ? "chat-message-copied" : "chat-copy-message");
 		row.copyBtn.setAttribute("aria-label", label);
-		row.copyBtn.setAttribute("title", label);
+		setTooltip(row.copyBtn, label);
 		setIcon(row.copyBtn, row.copied ? "check" : "copy");
 	}
 
@@ -455,7 +455,7 @@ export class ChatView extends ItemView {
 			this.sendBtn.className = `ai-helper-send${thinking ? " ai-helper-stop" : ""}`;
 			const label = this.t(thinking ? "stop" : "send");
 			this.sendBtn.setAttribute("aria-label", label);
-			this.sendBtn.setAttribute("title", label);
+			setTooltip(this.sendBtn, label);
 			setIcon(this.sendBtn, thinking ? "square" : this.searchEnabled ? "search" : "play");
 		}
 	}
