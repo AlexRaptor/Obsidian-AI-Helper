@@ -432,7 +432,9 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				vectors[item.index] = vector;
 			}
 			return { ok: true, value: vectors };
-		}, MODELS_TIMEOUT_MS, signal);
+		// Local models may compute a batch sequentially. Allow more time per input,
+		// with a finite upper bound; cancellation still interrupts immediately.
+		}, Math.min(MODELS_TIMEOUT_MS * input.length, 120_000), signal);
 		return !result.ok && !result.error.code ? fail("embedding-network") : result;
 	}
 

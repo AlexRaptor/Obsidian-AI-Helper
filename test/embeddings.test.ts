@@ -82,3 +82,18 @@ it("aborts a stalled response body after the check deadline", async () => {
 	expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
 	expect(vi.getTimerCount()).toBe(0);
 });
+
+it("allows a batch to outlive the single-input deadline and still aborts at a bounded deadline", async () => {
+	vi.useFakeTimers();
+	const fetch = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, json: () => new Promise(() => {}) }) as Response);
+	let settled = false;
+	const embedding = createServerClient(fetch).embeddings("http://s", "m", Array(16).fill("text"));
+	void embedding.then(() => { settled = true; });
+	await vi.advanceTimersByTimeAsync(15_000);
+	expect(settled).toBe(false);
+	expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+	await vi.advanceTimersByTimeAsync(105_000);
+	expect(await embedding).toMatchObject({ ok: false, error: { code: "embedding-network" } });
+	expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
+	expect(vi.getTimerCount()).toBe(0);
+});

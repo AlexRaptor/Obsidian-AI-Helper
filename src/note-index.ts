@@ -2,7 +2,7 @@ import type { PaneType } from "obsidian";
 import type { ServerClient } from "./server-client";
 import type { EmbeddingConnection } from "./note-search";
 
-import { noteFragments, DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
+import { noteFragments, DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions, type NoteFragment } from "./note-fragments";
 
 export interface NoteSource { path: string; text: string; headings: string[]; contentHash: string; similarity: number; partial?: boolean; }
 export type NoteSearchErrorCode = "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed" | "search-excluded";
@@ -24,6 +24,9 @@ interface NoteSearchEnvironment {
 // Calibrated on the Russian single-note acceptance scenario with Qwen3 embeddings.
 export const DEFAULT_MIN_SOURCE_SIMILARITY = 0.45;
 export const DEFAULT_NOTE_UPDATE_DELAY_SECONDS = 3;
+// Bound request size independently of the configured fragment size.
+const EMBEDDING_BATCH_SIZE = 16;
+const EMBEDDING_BATCH_CHARACTERS = 64000;
 export function isValidNoteUpdateDelay(value: unknown): value is number {
 	// Browser timers use a signed 32-bit millisecond delay.
 	return typeof value === "number" && Number.isFinite(value) && value >= 0.001 && value <= 2147483647 / 1000;
@@ -278,11 +281,11 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		});
 		check(version); notify();
 	}
-	async function embed(text: string, signal?: AbortSignal): Promise<number[]> {
+	async function embed(texts: string[], signal?: AbortSignal): Promise<number[][]> {
 		if (!connection) throw new NoteSearchError("search-rebuild");
-		const result = await environment.client.embeddings(connection.embeddingServerUrl, connection.embeddingModel, [text], connection.embeddingApiKey, signal);
-		if (!result.ok || result.value[0].length > 65536) throw new NoteSearchError("search-failed");
-		return result.value[0];
+		const result = await environment.client.embeddings(connection.embeddingServerUrl, connection.embeddingModel, texts, connection.embeddingApiKey, signal);
+		if (!result.ok || result.value.some(vector => vector.length > 65536)) throw new NoteSearchError("search-failed");
+		return result.value;
 	}
 	async function processNote(path: string, version: number, identity: string): Promise<IndexedNote | null> {
 		check(version);
@@ -292,15 +295,26 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		if (text === null) return null;
 		if (!text.trim()) return { path, contentHash: await hash(text), fingerprint: identity, fragments: [] };
 		const fragments: IndexedFragment[] = [];
+		let batch: NoteFragment[] = [];
+		let characters = 0;
+		async function flush() {
+			if (!batch.length) return;
+			check(version);
+			const vectors = await embed(batch.map(fragment => fragment.text), controller?.signal);
+			check(version);
+			batch.forEach((fragment, index) => fragments.push({ ...fragment, vector: vectors[index] }));
+			batch = []; characters = 0;
+			// Keep pause and vault events responsive even with an immediate transport.
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		}
 		try {
-			// A single bounded fragment per HTTP batch; yield even with an immediate transport.
 			for (const fragment of noteFragments(path, text, environment.metadata?.(path, text) ?? {}, fragmentOptions)) {
 				check(version);
-				const vector = await embed(fragment.text, controller?.signal);
-				check(version);
-				fragments.push({ ...fragment, vector });
-				await new Promise<void>((resolve) => setTimeout(resolve, 0));
+				if (batch.length && characters + fragment.text.length > EMBEDDING_BATCH_CHARACTERS) await flush();
+				batch.push(fragment); characters += fragment.text.length;
+				if (batch.length === EMBEDDING_BATCH_SIZE) await flush();
 			}
+			await flush();
 		} catch (error) {
 			check(version);
 			if (error instanceof NoteSearchError) throw error;
@@ -505,7 +519,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			}
 			check(version, signal);
 			if (!current.length) throw new NoteSearchError("search-rebuild");
-			const vector = await embed(question, signal);
+			const [vector] = await embed([question], signal);
 			check(version, signal);
 			let best: NoteSource | null = null;
 			let score = -Infinity;

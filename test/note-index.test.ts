@@ -30,6 +30,64 @@ describe("single note search", () => {
 	});
 });
 
+it("sends multiple note fragments in one embedding request", async () => {
+	const { search, notes, requests } = fixture();
+	notes.set("Train.md", "# Departure\nLeaves at 18:30.\n# Arrival\nArrives at 22:00.");
+	await search.index("Train.md");
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toHaveLength(2);
+	expect(requests[0][0]).toContain("Leaves at 18:30.");
+	expect(requests[0][1]).toContain("Arrives at 22:00.");
+});
+
+it.each([4000, 16000])("bounds embedding batches by count and text volume with fragment size %s", async (size) => {
+	const { search, notes, requests, connection } = fixture();
+	search.configure({ ...connection, noteFragmentSize: size, noteFragmentOverlap: 0 });
+	notes.set("Train.md", Array.from({ length: 35 }, (_, index) => `# Section ${index}\n` + "a".repeat(size - 100)).join("\n"));
+	await search.index("Train.md");
+	expect(requests.flat()).toHaveLength(35);
+	expect(requests.length).toBe(size === 4000 ? 3 : 9);
+	expect(requests.every(batch => batch.length <= 16 && batch.reduce((length, text) => length + text.length, 0) <= 64000)).toBe(true);
+	expect(requests.flat().map(text => text.match(/Section \d+/)?.[0])).toEqual(Array.from({ length: 35 }, (_, index) => `Section ${index}`));
+});
+
+it("aborts a pending batch on pause and discards its late result", async () => {
+	const { options, notes, connection } = fixture();
+	notes.set("Train.md", "# Departure\nLeaves at 18:30.\n# Arrival\nArrives at 22:00.");
+	let finish!: (response: Response) => void;
+	let started!: () => void;
+	let signal: AbortSignal | null | undefined;
+	const ready = new Promise<void>(resolve => { started = resolve; });
+	const client = createServerClient(async (_url, init) => {
+		signal = init?.signal; started();
+		return new Promise<Response>(resolve => { finish = resolve; });
+	});
+	const search = createNoteSearch({ ...options, client }); search.configure(connection);
+	const indexing = search.index("Train.md").catch(error => error);
+	await ready; await search.pause();
+	expect(signal?.aborted).toBe(true);
+	finish(new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }, { index: 1, embedding: [0, 1] }] })));
+	expect(await indexing).toMatchObject({ code: "search-rebuild" });
+	const restored = createNoteSearch(options); restored.configure(connection);
+	await expect(restored.search("Arrival")).rejects.toMatchObject({ code: "search-rebuild" });
+});
+
+it("does not save an incomplete note when a later embedding batch fails", async () => {
+	const { options, notes, connection } = fixture();
+	notes.set("Train.md", Array.from({ length: 17 }, (_, index) => `# Section ${index}\nText.`).join("\n"));
+	let calls = 0;
+	const client = createServerClient(async (_url, init) => {
+		if (++calls === 2) return new Response("offline", { status: 500 });
+		const { input } = JSON.parse(String(init?.body));
+		return new Response(JSON.stringify({ data: input.map((_: string, index: number) => ({ index, embedding: [1, 0] })) }));
+	});
+	const search = createNoteSearch({ ...options, client }); search.configure(connection);
+	await expect(search.index("Train.md")).rejects.toMatchObject({ code: "search-failed" });
+	expect(calls).toBe(2);
+	const restored = createNoteSearch(options); restored.configure(connection);
+	await expect(restored.search("Section 0")).rejects.toMatchObject({ code: "search-rebuild" });
+});
+
 it.each(["changed", "deleted", "renamed"])("rejects a %s note after restoring the persisted index", async (change) => {
 	const { search, notes, options, connection } = fixture(); await search.index("Train.md");
 	if (change === "changed") notes.set("Train.md", "The train now departs at 19:00.");
@@ -49,9 +107,10 @@ it("indexes long sections in bounded overlapping fragments and restores the matc
 	const { search, notes, requests, options, connection } = fixture();
 	notes.set("Train.md", "# Travel\n## Departure\n" + "The train departs at 18:30. ".repeat(250) + "\n\n## Arrival\nArrives at 22:00.");
 	await search.index("Train.md");
-	expect(requests.length).toBeGreaterThan(2);
-	expect(requests.every(([text]) => text.length <= 4000)).toBe(true);
-	expect(requests[0][0].slice(-200)).toBe(requests[1][0].split("\n\n").at(-1)?.slice(0, 200));
+	const fragments = requests.flat();
+	expect(fragments.length).toBeGreaterThan(2);
+	expect(fragments.every(text => text.length <= 4000)).toBe(true);
+	expect(fragments[0].slice(-200)).toBe(fragments[1].split("\n\n").at(-1)?.slice(0, 200));
 	const restored = createNoteSearch(options); restored.configure(connection);
 	const source = await restored.search("Departure");
 	expect(source?.headings).toEqual(["Travel", "Departure"]);
@@ -135,8 +194,8 @@ it("indexes only allowed metadata and literal embeds, returns the relevant headi
 	const opened: Array<[string, string | undefined]> = [];
 	const inputs: string[] = [];
 	const client = createServerClient(async (_url, init) => {
-		const { input } = JSON.parse(String(init?.body)); inputs.push(input[0]);
-		return new Response(JSON.stringify({ data: [{ index: 0, embedding: input[0].includes("Arriv") ? [0, 1] : [1, 0] }] }));
+		const { input } = JSON.parse(String(init?.body)); inputs.push(...input);
+		return new Response(JSON.stringify({ data: input.map((text: string, index: number) => ({ index, embedding: text.includes("Arriv") ? [0, 1] : [1, 0] })).reverse() }));
 	});
 	const search = createNoteSearch({ ...options, client,
 		metadata: () => ({ tags: ["rail"], aliases: ["North"], secret: "hidden-password" }),
@@ -164,8 +223,8 @@ it("validates fragment options, invalidates incompatible saved results and uses 
 	await expect(search.search("When?")).rejects.toMatchObject({ code: "search-rebuild" });
 	requests.length = 0;
 	await search.index("Train.md");
-	expect(requests.length).toBeGreaterThan(10);
-	expect(requests.every(([text]) => text.length <= 512)).toBe(true);
+	expect(requests.flat().length).toBeGreaterThan(10);
+	expect(requests.flat().every(text => text.length <= 512)).toBe(true);
 	const restored = createNoteSearch(options); restored.configure(connection);
 	await expect(restored.search("When?")).rejects.toMatchObject({ code: "search-rebuild" });
 	restored.configure({ ...connection, noteFragmentSize: 512, noteFragmentOverlap: 32 });
@@ -177,7 +236,7 @@ it("keeps heading ancestry when levels are skipped and ignores headings inside f
 	const { options, connection, notes } = fixture();
 	const client = createServerClient(async (_url, init) => {
 		const { input } = JSON.parse(String(init?.body));
-		return new Response(JSON.stringify({ data: [{ index: 0, embedding: input[0].includes("Arrival") ? [0, 1] : [1, 0] }] }));
+		return new Response(JSON.stringify({ data: input.map((text: string, index: number) => ({ index, embedding: text.includes("Arrival") ? [0, 1] : [1, 0] })) }));
 	});
 	const search = createNoteSearch({ ...options, client }); search.configure(connection);
 	notes.set("Train.md", "# Travel\n### Departure\n#### Platform\n```md\n# Example\n```\n### Arrival\nArrives at 22:00.");
@@ -195,7 +254,7 @@ it("recognizes Setext headings and keeps fitting paragraphs whole", async () => 
 	const source = await search.search("When?");
 	expect(source?.headings).toEqual(["Travel", "Departure"]);
 	expect(requests[0][0]).toBe("Train\nTrain.md\nTravel\nDeparture\n\n" + "A".repeat(180));
-	expect(requests[1][0]).toBe("Train\nTrain.md\nTravel\nDeparture\n\n" + "B".repeat(350));
+	expect(requests[0][1]).toBe("Train\nTrain.md\nTravel\nDeparture\n\n" + "B".repeat(350));
 });
 
 it("requests rebuilding instead of throwing on a corrupted persisted fragment", async () => {
@@ -223,7 +282,7 @@ it("requires closing fences to end with whitespace so code cannot swallow a real
 	notes.set("Train.md", "```markdown\n```example\n# Literal code heading\n```\n# Real\nActual body");
 	const client = createServerClient(async (_url, init) => {
 		const { input } = JSON.parse(String(init?.body));
-		return new Response(JSON.stringify({ data: [{ index: 0, embedding: input[0].includes("Actual") ? [0, 1] : [1, 0] }] }));
+		return new Response(JSON.stringify({ data: input.map((text: string, index: number) => ({ index, embedding: text.includes("Actual") ? [0, 1] : [1, 0] })) }));
 	});
 	const search = createNoteSearch({ ...options, client }); search.configure(connection); await search.index("Train.md");
 	expect(await search.search("Actual")).toMatchObject({ headings: ["Real"], text: "Train\nTrain.md\nReal\n\nActual body" });

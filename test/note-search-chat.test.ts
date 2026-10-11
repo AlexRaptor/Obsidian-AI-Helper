@@ -24,7 +24,7 @@ async function setup(mode: "normal" | "unrelated" | "offline" | "pending" | "sim
 			if (mode === "offline") throw new Error("offline");
 			if (mode === "pending") return new Promise<Response>((done) => { finish = done; });
 		}
-		return new Response(JSON.stringify(url.endsWith("/embeddings") ? { data: [{ index: 0, embedding: !indexing && mode === "unrelated" ? [0, 1] : !indexing && mode === "similar" ? [0.6, 0.8] : [1, 0] }] }
+		return new Response(JSON.stringify(url.endsWith("/embeddings") ? { data: body.input.map((_: string, index: number) => ({ index, embedding: !indexing && mode === "unrelated" ? [0, 1] : !indexing && mode === "similar" ? [0.6, 0.8] : [1, 0] })) }
 			: { choices: [{ message: { content: "18:30 [1]. Fake [2] and [[Secret.md]]." } }] }));
 	});
 	const noteSearch = createNoteSearch({ factory: new IDBFactory(), vaultPath: "/chat", client, read: async () => note, open });
