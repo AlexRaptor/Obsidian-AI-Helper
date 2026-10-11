@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { App, PluginManifest } from "obsidian";
+import { FileSystemAdapter, type App, type PluginManifest } from "obsidian";
+import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
 import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
 import { en, ru, setLanguage, t } from "../src/i18n";
@@ -368,4 +369,25 @@ it.each([undefined, null, -1, "5", Infinity, 2147484])("defaults invalid or miss
 	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ noteUpdateDelaySeconds: value });
 	await plugin.loadSettings(); expect(plugin.settings.noteUpdateDelaySeconds).toBe(3);
+});
+
+
+it("shows the renamed exclusion immediately in open settings and persists it before index cleanup", async () => {
+	vi.stubGlobal("indexedDB", new IDBFactory());
+	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/rename-settings";
+	const handlers = new Map<string, (...args: any[]) => void>();
+	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, callback); return {}; };
+	const app = { vault: { adapter, on, getMarkdownFiles: () => [], getAbstractFileByPath: () => ({ path: "Secrets" }) }, workspace: { on, onLayoutReady: () => {}, detachLeavesOfType: () => {} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, excludedFolders: ["Private", "Private/Nested", "Private-public"] });
+	const saving = vi.fn(async () => {}); Object.assign(plugin, { saveData: saving });
+	const tabs = vi.spyOn(plugin, "addSettingTab"); await plugin.onload();
+	const tab = tabs.mock.calls[0][0] as AiHelperSettingsTab; tab.display();
+	const setting = controls.find(value => value.name === en["setting-excluded-folders"])!;
+	handlers.get("rename")!({ path: "Secrets" }, "Private");
+	try {
+		expect(setting.input!.value).toBe("Secrets\nSecrets/Nested\nPrivate-public");
+		expect(plugin.settings.excludedFolders).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
+		await vi.waitFor(() => expect(saving).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: ["Secrets", "Secrets/Nested", "Private-public"] })));
+	} finally { plugin.onunload(); }
 });

@@ -163,3 +163,46 @@ it("applies a changed delay to queued work without rebuilding the index or delay
 		inputs.length = 0; await search.index("Train.md"); expect(inputs).toHaveLength(1);
 	} finally { search.dispose(); }
 });
+it("keeps the index cleared when background restoration finishes a delayed note read", async () => {
+	const { search, environment } = fixture(); await search.indexVault(); search.dispose();
+	let finish!: (text: string | null) => void; let reading = false;
+	const restored = createNoteSearch({ ...environment, read: async path => {
+		if (reading) return environment.read(path);
+		reading = true; return new Promise<string | null>(resolve => { finish = resolve; });
+	} });
+	restored.configure(connection); const restoring = restored.restore();
+	await vi.waitFor(() => expect(reading).toBe(true));
+	await restored.clear(); finish("old train"); await restoring;
+	expect(restored.progress).toMatchObject({ state: "idle", completed: 0, total: 0 }); restored.dispose();
+	const reopened = createNoteSearch(environment); reopened.configure(connection); await reopened.restore();
+	expect(reopened.progress.state).toBe("idle"); reopened.dispose();
+});
+it("treats a clear during storage opening as cancellation rather than a storage failure", async () => {
+	const { search, environment } = fixture(); await search.indexVault(); search.dispose();
+	const open = environment.factory.open.bind(environment.factory);
+	let holdNext = false; let opening = false; let finish!: () => void;
+	const openingRequest = vi.spyOn(environment.factory, "open").mockImplementation((...args) => {
+		const request = open(...args);
+		if (!holdNext) return request;
+		holdNext = false;
+		return new Proxy(request, {
+			get: (target, key) => Reflect.get(target, key, target),
+			set(target, key, value) {
+				if (key === "onsuccess") {
+					target.onsuccess = (event: Event) => { opening = true; finish = () => value.call(target, event); };
+					return true;
+				}
+				return Reflect.set(target, key, value, target);
+			},
+		});
+	});
+	const restored = createNoteSearch({ ...environment, read: async path => { holdNext = true; return environment.read(path); } });
+	restored.configure(connection);
+	const restoring = restored.restore().then(() => null, error => error);
+	try {
+		await vi.waitFor(() => expect(opening).toBe(true));
+		const clearing = restored.clear(); finish();
+		await clearing; expect(await restoring).toBeNull();
+		expect(restored.progress).toMatchObject({ state: "idle", completed: 0, total: 0 });
+	} finally { restored.dispose(); openingRequest.mockRestore(); }
+});

@@ -32,11 +32,15 @@ export class AiHelperPlugin extends Plugin {
 
 	noteSearch!: NoteSearch;
 	private indexingNote = false;
+	private unloading = false;
+	private indexRestore: Promise<void> = Promise.resolve();
+	private settingsTab?: AiHelperSettingsTab;
 	noteSearchConnection = createNoteSearchConnection(this.serverClient);
 	modelConnection = createModelConnection(this.serverClient);
 	contextWindowConnection = createContextWindowConnection(this.serverClient);
 
 	async onload(): Promise<void> {
+		this.unloading = false;
 		await this.loadSettings();
 		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();
@@ -67,17 +71,27 @@ export class AiHelperPlugin extends Plugin {
 			this.registerEvent(this.app.vault.on("modify", changed));
 			this.registerEvent(this.app.vault.on("delete", file => { void this.noteSearch.removed(file.path).catch(updateError); }));
 			this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-				void this.noteSearch.renamed(file.path, oldPath).then(async folders => {
-					this.settings.excludedFolders = folders; await this.saveSettings();
-				}).catch(updateError);
+				const updating = this.noteSearch.renamed(file.path, oldPath);
+				this.settings.excludedFolders = this.noteSearch.excludedFolders;
+				this.settingsTab?.refreshExcludedFolders();
+				void this.saveSettings().catch(updateError);
+				void updating.catch(updateError);
 			}));
 			this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
 			}));
 		}
-		try { await this.noteSearch.restore(); }
-		catch { new Notice(this.t("search-storage")); }
-		this.app.workspace.onLayoutReady?.(() => { void this.noteSearch.resume().catch(updateError); });
+		const restoreIndex = () => {
+			if (this.unloading) return;
+			// The file list is incomplete while Obsidian loads the vault. Never
+			// reconcile it then, and never block plugin loading on derived data.
+			const restoring = this.noteSearch.restore();
+			this.indexRestore = restoring.catch(() => {});
+			void restoring.then(() => {
+				if (!this.unloading && !this.indexingNote) return this.noteSearch.resume();
+			}).catch(error => { if (!this.unloading) updateError(error); });
+		};
+		if (this.app.workspace.onLayoutReady) this.app.workspace.onLayoutReady(restoreIndex);
 
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
@@ -90,8 +104,9 @@ export class AiHelperPlugin extends Plugin {
 			name: this.t("command"),
 			callback: () => this.toggleView(),
 		});
-		this.addSettingTab(new AiHelperSettingsTab(this.app, this));
-		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.noteSearch.resume(true).catch(updateError); } });
+		this.settingsTab = new AiHelperSettingsTab(this.app, this);
+		this.addSettingTab(this.settingsTab);
+		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.indexRestore.then(() => this.noteSearch.resume(true)).catch(updateError); } });
 		this.addCommand({
 			id: "local-storage-probe",
 			name: this.t("probe-title"),
@@ -112,6 +127,7 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.unloading = true;
 		this.noteSearch?.dispose();
 		this.noteSearchConnection.cancel();
 		this.modelConnection.cancel();
@@ -146,7 +162,7 @@ export class AiHelperPlugin extends Plugin {
 		if (this.indexingNote) return;
 		this.indexingNote = true;
 		new Notice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`);
-		try { await this.noteSearch.index(path); new Notice(this.t("search-indexed")); }
+		try { await this.indexRestore; if (this.unloading) return; await this.noteSearch.index(path); new Notice(this.t("search-indexed")); }
 		catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
 		finally { this.indexingNote = false; }
 	}
@@ -160,7 +176,7 @@ export class AiHelperPlugin extends Plugin {
 		if (action !== "clear") { this.indexingNote = true; new Notice(this.noteIndexDisclosure()); }
 		try {
 			if (action === "clear") await this.noteSearch.clear();
-			else await this.noteSearch.rebuild();
+			else { await this.indexRestore; if (this.unloading) return; await this.noteSearch.rebuild(); }
 			new Notice(this.t(action === "clear" ? "search-cleared" : "search-state-complete"));
 		} catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
 		finally { if (action !== "clear") this.indexingNote = false; }

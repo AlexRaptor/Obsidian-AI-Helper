@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, type ColorComponent } from "obsidian";
+import { App, PluginSettingTab, Setting, type ColorComponent, type TextAreaComponent } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
@@ -61,6 +61,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	private displayVersion = 0;
 	private unsubscribeIndex: (() => void) | undefined;
 	private unsubscribeContext: (() => void) | undefined;
+	private excludedFoldersInput?: TextAreaComponent;
+	private updateExcludedFoldersWarning?: () => void;
 
 	constructor(app: App, plugin: AiHelperPlugin) {
 		super(app, plugin);
@@ -89,16 +91,20 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const embedding = this.createGroup(containerEl, "settings-group-embedding");
 		this.renderEmbeddingConnection(embedding, version);
 		new Setting(embedding).setClass("ai-helper-settings-textarea").setName(this.t("setting-excluded-folders")).setDesc(this.t("setting-excluded-folders-desc"))
-			.addTextArea((text) => text.setValue(this.plugin.settings.excludedFolders.join("\n")).onChange(async (value) => {
-				this.plugin.settings.excludedFolders = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-				await this.plugin.saveSettings();
-				updateWarnings();
-			}));
+			.addTextArea((text) => {
+				this.excludedFoldersInput = text;
+				text.setValue(this.plugin.settings.excludedFolders.join("\n")).onChange(async (value) => {
+					this.plugin.settings.excludedFolders = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+					await this.plugin.saveSettings();
+					updateWarnings();
+				});
+			});
 		const warning = embedding.createDiv({ attr: { "aria-live": "polite" } });
 		const updateWarnings = () => {
 			const missing = this.plugin.settings.excludedFolders.filter(path => !this.app?.vault?.getAbstractFileByPath?.(path));
 			warning.setText(missing.length ? `${this.t("search-missing-folder")}: ${missing.join(", ")}` : "");
 		};
+		this.updateExcludedFoldersWarning = updateWarnings;
 		updateWarnings();
 		const updates = this.createGroup(containerEl, "settings-group-index-updates");
 		new Setting(updates).setName(this.t("search-auto-update")).setDesc(this.t("search-auto-update-desc"))
@@ -498,7 +504,14 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			: this.plugin.embeddingModelStatus === "error" ? ` ${this.t("setting-models-load-error")}` : ""));
 	}
 
+	refreshExcludedFolders(): void {
+		this.excludedFoldersInput?.setValue(this.plugin.settings.excludedFolders.join("\n"));
+		this.updateExcludedFoldersWarning?.();
+	}
+
 	hide(): void {
+		this.excludedFoldersInput = undefined;
+		this.updateExcludedFoldersWarning = undefined;
 		this.unsubscribeIndex?.();
 		this.unsubscribeContext?.();
 		this.unsubscribeContext = undefined;

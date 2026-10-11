@@ -64,11 +64,12 @@ function storage(environment: NoteSearchEnvironment) {
 			let db: IDBDatabase | undefined;
 			let expired = false;
 			let transaction: IDBTransaction | undefined;
+			let actionError: unknown;
 			const fail = () => {
 				if (expired) return;
 				expired = true; clearTimeout(timer);
 				try { transaction?.abort(); } catch { /* Already completed or aborted. */ }
-				db?.close(); reject(new NoteSearchError("search-storage"));
+				db?.close(); reject(actionError instanceof NoteSearchError ? actionError : new NoteSearchError("search-storage"));
 			};
 			const timer = setTimeout(fail, 5000);
 			try {
@@ -88,7 +89,7 @@ function storage(environment: NoteSearchEnvironment) {
 						tx.onabort = fail;
 						tx.onerror = fail;
 						tx.oncomplete = () => { clearTimeout(timer); db?.close(); resolve(result); };
-					} catch { fail(); }
+					} catch (error) { actionError = error; fail(); }
 				};
 			} catch { fail(); }
 		});
@@ -155,21 +156,40 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		await saveProgress(version, identity);
 	}
 	async function reconcile() {
+		let version = revision;
 		await writes;
 		const saved = await store.read();
 		const identity = await fingerprint();
+		check(version);
 		const paths = environment.list?.().filter(allowed) ?? saved.notes.filter(validNote).map(note => note.path).filter(allowed);
 		const pathSet = new Set(paths);
 		const notes = saved.notes.filter(validNote);
 		const byPath = new Map(notes.filter(note => note.fingerprint === identity).map(note => [note.path, note]));
-		for (const note of notes) if (!pathSet.has(note.path)) await removed(note.path);
-		for (const path of [...pending]) if (!pathSet.has(path)) pending.delete(path);
+		const nextPending = new Set([...pending].filter(path => pathSet.has(path)));
+		const discarded = new Set(notes.filter(note => !pathSet.has(note.path)).map(note => note.path));
 		for (const path of paths) {
 			const note = byPath.get(path);
-			if (!note || await hash(await environment.read(path) ?? "") !== note.contentHash) await changed(path);
+			const currentHash = note ? await hash(await environment.read(path) ?? "") : undefined;
+			check(version);
+			if (!note || currentHash !== note.contentHash) { nextPending.add(path); discarded.add(path); }
 		}
-		clearTimeout(timer); timer = undefined; await saveUpdates(); await coverage();
+		check(version);
+		// Apply a complete snapshot only if no intervening vault event, clear,
+		// settings change or unload invalidated it. Commit cleanup in one batch.
+		if (discarded.size || nextPending.size !== pending.size) cancel();
+		version = revision;
+		pending.clear(); for (const path of nextPending) pending.add(path);
+		clearTimeout(timer); timer = undefined;
+		const updates: SavedUpdates = { initialized, pending: [...pending], failed };
+		await write(store => {
+			check(version);
+			for (const path of discarded) store.delete(path);
+			store.put(updates, "updates");
+		});
+		check(version);
+		await coverage();
 	}
+
 	function schedule() {
 		clearTimeout(timer); timer = undefined;
 		if (!initialized || !automatic || failed || disposed) return;
@@ -294,6 +314,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	}
 	return {
 		get progress(): IndexProgress { return { ...progress }; },
+		get excludedFolders(): string[] { return [...excludedFolders]; },
 		subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
 		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
 			const delay = isValidNoteUpdateDelay(next.noteUpdateDelaySeconds) ? next.noteUpdateDelaySeconds : DEFAULT_NOTE_UPDATE_DELAY_SECONDS;
@@ -351,16 +372,27 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		dispose(): void { clearTimeout(timer); timer = undefined; disposed = true; cancel(); listeners.clear(); },
 		async restore(): Promise<void> {
-			const version = revision;
-			try { await writes; } catch { throw new NoteSearchError("search-storage"); }
-			const saved = await store.read();
-			const identity = await fingerprint();
-			check(version);
-			restoreProgress(saved.progress, identity);
-			initialized = saved.updates?.initialized === true || !!saved.progress && saved.progress.fingerprint === identity;
-			failed = saved.updates?.failed === true || saved.progress?.state === "error";
-			if (Array.isArray(saved.updates?.pending)) for (const path of saved.updates.pending) if (typeof path === "string" && allowed(path)) pending.add(path);
-			if (initialized && environment.list) await reconcile();
+			while (!disposed) {
+				const version = revision;
+				try {
+					try { await writes; } catch (error) {
+						if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) throw new NoteSearchError("search-storage");
+					}
+					const saved = await store.read();
+					const identity = await fingerprint();
+					check(version);
+					restoreProgress(saved.progress, identity);
+					initialized = saved.updates?.initialized === true || !!saved.progress && saved.progress.fingerprint === identity;
+					failed = saved.updates?.failed === true || saved.progress?.state === "error";
+					if (Array.isArray(saved.updates?.pending)) for (const path of saved.updates.pending) if (typeof path === "string" && allowed(path)) pending.add(path);
+					if (initialized && environment.list) await reconcile();
+					return;
+				} catch (error) {
+					if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) throw error;
+					// Retry a snapshot invalidated by a concurrent public action.
+					// A clear is restored as idle; disposal ends the loop altogether.
+				}
+			}
 		},
 		changed,
 		removed,
