@@ -9,6 +9,9 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"search-update-delay": "Note update delay (seconds)",
+	"search-update-delay-desc": "Wait this long without file changes before automatically updating the index. Each change restarts the wait. Default: 3 seconds; manual updates run immediately.",
+	"search-update-delay-invalid": "Enter a number from 0.001 to 2147483.647 seconds. The last valid value is kept.",
 	"search-auto-update": "Automatically update notes",
 	"search-auto-update-desc": "After the first explicit indexing, update changed and new notes. Turn off to pause; manual updates remain available. After a connection failure, use Retry pending updates or enable note search to reconnect.",
 	"search-retry": "Retry pending note updates",
@@ -193,6 +196,9 @@ export const en = {
 } as const;
 
 export const ru = {
+	"search-update-delay": "Задержка обновления заметок (секунды)",
+	"search-update-delay-desc": "Ожидание без изменений файла перед автоматическим обновлением индекса. Каждое изменение начинает отсчёт заново. По умолчанию: 3 секунды; ручное обновление запускается сразу.",
+	"search-update-delay-invalid": "Введите число от 0,001 до 2147483,647 секунды. Последнее корректное значение сохранено.",
 	"search-auto-update": "Автоматически обновлять заметки",
 	"search-auto-update-desc": "После первой явной индексации обновлять изменённые и новые заметки. Выключите для паузы; ручное обновление остаётся доступным. После ошибки связи используйте повтор ожидающих обновлений или включите поиск по заметкам.",
 	"search-retry": "Повторить ожидающие обновления заметок",

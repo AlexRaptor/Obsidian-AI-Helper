@@ -11,7 +11,7 @@ import { setLanguage, t, type LocaleKey } from "./i18n";
 import { createModelConnection } from "./model-connection";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragments";
 import { createNoteSearchConnection } from "./note-search";
-import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, type NoteSearch } from "./note-index";
+import { createNoteSearch, NoteSearchError, isValidMinimumSimilarity, isValidNoteUpdateDelay, type NoteSearch } from "./note-index";
 import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { StorageProbeModal } from "./storage-probe-modal";
 import { createContextWindowConnection } from "./context-window";
@@ -127,6 +127,7 @@ export class AiHelperPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		this.settings.similarityAppearance = normalizeSimilarityAppearance(this.settings.similarityAppearance);
 		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
+		if (!isValidNoteUpdateDelay(this.settings.noteUpdateDelaySeconds)) this.settings.noteUpdateDelaySeconds = DEFAULT_SETTINGS.noteUpdateDelaySeconds;
 		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
 		this.settings.excludedFolders = Array.isArray(this.settings.excludedFolders) ? this.settings.excludedFolders.filter((folder) => typeof folder === "string") : [];
 		this.noteSearchConnection.configure(this.settings);

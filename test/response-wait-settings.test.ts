@@ -342,3 +342,30 @@ it("restores valid similarity colors and replaces invalid saved values", async (
 	await plugin.loadSettings();
 	expect(plugin.settings.similarityAppearance).toEqual({ weakUpper: 0.3, mediumUpper: 0.5, weakColor: "red", mediumColor: "blue", strongColor: "#abcdef" });
 });
+
+
+it.each(["en", "ru"] as const)("saves the note-update delay in seconds and rejects invalid values in %s", async locale => {
+	setLanguage(locale);
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: "idle", t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const dictionary = locale === "ru" ? ru : en;
+	const setting = controls.find(value => value.name === dictionary["search-update-delay"])!;
+	expect(setting.input?.value).toBe("3");
+	await setting.input!.change(" 5 ");
+	expect(plugin.settings.noteUpdateDelaySeconds).toBe(5);
+	await setting.input!.change("1,5");
+	expect(plugin.settings.noteUpdateDelaySeconds).toBe(1.5);
+	for (const invalid of ["", "0", "-1", "abc", "Infinity", "1e3", "2147484"]) {
+		await setting.input!.change(invalid);
+		expect(plugin.settings.noteUpdateDelaySeconds).toBe(1.5);
+		expect(setting.input!.inputEl.attributes["aria-invalid"]).toBe("true");
+	}
+	expect(saveSettings).toHaveBeenCalledTimes(2);
+});
+
+it.each([undefined, null, -1, "5", Infinity, 2147484])("defaults invalid or missing saved note-update delay %s to three seconds", async value => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ noteUpdateDelaySeconds: value });
+	await plugin.loadSettings(); expect(plugin.settings.noteUpdateDelaySeconds).toBe(3);
+});

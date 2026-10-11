@@ -22,6 +22,11 @@ interface NoteSearchEnvironment {
 
 // Calibrated on the Russian single-note acceptance scenario with Qwen3 embeddings.
 export const DEFAULT_MIN_SOURCE_SIMILARITY = 0.45;
+export const DEFAULT_NOTE_UPDATE_DELAY_SECONDS = 3;
+export function isValidNoteUpdateDelay(value: unknown): value is number {
+	// Browser timers use a signed 32-bit millisecond delay.
+	return typeof value === "number" && Number.isFinite(value) && value >= 0.001 && value <= 2147483647 / 1000;
+}
 export function isValidMinimumSimilarity(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
@@ -111,6 +116,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	let disposed = false;
 	let initialized = false;
 	let automatic = true;
+	let updateDelaySeconds = DEFAULT_NOTE_UPDATE_DELAY_SECONDS;
 	let failed = false;
 	const pending = new Set<string>();
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -162,12 +168,12 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const note = byPath.get(path);
 			if (!note || await hash(await environment.read(path) ?? "") !== note.contentHash) await changed(path);
 		}
-		clearTimeout(timer); await saveUpdates(); await coverage();
+		clearTimeout(timer); timer = undefined; await saveUpdates(); await coverage();
 	}
 	function schedule() {
-		clearTimeout(timer);
+		clearTimeout(timer); timer = undefined;
 		if (!initialized || !automatic || failed || disposed) return;
-		timer = setTimeout(() => { void drain().catch(() => {}); }, 350);
+		timer = setTimeout(() => { timer = undefined; void drain().catch(() => {}); }, updateDelaySeconds * 1000);
 	}
 	async function drain(manual = false): Promise<void> {
 		if (draining) { await draining; if (pending.size && !failed && automatic) return drain(manual); return; }
@@ -187,6 +193,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	}
 	async function changed(path: string): Promise<void> {
 		if (!initialized || disposed || !allowed(path)) return;
+		clearTimeout(timer); timer = undefined;
 		pending.add(path); cancel();
 		progress = { ...progress, state: failed ? "error" : "partial" }; notify();
 		await saveUpdates();
@@ -288,9 +295,14 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	return {
 		get progress(): IndexProgress { return { ...progress }; },
 		subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
-		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean } & Partial<FragmentOptions>): void {
+		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
+			const delay = isValidNoteUpdateDelay(next.noteUpdateDelaySeconds) ? next.noteUpdateDelaySeconds : DEFAULT_NOTE_UPDATE_DELAY_SECONDS;
+			if (updateDelaySeconds !== delay) {
+				updateDelaySeconds = delay;
+				if (timer !== undefined) schedule();
+			}
 			const nextAutomatic = next.autoUpdateNotes ?? true;
-			if (automatic !== nextAutomatic) { automatic = nextAutomatic; clearTimeout(timer); if (!automatic) cancel(); else schedule(); }
+			if (automatic !== nextAutomatic) { automatic = nextAutomatic; clearTimeout(timer); timer = undefined; if (!automatic) cancel(); else schedule(); }
 			const options = { noteFragmentSize: next.noteFragmentSize ?? DEFAULT_FRAGMENT_OPTIONS.noteFragmentSize, noteFragmentOverlap: next.noteFragmentOverlap ?? DEFAULT_FRAGMENT_OPTIONS.noteFragmentOverlap };
 			if (!isValidFragmentOptions(options)) throw new NoteSearchError("search-fragment-settings");
 			minimumSimilarity = isValidMinimumSimilarity(next.noteSearchMinSimilarity) ? next.noteSearchMinSimilarity : DEFAULT_MIN_SOURCE_SIMILARITY;
@@ -302,7 +314,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const changed = connection !== undefined;
 			connection = copy; fragmentOptions = options; excludedFolders = folders; cancel();
 			for (const path of pending) if (!allowed(path) || incompatible) pending.delete(path);
-			if (changed && incompatible) { initialized = false; failed = false; clearTimeout(timer); }
+			if (changed && incompatible) { initialized = false; failed = false; clearTimeout(timer); timer = undefined; }
 			if (changed || folders.length) {
 				if (changed) { progress = incompatible ? { state: "idle", completed: 0, total: 0 } : { ...progress, state: "partial" }; notify(); }
 				const version = revision;
@@ -337,7 +349,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			}
 			if (changed && !incompatible) void saveUpdates().then(schedule).catch(() => {});
 		},
-		dispose(): void { clearTimeout(timer); disposed = true; cancel(); listeners.clear(); },
+		dispose(): void { clearTimeout(timer); timer = undefined; disposed = true; cancel(); listeners.clear(); },
 		async restore(): Promise<void> {
 			const version = revision;
 			try { await writes; } catch { throw new NoteSearchError("search-storage"); }
@@ -362,15 +374,15 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		async resume(manual = false): Promise<void> {
 			if (!initialized || disposed || (!manual && !automatic)) return;
-			clearTimeout(timer);
+			clearTimeout(timer); timer = undefined;
 			await reconcile();
-			clearTimeout(timer); failed = false; await saveUpdates();
+			clearTimeout(timer); timer = undefined; failed = false; await saveUpdates();
 			await drain(manual);
 		},
 		async index(path: string): Promise<void> {
 			if (!/\.md$/i.test(path)) throw new NoteSearchError("search-note");
 			if (!allowed(path)) throw new NoteSearchError("search-excluded");
-			clearTimeout(timer);
+			clearTimeout(timer); timer = undefined;
 			const wasFailed = failed;
 			initialized = true; pending.add(path); await saveUpdates();
 			await write(store => store.delete(path));
@@ -381,7 +393,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		async indexVault(): Promise<void> {
 			if (!environment.list) throw new NoteSearchError("search-note");
-			clearTimeout(timer); initialized = true; failed = false;
+			clearTimeout(timer); timer = undefined; initialized = true; failed = false;
 			const paths = [...new Set(environment.list())].filter(allowed);
 			for (const path of paths) pending.add(path);
 			await saveUpdates();
@@ -389,7 +401,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			schedule();
 		},
 		async clear(): Promise<void> {
-			clearTimeout(timer); initialized = false; failed = false; pending.clear();
+			clearTimeout(timer); timer = undefined; initialized = false; failed = false; pending.clear();
 			cancel(); progress = { state: "idle", completed: 0, total: 0 }; notify();
 			await write((store) => store.clear());
 		},

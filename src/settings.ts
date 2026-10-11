@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting, type ColorComponent } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
-import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity } from "./note-index";
+import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
 import { DEFAULT_SIMILARITY_APPEARANCE, SIMILARITY_COLORS, validSimilarityBoundaries, isSimilarityColor, type SimilarityAppearance } from "./similarity-appearance";
 import { parseResponseWait } from "./response-wait";
@@ -18,6 +18,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	noteSearchMinSimilarity: number;
 	excludedFolders: string[];
 	autoUpdateNotes: boolean;
+	noteUpdateDelaySeconds: number;
 	similarityAppearance: SimilarityAppearance;
 	serverUrl: string;
 	apiKey: string;
@@ -36,6 +37,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	excludedFolders: [],
 	autoUpdateNotes: true,
+	noteUpdateDelaySeconds: DEFAULT_NOTE_UPDATE_DELAY_SECONDS,
 	similarityAppearance: DEFAULT_SIMILARITY_APPEARANCE,
 	embeddingServerUrl: "",
 	embeddingApiKey: "",
@@ -102,6 +104,20 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			.addToggle(toggle => toggle.setValue(this.plugin.settings.autoUpdateNotes).onChange(async value => {
 				this.plugin.settings.autoUpdateNotes = value; await this.plugin.saveSettings();
 			}));
+		const updateDelay = new Setting(embedding).setName(this.t("search-update-delay")).setDesc(this.t("search-update-delay-desc"));
+		updateDelay.addText(text => {
+			text.setValue(String(this.plugin.settings.noteUpdateDelaySeconds)).onChange(async raw => {
+				const normalized = raw.trim().replace(",", ".");
+				const seconds = Number(normalized);
+				const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) && isValidNoteUpdateDelay(seconds);
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				updateDelay.setDesc(this.t("search-update-delay-desc") + (valid ? "" : ` ${this.t("search-update-delay-invalid")}`));
+				if (!valid) return;
+				this.plugin.settings.noteUpdateDelaySeconds = seconds;
+				await this.plugin.saveSettings();
+			});
+			text.inputEl.setAttribute("inputmode", "decimal");
+		});
 		new Setting(embedding).setName(this.t("search-retry")).addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => {
 			try { await this.plugin.noteSearch.resume(true); } catch { /* The index status displays the error. */ }
 		}));

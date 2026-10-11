@@ -15,7 +15,7 @@ it("indexes only on the explicit active-note command through the public module",
 	const read = vi.fn(async () => "Train departs at 18:30.");
 	const app = { vault: { adapter, getFileByPath: () => file, getMarkdownFiles: () => [file], read }, workspace: { getActiveFile: () => file } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
-	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" });
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", noteUpdateDelaySeconds: 0.35 });
 	let embeddings = 0;
 	plugin.serverClient = createServerClient(async (url) => new Response(JSON.stringify(url.endsWith("/models")
 		? { data: [{ id: "e" }] }
@@ -83,7 +83,7 @@ it("updates through vault events and indexes the menu-selected file rather than 
 	const app = { vault: { adapter, on, getFileByPath: (path: string) => files.find(f => f.path === path), getMarkdownFiles: () => files,
 		read: async (f: TFile) => f === file ? text : "boat" }, workspace: { on, getActiveFile: () => other, detachLeavesOfType: () => {} } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
-	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" });
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", noteUpdateDelaySeconds: 0.35 });
 	const inputs: string[] = [];
 	plugin.serverClient = createServerClient(async (url, init) => {
 		if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [] }));

@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { createNoteSearch } from "../src/note-index";
 import { createServerClient } from "../src/server-client";
-const connection = { embeddingServerUrl: "http://s/v1", embeddingApiKey: "", embeddingModel: "e" };
+const connection = { embeddingServerUrl: "http://s/v1", embeddingApiKey: "", embeddingModel: "e", noteUpdateDelaySeconds: 0.35 };
 function fixture() {
 	const notes = new Map([["Train.md", "old train"], ["Other.md", "boat"]]);
 	const inputs: string[] = []; let offline = false;
@@ -130,4 +130,36 @@ it("counts empty Markdown notes as processed without embedding requests or repea
 	expect(search.progress).toMatchObject({ state: "complete", completed: 3, total: 3 }); search.dispose(); inputs.length = 0;
 	const restored = createNoteSearch(environment); restored.configure(connection); await restored.restore(); await restored.resume();
 	expect(restored.progress).toMatchObject({ state: "complete", completed: 3, total: 3 }); expect(inputs).toHaveLength(0); restored.dispose();
+});
+it("waits three seconds by default and restarts the delay on each file change", async () => {
+	const { search, notes, inputs } = fixture(); await search.indexVault(); inputs.length = 0;
+	search.configure({ ...connection, noteUpdateDelaySeconds: undefined });
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	try {
+		notes.set("Train.md", "first delayed edit"); await search.changed("Train.md");
+		await vi.advanceTimersByTimeAsync(2999); expect(inputs).toHaveLength(0);
+		notes.set("Train.md", "last delayed edit");
+		const changing = search.changed("Train.md");
+		// Let the old deadline pass while the queue write is still asynchronous.
+		await vi.advanceTimersByTimeAsync(1); await changing;
+		await vi.advanceTimersByTimeAsync(2999); expect(inputs).toHaveLength(0);
+		await vi.advanceTimersByTimeAsync(1);
+		await vi.waitFor(() => expect(search.progress.state).toBe("complete"));
+		expect(inputs).toHaveLength(1); expect(inputs[0]).toContain("last delayed edit");
+	} finally { search.dispose(); vi.useRealTimers(); }
+});
+it("applies a changed delay to queued work without rebuilding the index or delaying manual updates", async () => {
+	const { search, notes, inputs } = fixture(); await search.indexVault(); inputs.length = 0;
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	try {
+		notes.set("Train.md", "configured delay"); await search.changed("Train.md");
+		search.configure({ ...connection, noteUpdateDelaySeconds: 5 });
+		await vi.advanceTimersByTimeAsync(4999); expect(inputs).toHaveLength(0);
+		await vi.advanceTimersByTimeAsync(1);
+		await vi.waitFor(() => expect(search.progress.state).toBe("complete"));
+		expect(inputs).toHaveLength(1); expect(inputs[0]).toContain("configured delay");
+	} finally { vi.useRealTimers(); }
+	try {
+		inputs.length = 0; await search.index("Train.md"); expect(inputs).toHaveLength(1);
+	} finally { search.dispose(); }
 });
