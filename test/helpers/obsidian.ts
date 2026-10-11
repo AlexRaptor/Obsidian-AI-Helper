@@ -137,3 +137,9 @@ export class TFolder {}
 export class AbstractInputSuggest<T> { constructor(public app: unknown, _input: unknown) {} close(): void {} }
 
 export function getLanguage(): string { return "en"; }
+
+export class ProgressBarComponent {
+	private fill: TestElement;
+	constructor(parent: TestElement) { this.fill = parent.createDiv({ cls: "progress-bar" }); }
+	setValue(value: number): this { this.fill.style.width = `${value}%`; return this; }
+}

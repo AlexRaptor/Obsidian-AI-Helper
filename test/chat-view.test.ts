@@ -41,11 +41,11 @@ it("uses the detected window for the progress bar and lets manual settings overr
 	await connection.refresh();
 	input.value = "question"; send.click(); await flushPromises();
 	expect(root.find("ai-helper-context-label").getText()).toBe("25% - 1,000 / 4,000");
-	expect(root.find("ai-helper-context-bar-fill").style.width).toBe("25%");
+	expect(root.find("ai-helper-context-bar").find("progress-bar").style.width).toBe("25%");
 	view.plugin.settings.contextWindow = "2000"; view.updateContextIndicators();
-	expect(root.find("ai-helper-context-bar-fill").style.width).toBe("50%");
+	expect(root.find("ai-helper-context-bar").find("progress-bar").style.width).toBe("50%");
 	view.plugin.settings.contextWindow = ""; view.updateContextIndicators();
-	expect(root.find("ai-helper-context-bar-fill").style.width).toBe("25%");
+	expect(root.find("ai-helper-context-bar").find("progress-bar").style.width).toBe("25%");
 	unsubscribe(); await view.onClose();
 });
 

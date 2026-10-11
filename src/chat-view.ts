@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Notice, Menu, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Notice, Menu, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -28,7 +28,7 @@ export class ChatView extends ItemView {
 	private indexStatusEl: HTMLElement | null = null;
 	private indexTitleEl: HTMLElement | null = null;
 	private indexCoverageBar: HTMLElement | null = null;
-	private indexCoverageFill: HTMLElement | null = null;
+	private indexProgress: ProgressBarComponent | null = null;
 	private indexCoverageLabel: HTMLElement | null = null;
 	private indexReason: HTMLElement | null = null;
 	private indexAction: HTMLButtonElement | null = null;
@@ -38,6 +38,7 @@ export class ChatView extends ItemView {
 	private searchBtn: HTMLElement | null = null;
 	private messagesEl: HTMLElement | null = null;
 	private contextBarEl: HTMLElement | null = null;
+	private contextProgress: ProgressBarComponent | null = null;
 	private contextLabelEl: HTMLElement | null = null;
 	private inputEl: HTMLTextAreaElement | null = null;
 	private sendBtn: HTMLButtonElement | null = null;
@@ -107,7 +108,10 @@ export class ChatView extends ItemView {
 				used !== undefined && Number.isFinite(limit) && limit > 0
 					? Math.min(100, (used / limit) * 100)
 					: 0;
-			this.contextBarEl.style.width = `${fill}%`;
+			this.contextProgress?.setValue(fill);
+			this.contextBarEl.setAttribute("aria-label", this.t("setting-context-window"));
+			this.contextBarEl.setAttribute("aria-valuenow", String(fill));
+			this.contextBarEl.setAttribute("aria-valuetext", this.contextLabelEl?.textContent ?? "");
 		}
 	}
 
@@ -147,7 +151,7 @@ export class ChatView extends ItemView {
 		this.unsubscribeIndex = undefined;
 		this.indexStatusEl = null;
 		this.indexTitleEl = null;
-		this.indexCoverageBar = null; this.indexCoverageFill = null; this.indexCoverageLabel = null;
+		this.indexCoverageBar = null; this.indexProgress = null; this.indexCoverageLabel = null;
 		this.indexReason = null; this.indexAction = null; this.indexPause = null;
 		this.draft = this.inputEl?.value ?? this.draft;
 		this.cancelRequest();
@@ -162,6 +166,7 @@ export class ChatView extends ItemView {
 		this.clearBtn?.remove();
 		this.clearBtn = null;
 		this.contextBarEl = null;
+		this.contextProgress = null;
 		this.contextLabelEl = null;
 	}
 
@@ -184,8 +189,8 @@ export class ChatView extends ItemView {
 		container.addClass("ai-helper");
 
 		const header = container.createDiv({ cls: "ai-helper-header" });
-		const contextBar = header.createDiv({ cls: "ai-helper-context-bar" });
-		this.contextBarEl = contextBar.createDiv({ cls: "ai-helper-context-bar-fill" });
+		this.contextBarEl = header.createDiv({ cls: "ai-helper-context-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
+		this.contextProgress = new ProgressBarComponent(this.contextBarEl);
 		this.contextLabelEl = header.createSpan({ cls: "ai-helper-context-label" });
 		this.clearBtn?.remove();
 		this.searchBtn?.remove();
@@ -199,7 +204,7 @@ export class ChatView extends ItemView {
 		this.indexStatusEl = header.createDiv({ cls: "ai-helper-index-status" });
 		this.indexTitleEl = this.indexStatusEl.createSpan({ cls: "ai-helper-index-title" });
 		this.indexCoverageBar = this.indexStatusEl.createDiv({ cls: "ai-helper-index-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
-		this.indexCoverageFill = this.indexCoverageBar.createDiv({ cls: "ai-helper-context-bar-fill" });
+		this.indexProgress = new ProgressBarComponent(this.indexCoverageBar);
 		this.indexCoverageLabel = this.indexStatusEl.createSpan({ cls: "ai-helper-index-coverage-label" });
 		this.indexAction = this.indexStatusEl.createEl("button", { cls: "ai-helper-index-action", attr: { type: "button" } });
 		this.indexAction.addEventListener("click", () => {
@@ -243,7 +248,7 @@ export class ChatView extends ItemView {
 		this.indexCoverageBar?.setAttribute("aria-label", this.t("search-coverage"));
 		this.indexCoverageBar?.setAttribute("aria-valuenow", String(percent));
 		this.indexCoverageBar?.setAttribute("aria-valuetext", label);
-		if (this.indexCoverageFill) this.indexCoverageFill.style.width = `${percent}%`;
+		this.indexProgress?.setValue(percent);
 		this.indexReason?.setText(`${this.t(`search-state-${progress.state}`)}${progress.state !== "complete" ? ` — ${this.t("search-partial")}` : ""}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
 		if (this.indexAction) {
 			const key = progress.state === "idle" ? "search-vault-index" : progress.state === "error" ? "search-repeat" : "search-continue";
