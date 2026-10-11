@@ -50,7 +50,7 @@ export const en = {
 	"setting-embedding-models-hint": "The list may also include conversation models. Use Check embeddings to confirm support.",
 
 	"setting-search-min-similarity": "Minimum source similarity",
-	"setting-search-min-similarity-desc": "A number from 0 to 1; default 0.45. Lower values include more sources, higher values require closer matches. Applies to the next search; no index rebuild needed.",
+	"setting-search-min-similarity-desc": "A number from 0 to 1; default 0.45. Lower values include more semantic matches, higher values require closer matches. Exact text matches can also select a source below this threshold. Applies to the next search; no index rebuild needed.",
 	"setting-search-min-similarity-invalid": "Enter a number from 0 to 1 using a decimal point or comma. The last valid value is kept.",
 	"settings-group-fragments": "Advanced note search",
 	"setting-fragment-size": "Fragment size (characters)",
@@ -258,7 +258,7 @@ export const ru = {
 	"setting-embedding-models-hint": "В списке могут быть и модели диалога. Поддержку подтвердит проверка embeddings.",
 
 	"setting-search-min-similarity": "Минимальный порог сходства",
-	"setting-search-min-similarity-desc": "Число от 0 до 1; по умолчанию 0,45. Ниже — больше источников, выше — более близкие совпадения. Применяется к следующему поиску; перестроение индекса не требуется.",
+	"setting-search-min-similarity-desc": "Число от 0 до 1; по умолчанию 0,45. Ниже — больше смысловых совпадений, выше — более близкие. Точные текстовые совпадения могут найти источник и ниже этого порога. Применяется к следующему поиску; перестроение индекса не требуется.",
 	"setting-search-min-similarity-invalid": "Введите число от 0 до 1 с точкой или запятой. Последнее корректное значение сохранено.",
 	"settings-group-fragments": "Расширенные настройки поиска",
 	"setting-fragment-size": "Размер фрагмента (символы)",
