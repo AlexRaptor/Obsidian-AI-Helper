@@ -18,7 +18,7 @@ export class TestElement {
 	private listeners = new Map<string, Array<(event: any) => void>>();
 
 	empty(): void { this.children = []; this.text = ""; }
-	addClass(value: string): void { value.split(" ").forEach((cls) => this.classes.add(cls)); }
+	addClass(...values: string[]): void { values.flatMap(value => value.split(" ")).forEach((cls) => this.classes.add(cls)); }
 	setText(value: string): void { this.text = value; }
 	setAttribute(name: string, value: string): void { this.attributes[name] = value; }
 	createEl(_tag: string, options: ElementOptions = {}): TestElement {
@@ -200,3 +200,11 @@ export class ProgressBarComponent {
 }
 
 export class Keymap { static isModEvent(evt: { button?: number; ctrlKey?: boolean; metaKey?: boolean }): boolean { return evt.button === 1 || !!evt.ctrlKey || !!evt.metaKey; } }
+
+export class ButtonComponent {
+	buttonEl: TestElement;
+	constructor(parent: TestElement) { this.buttonEl = parent.createEl("button"); }
+	setIcon(icon: string): this { setIcon(this.buttonEl, icon); return this; }
+	setTooltip(text: string): this { setTooltip(this.buttonEl, text); return this; }
+	onClick(callback: () => void): this { this.buttonEl.addEventListener("click", callback); return this; }
+}

@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Notice, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover } from "obsidian";
+import { ButtonComponent, Component, ItemView, MarkdownRenderer, Notice, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -205,16 +205,21 @@ export class ChatView extends ItemView implements HoverParent {
 		container.addClass("ai-helper");
 
 		const header = container.createDiv({ cls: "ai-helper-header" });
-		this.contextTitleEl = header.createSpan({ cls: "ai-helper-context-title", text: this.t("header-context") });
-		this.contextBarEl = header.createDiv({ cls: "ai-helper-context-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
+		const context = header.createDiv({ cls: "ai-helper-context-summary" });
+		this.contextTitleEl = context.createSpan({ cls: "ai-helper-context-title", text: this.t("header-context") });
+		this.contextBarEl = context.createDiv({ cls: "ai-helper-context-bar", attr: { role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100" } });
 		this.contextProgress = new ProgressBarComponent(this.contextBarEl);
-		this.contextLabelEl = header.createSpan({ cls: "ai-helper-context-label" });
+		this.contextLabelEl = context.createSpan({ cls: "ai-helper-context-label" });
 		this.clearBtn?.remove();
 		this.searchBtn?.remove();
-		this.clearBtn = this.addAction("trash-2", this.t("clear-conversation"), () => this.clearConversation());
-		this.clearBtn.addClass("ai-helper-clear-btn");
-		this.searchBtn = this.addAction("search", this.t("search-toggle"), () => this.toggleSearch());
-		this.searchBtn.addClass("ai-helper-search-toggle");
+		const actions = header.createDiv({ cls: "ai-helper-header-actions" });
+		this.clearBtn = new ButtonComponent(actions).setIcon("trash-2").setTooltip(this.t("clear-conversation"))
+			.onClick(() => this.clearConversation()).buttonEl;
+		this.clearBtn.addClass("clickable-icon", "ai-helper-clear-btn");
+		this.clearBtn.setAttribute("aria-label", this.t("clear-conversation"));
+		this.searchBtn = new ButtonComponent(actions).setIcon("search").setTooltip(this.t("search-toggle"))
+			.onClick(() => this.toggleSearch()).buttonEl;
+		this.searchBtn.addClass("clickable-icon", "ai-helper-search-toggle");
 		this.searchBtn.setAttribute("role", "button");
 		this.searchBtn.setAttribute("aria-label", this.t("search-toggle"));
 		this.searchBtn.setAttribute("aria-pressed", String(this.searchEnabled));

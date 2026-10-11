@@ -16,6 +16,28 @@
 	margin-bottom: 8px;
 }
 
+.ai-helper-context-summary {
+	flex: 1 1 160px;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.ai-helper-header-actions {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.ai-helper-header-actions button {
+	width: 28px;
+	height: 28px;
+	padding: 4px;
+}
+
 .ai-helper-index-action,
 .ai-helper-index-pause {
 	flex: 0 0 auto;
@@ -28,8 +50,8 @@
 }
 
 .ai-helper-context-bar {
-	flex: 1 1 auto;
-	min-width: 0;
+	flex: 1 1 40px;
+	min-width: 40px;
 }
 
 .ai-helper-context-title,

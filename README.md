@@ -22,7 +22,7 @@ Requires Obsidian 1.13.0 or later. Supports desktop Obsidian only. Mobile Obsidi
 
 - Ribbon icon or command palette (`Toggle AI Helper chat`) opens the chat in the right sidebar.
 - Settings → Obsidian AI Helper: language and native sub-pages for Connection and conversation, Note search, and Advanced settings. The default language follows Obsidian; existing explicit English/Russian preferences are preserved.
-- Chat header actions and the pane menu clear the conversation and toggle note search. New conversation, Stop generation, and Note search are also available in the command palette; assign shortcuts in Obsidian’s Hotkeys settings.
+- Buttons to the right of the Context indicator clear the conversation and toggle note search; these actions are also available in the pane menu. New conversation, Stop generation, and Note search are also available in the command palette; assign shortcuts in Obsidian’s Hotkeys settings.
 - Excluded folders use a native folder list with suggestions. Missing paths remain excluded; `/` excludes the vault root.
 - Source citations open verified notes, support a new tab with Obsidian modifiers or the middle mouse button, and offer Page preview when that core plugin is enabled. Search answers remain plain text; model-generated links are not activated.
 - Source similarity and top P have sliders alongside exact text input. Enable the model server default for top P to omit it from requests.
