@@ -48,6 +48,7 @@ export class AiHelperPlugin extends Plugin {
 				const file = this.app.vault.getFileByPath(path);
 				return file?.extension === "md" ? this.app.vault.read(file) : null;
 			},
+			list: () => this.app.vault.getMarkdownFiles().map((file) => file.path),
 			metadata: (_path, raw) => {
 				const yaml = raw.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/);
 				const value: unknown = yaml ? parseYaml(yaml[1]) : {};
@@ -56,6 +57,8 @@ export class AiHelperPlugin extends Plugin {
 			open: (path, heading) => this.app.workspace.openLinkText(heading ? `${path}#${heading}` : path, "", false),
 		});
 		this.noteSearch.configure(this.settings);
+		try { await this.noteSearch.restore(); }
+		catch { new Notice(this.t("search-storage")); }
 
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.addRibbonIcon(
@@ -78,6 +81,13 @@ export class AiHelperPlugin extends Plugin {
 			id: "index-active-note", name: this.t("search-index"),
 			callback: () => { void this.indexActiveNote(); },
 		});
+		for (const [id, key, action] of [
+			["index-vault", "search-vault-index", "index"],
+			["clear-note-index", "search-vault-clear", "clear"],
+			["rebuild-note-index", "search-vault-rebuild", "rebuild"],
+		] as const) {
+			this.addCommand({ id, name: this.t(key), callback: () => { void this.manageNoteIndex(action); } });
+		}
 		void this.refreshModels();
 		void this.refreshEmbeddingModels();
 	}
@@ -98,6 +108,7 @@ export class AiHelperPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
 		if (!isValidMinimumSimilarity(this.settings.noteSearchMinSimilarity)) this.settings.noteSearchMinSimilarity = DEFAULT_SETTINGS.noteSearchMinSimilarity;
+		this.settings.excludedFolders = Array.isArray(this.settings.excludedFolders) ? this.settings.excludedFolders.filter((folder) => typeof folder === "string") : [];
 		this.noteSearchConnection.configure(this.settings);
 		this.modelConnection.configure(this.settings);
 		this.contextWindowConnection.configure(this.settings);
@@ -108,10 +119,26 @@ export class AiHelperPlugin extends Plugin {
 		const file = this.app.workspace.getActiveFile();
 		if (!file || file.extension !== "md") { new Notice(this.t("search-note")); return; }
 		this.indexingNote = true;
-		new Notice(this.t("search-indexing"));
+		new Notice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`);
 		try { await this.noteSearch.index(file.path); new Notice(this.t("search-indexed")); }
 		catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
 		finally { this.indexingNote = false; }
+	}
+
+	noteIndexDisclosure(): string {
+		return `${this.t("search-disclosure-embedding")}: ${this.settings.embeddingServerUrl || this.t("search-server-unset")}.\n${this.t("search-disclosure-conversation")}: ${this.settings.serverUrl || this.t("search-server-unset")}.`;
+	}
+
+	async manageNoteIndex(action: "index" | "clear" | "rebuild"): Promise<void> {
+		if (action !== "clear" && this.indexingNote) return;
+		if (action !== "clear") { this.indexingNote = true; new Notice(this.noteIndexDisclosure()); }
+		try {
+			if (action === "clear") await this.noteSearch.clear();
+			else if (action === "rebuild") await this.noteSearch.rebuild();
+			else await this.noteSearch.indexVault();
+			new Notice(this.t(action === "clear" ? "search-cleared" : "search-state-complete"));
+		} catch (error) { new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); }
+		finally { if (action !== "clear") this.indexingNote = false; }
 	}
 
 	async saveSettings(): Promise<void> {

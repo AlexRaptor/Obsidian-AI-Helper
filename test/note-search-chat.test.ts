@@ -122,3 +122,26 @@ it("shows exactly the bounded context sent for a long section and opens that hea
 	await vi.waitFor(() => expect(open).toHaveBeenCalledWith("Train.md", "Departure"));
 	await view.onClose();
 });
+
+it("shows incomplete coverage and selects fresh available sources after a folder is excluded", async () => {
+	const { view, root, bodies, open, send } = await setup();
+	root.find("ai-helper-search-toggle").click(); await send("When?");
+	expect(root.getText()).toContain("Partial index");
+	expect(bodies[1].messages.some((m: any) => m.content.includes("index is incomplete"))).toBe(true);
+	view.plugin.noteSearch.configure({ ...view.plugin.settings, excludedFolders: ["/"] });
+	bodies.length = 0; root.find("ai-helper-source-link").click(); await flushPromises();
+	expect(open).not.toHaveBeenCalled();
+	await send("Again?"); expect(bodies).toHaveLength(0);
+	await view.onClose();
+});
+
+it("does not send a source to the conversation server after exclusion during pending search", async () => {
+	const { view, root, bodies, finish } = await setup("pending"); root.find("ai-helper-search-toggle").click();
+	root.find("ai-helper-input").value = "When?"; root.find("ai-helper-send").click();
+	await vi.waitFor(() => expect(bodies).toHaveLength(1));
+	view.plugin.noteSearch.configure({ ...view.plugin.settings, excludedFolders: ["/"] });
+	finish();
+	await vi.waitFor(() => expect(root.find("ai-helper-send").text).toBe("Send"));
+	expect(bodies).toHaveLength(1); expect(view.getMessages()).toEqual([]);
+	await view.onClose();
+});

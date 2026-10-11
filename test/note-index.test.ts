@@ -209,8 +209,8 @@ it("requests rebuilding instead of throwing on a corrupted persisted fragment", 
 			const db = request.result;
 			const tx = db.transaction("note", "readwrite");
 			const store = tx.objectStore("note");
-			const record = store.get("current");
-			record.onsuccess = () => store.put({ ...record.result, fragments: [null] }, "current");
+			const record = store.get("Train.md");
+			record.onsuccess = () => store.put({ ...record.result, fragments: [null] }, "Train.md");
 			tx.oncomplete = () => { db.close(); resolve(); };
 			tx.onabort = () => { db.close(); reject(tx.error); };
 		};

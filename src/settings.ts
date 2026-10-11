@@ -15,6 +15,7 @@ import {
 
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	noteSearchMinSimilarity: number;
+	excludedFolders: string[];
 	serverUrl: string;
 	apiKey: string;
 	model: string;
@@ -30,6 +31,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
+	excludedFolders: [],
 	embeddingServerUrl: "",
 	embeddingApiKey: "",
 	embeddingModel: "",
@@ -50,6 +52,7 @@ export type ModelStatus = "idle" | "loaded" | "empty" | "error";
 export class AiHelperSettingsTab extends PluginSettingTab {
 	plugin: AiHelperPlugin;
 	private displayVersion = 0;
+	private unsubscribeIndex: (() => void) | undefined;
 	private unsubscribeContext: (() => void) | undefined;
 
 	constructor(app: App, plugin: AiHelperPlugin) {
@@ -62,6 +65,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.unsubscribeIndex?.();
 		this.unsubscribeContext?.();
 		if (this.plugin.noteSearchConnection?.status.state === "checking") this.plugin.noteSearchConnection.cancel();
 		if (this.plugin.modelConnection?.status.state === "checking") this.plugin.modelConnection.cancel();
@@ -77,6 +81,26 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const generation = this.createGroup(containerEl, "settings-group-generation");
 		const embedding = this.createGroup(containerEl, "settings-group-embedding");
 		this.renderEmbeddingConnection(embedding, version);
+		new Setting(embedding).setName(this.t("setting-excluded-folders")).setDesc(this.t("setting-excluded-folders-desc"))
+			.addTextArea((text) => text.setValue(this.plugin.settings.excludedFolders.join("\n")).onChange(async (value) => {
+				this.plugin.settings.excludedFolders = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+				await this.plugin.saveSettings();
+			}));
+		const index = new Setting(embedding).setName(this.t("search-vault-index"));
+		const disclosure = index.descEl.createDiv();
+		const status = index.descEl.createDiv({ attr: { "aria-live": "polite" } });
+		const updateIndex = () => {
+			if (version !== this.displayVersion) return;
+			disclosure.setText(this.plugin.noteIndexDisclosure?.() ?? "");
+			const progress = this.plugin.noteSearch?.progress;
+			if (progress) status.setText(`${this.t(`search-state-${progress.state}`)}: ${progress.completed}/${progress.total}${progress.error ? ` — ${this.t(progress.error)}` : ""}`);
+		};
+		for (const [action, key] of [["index", "search-vault-index"], ["rebuild", "search-vault-rebuild"], ["clear", "search-vault-clear"]] as const) {
+			index.addButton((button) => button.setButtonText(this.t(key)).onClick(async () => { await this.plugin.manageNoteIndex(action); updateIndex(); }));
+		}
+		this.unsubscribeIndex = this.plugin.noteSearch?.subscribe(updateIndex);
+		updateIndex();
+
 		const similarity = new Setting(embedding)
 			.setName(this.t("setting-search-min-similarity"))
 			.setDesc(this.t("setting-search-min-similarity-desc"));
@@ -387,6 +411,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		this.unsubscribeIndex?.();
 		this.unsubscribeContext?.();
 		this.unsubscribeContext = undefined;
 		this.displayVersion++;
