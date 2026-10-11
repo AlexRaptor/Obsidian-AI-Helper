@@ -379,13 +379,14 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	background: var(--color-green);
+	background: var(--interactive-accent);
 	color: var(--text-on-accent);
 }
 
 .ai-helper-input-row .ai-helper-stop {
-	background: var(--color-red);
-	color: var(--text-on-accent);
+	background: var(--interactive-normal);
+	color: var(--text-error);
+	border: 1px solid var(--text-error);
 }
 
 .ai-helper-stopped {
@@ -450,11 +451,11 @@
 }
 
 .ai-helper-input-row .ai-helper-send:hover {
-	background: color-mix(in srgb, var(--color-green) 85%, var(--text-normal));
+	background: var(--interactive-accent-hover);
 }
 
 .ai-helper-input-row .ai-helper-stop:hover {
-	background: color-mix(in srgb, var(--color-red) 85%, var(--text-normal));
+	background: var(--interactive-hover);
 }
 
 .ai-helper-send:focus-visible,
