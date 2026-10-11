@@ -132,3 +132,6 @@ export class SettingGroup {
 
 export class Menu {}
 export function setTooltip(el: TestElement, text: string): void { el.setAttribute("data-tooltip", text); }
+
+export class TFolder {}
+export class AbstractInputSuggest<T> { constructor(public app: unknown, _input: unknown) {} close(): void {} }

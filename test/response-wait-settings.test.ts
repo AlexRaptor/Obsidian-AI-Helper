@@ -12,7 +12,7 @@ const controls = vi.hoisted(() => [] as Array<{ name: string; description: strin
 vi.mock("obsidian", async () => {
 	const helper = await import("./helpers/obsidian");
 	return { ...helper,
-		PluginSettingTab: class { containerEl = new helper.TestElement(); },
+		PluginSettingTab: class { containerEl = new helper.TestElement(); constructor(public app: unknown) {} },
 		Setting: class {
 			name = ""; get description() { return this.descEl.getText(); } controlEl = new helper.TestElement(); descEl = new helper.TestElement();
 			input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> };
@@ -27,10 +27,11 @@ vi.mock("obsidian", async () => {
 			addToggle(callback: (toggle: unknown) => void) {
 				callback({ setValue() { return this; }, onChange() { return this; } }); return this;
 			}
+			addSearch(callback: (text: unknown) => void) { return this.addTextArea(callback); }
 			addText(callback: (text: unknown) => void) { return this.addTextArea(callback); }
 			addTextArea(callback: (text: unknown) => void) {
 				const input = { value: "", inputEl: new helper.TestElement(), change: async (_value: string) => {},
-					setPlaceholder() { return this; }, setValue(value: string) { this.value = value; return this; },
+					getValue() { return this.value; }, setPlaceholder() { return this; }, setValue(value: string) { this.value = value; return this; },
 					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
 				this.input = input; callback(input); return this;
 			}
@@ -388,7 +389,7 @@ it("shows the renamed exclusion immediately in open settings and persists it bef
 	const setting = controls.find(value => value.name === en["setting-excluded-folders"])!;
 	handlers.get("rename")!({ path: "Secrets" }, "Private");
 	try {
-		expect(setting.input!.value).toBe("Secrets\nSecrets/Nested\nPrivate-public");
+		expect(controls.filter(value => value.name === en["setting-excluded-folders"]).map(value => value.input!.value)).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		expect(plugin.settings.excludedFolders).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		await vi.waitFor(() => expect(saving).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: ["Secrets", "Secrets/Nested", "Private-public"] })));
 	} finally { plugin.onunload(); }
@@ -417,4 +418,21 @@ it.each(["en", "ru"] as const)("clears the full index and pending updates throug
 	await restored.restore(); await restored.resume(true);
 	expect(restored.progress.state).toBe("idle"); expect(requests).toBe(1); expect(text).toBe("edited note");
 	await expect(restored.search("note")).rejects.toMatchObject({ code: "search-rebuild" }); restored.dispose();
+});
+
+
+it("adds absent folders and root, rejects duplicate edits and removes rows", async () => {
+	const plugin = { settings: { ...DEFAULT_SETTINGS, excludedFolders: ["Private"] }, noteSearchConnection: { status: { state: "idle" }, cancel: vi.fn() }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const add = () => controls.filter(row => row.name === en["folder-add"]).slice(-1)[0]!;
+	add().input!.value = "Missing"; await add().button!.click();
+	add().input!.value = "/"; await add().button!.click();
+	add().input!.value = "Missing"; await add().button!.click();
+	expect(plugin.settings.excludedFolders).toEqual(["Private", "Missing", "/"]);
+	const rows = controls.filter(row => row.name === en["setting-excluded-folders"]).slice(-3);
+	await rows[0].input!.change("Missing");
+	expect(plugin.settings.excludedFolders[0]).toBe("Private");
+	await rows[1].button!.click();
+	expect(plugin.settings.excludedFolders).toEqual(["Private", "/"]);
+	tab.hide();
 });

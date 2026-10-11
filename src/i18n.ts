@@ -9,6 +9,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"folder-add": "Add excluded folder",
+	"folder-remove": "Remove excluded folder",
 	"settings-group-index-updates": "Index updates",
 	"search-update-delay": "Index update delay (seconds)",
 	"search-update-delay-desc": "Wait this long without file changes before automatically updating the index. Each change restarts the wait. Default: 3 seconds; manual index updates run immediately.",
@@ -204,6 +206,8 @@ export const en = {
 } as const;
 
 export const ru = {
+	"folder-add": "Добавить исключённую папку",
+	"folder-remove": "Удалить исключённую папку",
 	"settings-group-index-updates": "Обновление индекса",
 	"search-update-delay": "Задержка обновления индекса (секунды)",
 	"search-update-delay-desc": "Ожидание без изменений файла перед автоматическим обновлением индекса. Каждое изменение начинает отсчёт заново. По умолчанию: 3 секунды; ручное обновление индекса запускается сразу.",
