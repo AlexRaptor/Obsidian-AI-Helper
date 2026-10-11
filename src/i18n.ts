@@ -14,6 +14,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"use-server-top-p": "Use model server default for top P",
+	"unit-interval-invalid": "Enter a number from 0 to 1.",
 	"language-auto": "Same as Obsidian",
 	"folder-add": "Add excluded folder",
 	"folder-remove": "Remove excluded folder",
@@ -212,6 +214,8 @@ export const en = {
 } as const;
 
 export const ru = {
+	"use-server-top-p": "Использовать значение top P модель-сервера",
+	"unit-interval-invalid": "Введите число от 0 до 1.",
 	"language-auto": "Как в Obsidian",
 	"folder-add": "Добавить исключённую папку",
 	"folder-remove": "Удалить исключённую папку",

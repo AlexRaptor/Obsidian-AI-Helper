@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, SettingGroup, type ColorComponent, type SearchComponent } from "obsidian";
+import { App, PluginSettingTab, Setting, SettingGroup, type ColorComponent, type SliderComponent, type TextComponent, type SearchComponent } from "obsidian";
 import { FolderSuggest } from "./folder-suggest";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
@@ -141,7 +141,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const similarity = new Setting(embedding)
 			.setName(this.t("setting-search-min-similarity"))
 			.setDesc(this.t("setting-search-min-similarity-desc"));
+		let similarityInput: TextComponent;
+		let similaritySlider: SliderComponent;
 		similarity.addText((text) => {
+			similarityInput = text;
 			text.setValue(String(this.plugin.settings.noteSearchMinSimilarity)).onChange(async (value) => {
 				const normalized = value.trim().replace(",", ".");
 				const threshold = Number(normalized);
@@ -153,9 +156,22 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				text.inputEl.setAttribute("aria-invalid", "false");
 				similarity.setDesc(this.t("setting-search-min-similarity-desc"));
 				this.plugin.settings.noteSearchMinSimilarity = threshold;
+				similaritySlider.setValue(threshold);
 				await this.plugin.saveSettings();
 			});
 			text.inputEl.setAttribute("inputmode", "decimal");
+		});
+
+		similarity.addSlider(slider => {
+			similaritySlider = slider;
+			slider.setLimits(0, 1, 0.01).setValue(this.plugin.settings.noteSearchMinSimilarity).setDynamicTooltip()
+				.onChange(async value => {
+					this.plugin.settings.noteSearchMinSimilarity = value;
+					similarityInput.setValue(String(value));
+					similarityInput.inputEl.setAttribute("aria-invalid", "false");
+					similarity.setDesc(this.t("setting-search-min-similarity-desc"));
+					await this.plugin.saveSettings();
+				});
 		});
 
 		const appearance = this.createGroup(containerEl, "settings-group-similarity");
@@ -340,18 +356,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(generation)
-			.setName(this.t("setting-top-p"))
-			.setDesc(this.t("setting-top-p-desc"))
-			.addText((text) => {
-				text
-					.setPlaceholder(this.t("setting-top-p-placeholder"))
-					.setValue(this.plugin.settings.topP)
-					.onChange(async (value) => {
-						this.plugin.settings.topP = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
+		this.renderTopP(generation);
 
 		new Setting(generation)
 			.setName(this.t("setting-max-tokens"))
@@ -496,6 +501,44 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		setting.setDesc(this.t("setting-embedding-model-desc") + (loaded ? ` ${this.t("setting-embedding-models-hint")}`
 			: this.plugin.embeddingModelStatus === "empty" ? ` ${this.t("setting-models-empty")}`
 			: this.plugin.embeddingModelStatus === "error" ? ` ${this.t("setting-models-load-error")}` : ""));
+	}
+
+	private renderTopP(parent: HTMLElement): void {
+		const setting = new Setting(parent).setName(this.t("setting-top-p")).setDesc(this.t("setting-top-p-desc"));
+		let input: TextComponent;
+		let slider: SliderComponent;
+		let lastManual = this.plugin.settings.topP || "1";
+		const disabled = () => {
+			const useServer = this.plugin.settings.topP === "";
+			input.setDisabled(useServer); slider.setDisabled(useServer);
+		};
+		setting.addText(text => {
+			input = text;
+			text.setValue(this.plugin.settings.topP).onChange(async raw => {
+				const value = raw.trim().replace(",", ".");
+				const valid = /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) && Number(value) >= 0 && Number(value) <= 1;
+				text.inputEl.setAttribute("aria-invalid", String(!valid));
+				setting.setDesc(this.t("setting-top-p-desc") + (valid ? "" : ` ${this.t("unit-interval-invalid")}`));
+				if (!valid) return;
+				this.plugin.settings.topP = lastManual = value;
+				slider.setValue(Number(value)); await this.plugin.saveSettings();
+			});
+			text.inputEl.setAttribute("inputmode", "decimal");
+		});
+		setting.addSlider(control => {
+			slider = control;
+			control.setLimits(0, 1, 0.01).setValue(Number(lastManual)).setDynamicTooltip().onChange(async value => {
+				this.plugin.settings.topP = lastManual = String(value);
+				input.setValue(lastManual); input.inputEl.setAttribute("aria-invalid", "false");
+				setting.setDesc(this.t("setting-top-p-desc")); await this.plugin.saveSettings();
+			});
+		});
+		new Setting(parent).setName(this.t("use-server-top-p")).addToggle(toggle => toggle.setValue(!this.plugin.settings.topP).onChange(async useServer => {
+			this.plugin.settings.topP = useServer ? "" : lastManual;
+			input.setValue(this.plugin.settings.topP); input.inputEl.setAttribute("aria-invalid", "false");
+			setting.setDesc(this.t("setting-top-p-desc")); disabled(); await this.plugin.saveSettings();
+		}));
+		disabled();
 	}
 
 	private closeFolderSuggests(): void {

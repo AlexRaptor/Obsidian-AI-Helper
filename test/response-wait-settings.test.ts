@@ -8,7 +8,7 @@ import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
 import { en, ru, setLanguage, t } from "../src/i18n";
 import { deferred, TestElement } from "./helpers/obsidian";
 
-const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; picker?: { value: string; disabled: boolean; change: (value: string) => Promise<void> }; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
+const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; toggle?: { change: (value: boolean) => Promise<void> }; slider?: { value: number; change: (value: number) => Promise<void> }; picker?: { value: string; disabled: boolean; change: (value: string) => Promise<void> }; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
 vi.mock("obsidian", async () => {
 	const helper = await import("./helpers/obsidian");
 	return { ...helper,
@@ -25,13 +25,18 @@ vi.mock("obsidian", async () => {
 			setName(name: string) { this.name = name; return this; }
 			setDesc(description: string) { this.descEl.setText(description); return this; }
 			addToggle(callback: (toggle: unknown) => void) {
-				callback({ setValue() { return this; }, onChange() { return this; } }); return this;
+				const toggle = { change: async (_value: boolean) => {}, setValue() { return this; }, onChange(change: (value: boolean) => Promise<void>) { this.change = change; return this; } };
+				Object.assign(this, { toggle }); callback(toggle); return this;
+			}
+			addSlider(callback: (slider: unknown) => void) {
+				const slider = { value: 0, change: async (_value: number) => {}, setLimits() { return this; }, setDynamicTooltip() { return this; }, setDisabled() { return this; }, setValue(value: number) { this.value = value; return this; }, onChange(change: (value: number) => Promise<void>) { this.change = change; return this; } };
+				Object.assign(this, { slider }); callback(slider); return this;
 			}
 			addSearch(callback: (text: unknown) => void) { return this.addTextArea(callback); }
 			addText(callback: (text: unknown) => void) { return this.addTextArea(callback); }
 			addTextArea(callback: (text: unknown) => void) {
 				const input = { value: "", inputEl: new helper.TestElement(), change: async (_value: string) => {},
-					getValue() { return this.value; }, setPlaceholder() { return this; }, setValue(value: string) { this.value = value; return this; },
+					setDisabled(value: boolean) { this.inputEl.disabled = value; return this; }, getValue() { return this.value; }, setPlaceholder() { return this; }, setValue(value: string) { this.value = value; return this; },
 					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
 				this.input = input; callback(input); return this;
 			}
@@ -444,4 +449,18 @@ it("defaults missing language to auto and preserves saved manual preferences", a
 		vi.spyOn(plugin, "loadData").mockResolvedValue(saved);
 		await plugin.loadSettings(); expect(plugin.settings.language).toBe(expected);
 	}
+});
+
+
+it("preserves exact top P values and server defaults while validating manual edits", async () => {
+	const plugin = { settings: { ...DEFAULT_SETTINGS, topP: "0.12345" }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
+	new AiHelperSettingsTab({} as App, plugin).display();
+	const row = controls.find(row => row.name === en["setting-top-p"])!;
+	const toggle = controls.find(row => row.name === en["use-server-top-p"])!.toggle!;
+	expect(plugin.settings.topP).toBe("0.12345");
+	await row.input!.change("1.2"); expect(plugin.settings.topP).toBe("0.12345");
+	await row.input!.change("0,23456"); expect(plugin.settings.topP).toBe("0.23456");
+	await toggle.change(true); expect(plugin.settings.topP).toBe(""); expect(row.input!.inputEl.disabled).toBe(true);
+	await toggle.change(false); expect(plugin.settings.topP).toBe("0.23456");
+	await row.slider!.change(0.7); expect(plugin.settings.topP).toBe("0.7"); expect(row.input!.value).toBe("0.7");
 });
