@@ -385,8 +385,7 @@
 	min-height: 1em;
 }
 
-.ai-helper-source pre,
-.ai-helper-message-content:has(.ai-helper-source) .ai-helper-markdown {
+.ai-helper-source pre {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }

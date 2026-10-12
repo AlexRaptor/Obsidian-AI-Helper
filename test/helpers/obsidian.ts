@@ -1,6 +1,31 @@
 type ElementOptions = { cls?: string; text?: string; attr?: Record<string, string> };
 
 export class TestElement {
+	nodeType = 1;
+	tagName = "DIV";
+	get firstChild(): TestElement | TestText | undefined { return this.childNodes[0]; }
+	get childNodes(): Array<TestElement | TestText> { return [...(this.text ? [new TestText(this)] : []), ...this.children]; }
+	closest(tags: string): TestElement | null {
+		if (tags.split(", ").includes(this.tagName.toLowerCase())) return this;
+		return this.parent?.closest(tags) ?? null;
+	}
+	insertBefore(child: TestElement, before?: TestElement | TestText): void {
+		child.remove(); child.parent = this;
+		const index = before instanceof TestElement ? this.children.indexOf(before) : 0;
+		this.children.splice(Math.max(0, index), 0, child);
+	}
+	replaceWith(...nodes: Array<TestElement | TestText>): void {
+		const parent = this.parent;
+		if (!parent) return;
+		const index = parent.children.indexOf(this);
+		this.remove();
+		for (const [offset, node] of nodes.entries()) {
+			const child = node instanceof TestText ? new TestElement() : node;
+			if (node instanceof TestText) child.text = node.textContent;
+			child.remove(); child.parent = parent;
+			parent.children.splice(index + offset, 0, child);
+		}
+	}
 	children: TestElement[] = [];
 	private parent: TestElement | null = null;
 	className = "";
@@ -23,6 +48,7 @@ export class TestElement {
 	setAttribute(name: string, value: string): void { this.attributes[name] = value; }
 	createEl(_tag: string, options: ElementOptions = {}): TestElement {
 		const child = new TestElement();
+		child.tagName = _tag.toUpperCase();
 		if (options.cls) child.addClass(options.cls);
 		child.text = options.text ?? "";
 		child.attributes = { ...options.attr };
@@ -54,6 +80,17 @@ export class TestElement {
 	getText(): string { return this.text + this.children.map((child) => child.getText()).join(""); }
 }
 
+class TestText {
+	nodeType = 3;
+	constructor(private parent: TestElement) {}
+	get textContent(): string { return this.parent.text; }
+	set textContent(text: string) { this.parent.text = text; }
+	replaceWith(element: TestElement): void {
+		this.parent.text = "";
+		this.parent.insertBefore(element, this.parent.children[0]);
+	}
+}
+
 export class Component {
 	registerDomEvent(el: TestElement, event: string, callback: (evt: any) => void): void { el.addEventListener(event, callback); }
 	load(): void {}
@@ -72,7 +109,9 @@ export class ItemView extends Component {
 
 export const MarkdownRenderer = {
 	async render(_app: unknown, content: string, el: TestElement): Promise<void> {
-		el.setText(content);
+		if (el.classes.has("ai-helper-search-answer")) {
+			for (const line of content.split("\n")) el.createEl("p", { text: line });
+		} else el.setText(content);
 	},
 };
 

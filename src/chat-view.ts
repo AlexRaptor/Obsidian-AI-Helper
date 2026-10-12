@@ -6,6 +6,7 @@ import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, sourceB
 import type { ChatMessage } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
 import { effectiveContextWindow } from "./context-window";
+import { prepareSearchMarkdown, visitSearchAnswerText } from "./search-answer-markdown";
 
 export const VIEW_TYPE_CHAT = "ai-helper-chat";
 
@@ -441,7 +442,7 @@ export class ChatView extends ItemView implements HoverParent {
 			current.component = component;
 			updates.push((async () => {
 				if (message.sources?.length && kind === "text") {
-					// Search answers are rendered as text: model-supplied Markdown/wiki links cannot bypass source validation.
+					// Render formatting while keeping model-supplied links inert.
 					const sources = message.sources;
 					const link = (parent: HTMLElement, source: NoteSource, number: number) => {
 						const linktext = source.path + (source.headings.length ? `#${source.headings[source.headings.length - 1]}` : "");
@@ -480,16 +481,33 @@ export class ChatView extends ItemView implements HoverParent {
 						const similarityEl = parent.createSpan({ cls: "ai-helper-source-similarity", text: `${prefix}${this.t("search-similarity")}: ${source.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
 						similarityEl.style.color = similarityColor(source.similarity, normalizeSimilarityAppearance(this.plugin.settings.similarityAppearance));
 					};
-					for (const line of content.split("\n")) {
-						const cited = [...new Set(Array.from(line.matchAll(/\[(\d+)\]/g), match => Number(match[1])))].filter(number => sources[number - 1]);
-						const answer = staging.createDiv({ cls: `ai-helper-answer-line${cited.length ? " ai-helper-source-answer" : ""}` });
-						for (const number of cited) similarity(answer, sources[number - 1], cited.length > 1 ? `[${number}] ` : "");
-						for (const part of line.split(/(\[\d+\])/)) {
+					const answer = staging.createDiv({ cls: "ai-helper-search-answer" });
+					const prepared = prepareSearchMarkdown(content);
+					try { await MarkdownRenderer.render(this.app, prepared.markdown, answer, "", component); }
+					catch { answer.empty(); answer.createEl("pre", { text: content }); }
+					const citedBlocks = new Map<HTMLElement, Set<number>>();
+					visitSearchAnswerText(answer, (node, parent, inCode) => {
+						const text = prepared.restore(node.textContent ?? "");
+						node.textContent = text;
+						if (inCode || !/\[\d+\]/.test(text)) return;
+						const block = parent.closest("p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6") as HTMLElement | null ?? parent;
+						const cited = citedBlocks.get(block) ?? new Set<number>();
+						citedBlocks.set(block, cited);
+						const replacement = parent.createSpan();
+						for (const part of text.split(/(\[\d+\])/)) {
 							const number = /^\[(\d+)\]$/.exec(part)?.[1];
 							const source = number ? sources[Number(number) - 1] : undefined;
-							if (source) link(answer, source, Number(number));
-							else answer.createSpan({ text: part });
+							if (source) { cited.add(Number(number)); link(replacement, source, Number(number)); }
+							else replacement.createSpan({ text: part });
 						}
+						node.replaceWith(replacement);
+					});
+					for (const [block, cited] of citedBlocks) {
+						if (!cited.size) continue;
+						block.addClass("ai-helper-source-answer");
+						const metadata = block.createSpan();
+						for (const number of cited) similarity(metadata, sources[number - 1], cited.size > 1 ? `[${number}] ` : "");
+						block.insertBefore(metadata, block.firstChild);
 					}
 					for (const [index, source] of sources.entries()) {
 						const details = staging.createEl("details", { cls: "ai-helper-source" });
