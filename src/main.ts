@@ -16,7 +16,10 @@ import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { StorageProbeModal } from "./storage-probe-modal";
 import { createContextWindowConnection } from "./context-window";
 
+import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
+
 export class AiHelperPlugin extends Plugin {
+	folderDescriptions = new FolderDescriptions(this.app, () => this.settings.folderDescriptionName, key => this.t(key));
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
 	models: string[] = [];
 	modelStatus: ModelStatus = "idle";
@@ -95,6 +98,9 @@ export class AiHelperPlugin extends Plugin {
 			this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
 				if (file instanceof TFolder) {
+					menu.addItem(item => item.setTitle(this.t("folder-description-create")).setIcon("file-plus").onClick(() => {
+						if (!this.unloading) void this.folderDescriptions.createAndOpen(file).catch(() => new Notice(this.t("folder-description-error")));
+					}));
 					const normalize = (path: string) => path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/+/g, "/");
 					const path = normalize(file.path);
 					const excluded = this.settings.excludedFolders.some(folder => normalize(folder) === path);
@@ -186,6 +192,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!isValidFolderDescriptionName(this.settings.folderDescriptionName)) this.settings.folderDescriptionName = DEFAULT_SETTINGS.folderDescriptionName;
 		if (!["local", "file"].includes(this.settings.indexStorageMode)) this.settings.indexStorageMode = "local";
 		if (typeof this.settings.indexStorageGeneration !== "string") this.settings.indexStorageGeneration = "";
 		if (!["auto", "en", "ru"].includes(this.settings.language)) this.settings.language = "auto";

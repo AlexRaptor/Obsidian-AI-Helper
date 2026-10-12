@@ -14,6 +14,24 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"folder-description-name": "Folder description file name",
+	"folder-description-name-desc": "One Markdown file name for all folders. Existing files are kept when the name changes.",
+	"folder-description-name-invalid": "Enter a valid file name ending in .md, without a path.",
+	"folder-description-apply": "Apply",
+	"folder-description-change": "Files with the current name: {count}. Save “{name}” without renaming files? Only the new name will be recognized.",
+	"folder-description-cancel": "Cancel",
+	"folder-description-confirm": "Save without renaming",
+	"folder-description-save-error": "Could not save the description name. The previous name is kept.",
+
+	"folder-description-create": "Create description",
+	"folder-description-error": "Could not create or open the folder description. Check the file name, folder and vault access.",
+	"folder-description-purpose": "Purpose",
+	"folder-description-purpose-hint": "What this folder is for",
+	"folder-description-include": "Belongs here",
+	"folder-description-include-hint": "Which notes to keep here",
+	"folder-description-exclude": "Does not belong here",
+	"folder-description-exclude-hint": "What to keep in other folders",
+
 	"settings-page-conversation": "Connection and conversation",
 	"settings-page-search": "Note search",
 	"settings-page-advanced": "Advanced settings",
@@ -237,6 +255,24 @@ export const en = {
 } as const;
 
 export const ru = {
+	"folder-description-name": "Имя файла описания папки",
+	"folder-description-name-desc": "Единое имя Markdown-файла для всех папок. При смене имени существующие файлы сохраняются.",
+	"folder-description-name-invalid": "Введите допустимое имя файла с расширением .md без пути.",
+	"folder-description-apply": "Применить",
+	"folder-description-change": "Файлов с текущим именем: {count}. Сохранить «{name}» без переименования файлов? Будет распознаваться только новое имя.",
+	"folder-description-cancel": "Отмена",
+	"folder-description-confirm": "Сохранить без переименования",
+	"folder-description-save-error": "Не удалось сохранить имя описания. Сохранено прежнее имя.",
+
+	"folder-description-create": "Создать описание",
+	"folder-description-error": "Не удалось создать или открыть описание папки. Проверьте имя файла, папку и доступ к хранилищу.",
+	"folder-description-purpose": "Назначение",
+	"folder-description-purpose-hint": "Для чего нужна папка",
+	"folder-description-include": "Сюда относятся",
+	"folder-description-include-hint": "Какие заметки хранить здесь",
+	"folder-description-exclude": "Не относятся",
+	"folder-description-exclude-hint": "Что хранить в других папках",
+
 	"settings-page-conversation": "Подключение и диалог",
 	"settings-page-search": "Поиск по заметкам",
 	"settings-page-advanced": "Дополнительные параметры",

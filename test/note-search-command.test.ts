@@ -29,7 +29,7 @@ it.each([
 	const folder = Object.assign(new TFolder(), { path });
 	const menu = () => {
 		const result = new Menu(); handlers.get("file-menu")!(result, folder);
-		return (result as unknown as { items: Array<{ title: string; callback: () => void }> }).items;
+		return (result as unknown as { items: Array<{ title: string; callback: () => void }> }).items.filter(item => [en["folder-menu-include"], en["folder-menu-exclude"], ru["folder-menu-include"], ru["folder-menu-exclude"]].some(title => title === item.title));
 	};
 	const dictionary = language === "ru" ? ru : en;
 	const first = menu();

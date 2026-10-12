@@ -231,7 +231,7 @@ export class Menu {
 }
 export function setTooltip(el: TestElement, text: string): void { el.setAttribute("data-tooltip", text); }
 
-export class TFolder {}
+export class TFolder { path = ""; isRoot(): boolean { return this.path === "/" || this.path === ""; } }
 export class AbstractInputSuggest<T> { constructor(public app: unknown, _input: unknown) {} close(): void {} }
 
 export function getLanguage(): string { return "en"; }

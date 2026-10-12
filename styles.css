@@ -446,3 +446,18 @@
 	outline: 2px solid var(--interactive-accent);
 	outline-offset: 2px;
 }
+
+.ai-helper-description-name .setting-item-control {
+	min-width: 50%;
+	flex: 1 1 50%;
+	flex-wrap: wrap;
+}
+
+.ai-helper-description-name input {
+	flex: 1 1 100%;
+	min-width: 100%;
+}
+
+.ai-helper-description-name {
+	flex-wrap: wrap;
+}

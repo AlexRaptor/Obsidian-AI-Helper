@@ -1,4 +1,6 @@
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
+import { isValidFolderDescriptionName, DEFAULT_FOLDER_DESCRIPTION_NAME } from "./folder-descriptions";
+import { FolderDescriptionNameModal } from "./folder-description-name-modal";
 import { IndexStorageModal } from "./index-storage-modal";
 import type { IndexStorageMode } from "./note-index";
 import type { AiHelperPlugin } from "./main";
@@ -16,6 +18,7 @@ import {
 } from "./i18n";
 
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
+	folderDescriptionName: string;
 	indexStorageMode: IndexStorageMode;
 	indexStorageGeneration: string;
 	noteSourceBudget: string;
@@ -38,6 +41,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
+	folderDescriptionName: DEFAULT_FOLDER_DESCRIPTION_NAME,
 	indexStorageMode: "local",
 	indexStorageGeneration: "",
 	noteSourceBudget: String(DEFAULT_SOURCE_BUDGET_BYTES),
@@ -69,6 +73,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	private updateModelStatus?: () => void;
 	private updateEmbeddingStatus?: () => void;
 	private folderDraft?: string;
+	private descriptionNameModal?: FolderDescriptionNameModal;
 	private updateFolderWarnings?: () => void;
 
 	constructor(app: App, public plugin: AiHelperPlugin) { super(app, plugin); this.icon = "message-square"; }
@@ -118,6 +123,15 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				]),
 			] },
 			{ type: "page", name: this.t("settings-page-search"), items: [
+				this.row("folder-description-name", "folder-description-name-desc", setting => {
+					setting.setClass("ai-helper-description-name");
+					let draft = this.plugin.settings.folderDescriptionName;
+					setting.addText(text => text.setValue(draft).onChange(value => { draft = value; }));
+					setting.addButton(button => button.setButtonText(this.t("folder-description-apply")).onClick(() => {
+						if (!isValidFolderDescriptionName(draft)) { setting.setDesc(this.t("folder-description-name-invalid")); return; }
+						void this.setControlValue("folderDescriptionName", draft);
+					}));
+				}),
 				this.group("settings-group-embedding", [
 					this.text("embeddingServerUrl", "setting-embedding-server-url", "setting-embedding-server-url-desc"),
 					this.row("setting-embedding-api-key", "setting-api-key-desc", setting => { setting.addText(text => {
@@ -163,6 +177,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	async setControlValue(key: string, value: unknown): Promise<void> {
+		if (key === "folderDescriptionName") {
+			if (this.descriptionNameModal || !isValidFolderDescriptionName(value) || value === this.plugin.settings.folderDescriptionName) return;
+			this.descriptionNameModal = new FolderDescriptionNameModal(this.plugin, value, () => { this.descriptionNameModal = undefined; this.update(); });
+			this.descriptionNameModal.open();
+			return;
+		}
 		if (key.startsWith("excluded-folder:")) {
 			if (typeof value !== "string" || !value.trim()) return;
 			const path = value.trim();

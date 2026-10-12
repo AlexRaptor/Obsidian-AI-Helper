@@ -626,3 +626,56 @@ it("shows the confirmed mode while rebuilding and ignores a repeated selection",
 		tab.hide(); search.dispose();
 	}
 });
+
+it.each(["en", "ru"] as const)("validates and confirms description name changes with all old files counted (%s)", async locale => {
+	const { TFile, TFolder, Modal } = await import("./helpers/obsidian");
+	setLanguage(locale);
+	const names = ["Private/_folder.md", "Empty/_folder.md", "Other/_folder.md", "Other/Note.md"];
+	const files = names.map(path => Object.assign(new TFile(), { path, name: path.split("/").at(-1), parent: new TFolder() }));
+	const app = { vault: { getMarkdownFiles: () => files } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, excludedFolders: ["Private"] };
+	const save = vi.spyOn(plugin, "saveSettings").mockResolvedValue();
+	const tab = new AiHelperSettingsTab(app, plugin); tab.display();
+	const row = controls.find(control => control.name === t("folder-description-name"))!;
+	expect(row).toBeDefined();
+	for (const invalid of ["", "folder", "folder.txt", "../folder.md", "a/b.md", "a\\b.md", "a: b.md", ".md", "CON.md", "folder .md"]) {
+		await row.input!.change(invalid); await row.button!.click();
+		expect(plugin.settings.folderDescriptionName).toBe("_folder.md"); expect(Modal.opened).toHaveLength(0);
+	}
+	await row.input!.change("about.md"); await row.button!.click();
+	expect(plugin.settings.folderDescriptionName).toBe("_folder.md"); expect(save).not.toHaveBeenCalled();
+	let modal = Modal.opened.at(-1)!;
+	expect(modal.contentEl.getText()).toContain("3");
+	await controls.find(control => control.button?.buttonEl.classes.has("ai-helper-description-cancel"))!.button!.click();
+	expect(plugin.settings.folderDescriptionName).toBe("_folder.md"); expect(save).not.toHaveBeenCalled();
+	await row.input!.change("about.md"); await row.button!.click();
+	modal = Modal.opened.at(-1)!; await controls.filter(control => control.button?.buttonEl.classes.has("ai-helper-description-confirm")).at(-1)!.button!.click();
+	await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+	expect(plugin.settings.folderDescriptionName).toBe("about.md");
+	expect(files.map(file => file.path)).toEqual(names);
+	expect(plugin.folderDescriptions.list()).toEqual([]);
+	tab.hide();
+});
+
+it("keeps name confirmation open while saving and restores the old name on failure", async () => {
+	const { Modal } = await import("./helpers/obsidian");
+	const plugin = new AiHelperPlugin({ vault: { getMarkdownFiles: () => [] } } as unknown as App, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS };
+	let reject!: (error: Error) => void;
+	const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
+	vi.spyOn(plugin, "saveSettings").mockReturnValue(pending);
+	const tab = new AiHelperSettingsTab(plugin.app, plugin); tab.display();
+	const row = controls.find(control => control.name === t("folder-description-name"))!;
+	await row.input!.change("about.md"); await row.button!.click();
+	const modal = Modal.opened.at(-1)!;
+	const buttons = (cls: string) => controls.find(control => control.button?.buttonEl.classes.has(cls))!.button!;
+	const saving = buttons("ai-helper-description-confirm").click();
+	expect(buttons("ai-helper-description-cancel").buttonEl.disabled).toBe(true);
+	modal.close(); expect(Modal.opened).toContain(modal);
+	reject(new Error("Settings unavailable")); await saving;
+	expect(plugin.settings.folderDescriptionName).toBe("_folder.md");
+	expect(buttons("ai-helper-description-cancel").buttonEl.disabled).toBe(false);
+	await buttons("ai-helper-description-cancel").click(); expect(Modal.opened).not.toContain(modal);
+	tab.hide();
+});
