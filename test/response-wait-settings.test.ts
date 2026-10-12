@@ -495,3 +495,28 @@ it("renders a draft folder without persisting an empty exclusion", () => {
 	expect(controls.filter(row => row.name === en["setting-excluded-folders"]).slice(-1)[0].input!.value).toBe("");
 	expect(plugin.settings.excludedFolders).toEqual([]); expect(plugin.saveSettings).not.toHaveBeenCalled();
 });
+
+
+it("validates the advanced source budget and preserves the last valid setting", async () => {
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin);
+	const walk = (items: any[]): any[] => items.flatMap(item => [item, ...walk(item.items ?? [])]);
+	const page = tab.getSettingDefinitions().find((item: any) => item.name === en["settings-page-advanced"]) as any;
+	const control = walk(page.items).find(item => item.control?.key === "noteSourceBudget").control;
+	await tab.setControlValue("noteSourceBudget", "24000");
+	expect(plugin.settings.noteSourceBudget).toBe("24000");
+	for (const value of ["", "0", "-1", "1.5", "NaN", "Infinity", "9007199254740992"]) {
+		expect(control.validate(value)).toBeTruthy();
+		await tab.setControlValue("noteSourceBudget", value);
+		expect(plugin.settings.noteSourceBudget).toBe("24000");
+	}
+});
+
+
+it("restores the saved source budget and defaults invalid persisted values", async () => {
+	for (const [value, expected] of [[undefined, "12000"], ["24000", "24000"], ["0", "12000"], [12000, "12000"]]) {
+		const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+		vi.spyOn(plugin, "loadData").mockResolvedValue({ noteSourceBudget: value });
+		await plugin.loadSettings(); expect(plugin.settings.noteSourceBudget).toBe(expected);
+	}
+});

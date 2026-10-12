@@ -107,3 +107,16 @@ it("finds separately recorded identifiers and retains the available part of a mu
 	expect(sources.map(source => source.path).sort()).toEqual(["Access.md", "Other.md"]);
 	expect((await search.searchSources("What do ERR_AUTH_42 and ERR_AUTH_99 mean?")).map(source => source.path)).toEqual(["Access.md"]);
 });
+
+
+it("allows a requested source budget above the default while retaining the default limit", async () => {
+	const { search, notes } = await fixture();
+	for (const word of ["alpha", "bravo", "charlie", "delta"]) {
+		notes.set(`${word}.md`, `ERR_AUTH_42 ${word} ` + `${word} `.repeat(500));
+		await search.index(`${word}.md`);
+	}
+	const defaultSources = await search.searchSources("ERR_AUTH_42");
+	const expandedSources = await search.searchSources("ERR_AUTH_42", undefined, 24000);
+	expect(defaultSources.filter(source => /alpha|bravo|charlie|delta/.test(source.path))).toHaveLength(3);
+	expect(expandedSources.filter(source => /alpha|bravo|charlie|delta/.test(source.path))).toHaveLength(4);
+});

@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
-import { DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
+import { DEFAULT_SOURCE_BUDGET_BYTES, sourceBudgetBytes, DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions } from "./note-fragments";
 import { DEFAULT_SIMILARITY_APPEARANCE, SIMILARITY_COLORS, validSimilarityBoundaries, isSimilarityColor, type SimilarityAppearance } from "./similarity-appearance";
 import { parseResponseWait } from "./response-wait";
@@ -14,6 +14,7 @@ import {
 } from "./i18n";
 
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
+	noteSourceBudget: string;
 	noteSearchMinSimilarity: number;
 	excludedFolders: string[];
 	autoUpdateNotes: boolean;
@@ -33,6 +34,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
+	noteSourceBudget: String(DEFAULT_SOURCE_BUDGET_BYTES),
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	excludedFolders: [],
 	autoUpdateNotes: true,
@@ -135,6 +137,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				]),
 			] },
 			{ type: "page", name: this.t("settings-page-advanced"), items: [
+				{ name: this.t("setting-source-budget"), desc: this.t("setting-source-budget-desc"), control: {
+					type: "text", key: "noteSourceBudget", validate: value => { if (sourceBudgetBytes(value) === undefined) return this.t("setting-source-budget-invalid"); },
+				} },
 				this.group("settings-group-fragments", [
 					this.row("setting-fragment-size", "setting-fragment-options-desc", setting => this.renderFragment(setting, "noteFragmentSize")),
 					this.row("setting-fragment-overlap", "setting-fragment-options-desc", setting => this.renderFragment(setting, "noteFragmentOverlap")),
@@ -174,6 +179,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		} else {
 			if (typeof value !== "string" || typeof this.getControlValue(key) !== "string") return;
 			let normalized = key === "systemPrompt" ? value : value.trim();
+			if (key === "noteSourceBudget" && sourceBudgetBytes(value) === undefined) return;
 			if (key === "responseWait") { const parsed = parseResponseWait(value); if (!parsed.valid) return; normalized = parsed.value; }
 			Object.assign(this.plugin.settings, { [key]: normalized });
 		}
