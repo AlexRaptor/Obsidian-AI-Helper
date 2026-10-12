@@ -271,7 +271,10 @@ export class ChatView extends ItemView implements HoverParent {
 		this.indexCoverageBar?.setAttribute("aria-valuenow", String(percent));
 		this.indexCoverageBar?.setAttribute("aria-valuetext", label);
 		this.indexProgress?.setValue(percent);
-		this.indexReason?.setText(`${this.t(`search-state-${progress.state}`)}${progress.state !== "complete" ? ` — ${this.t("search-partial")}` : ""}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
+		if (this.indexReason) {
+			this.indexReason.style.display = progress.state === "complete" ? "none" : "";
+			this.indexReason.setText(progress.state === "complete" ? "" : `${this.t(`search-state-${progress.state}`)} — ${this.t("search-partial")}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
+		}
 		if (this.indexAction) {
 			const key = progress.state === "idle" ? "search-vault-index" : progress.state === "error" ? "search-repeat" : "search-continue";
 			setIcon(this.indexAction, progress.state === "error" ? "rotate-cw" : "play");
