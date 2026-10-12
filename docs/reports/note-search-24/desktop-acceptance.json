@@ -1,0 +1,86 @@
+{
+  "environment": {
+    "obsidian": "1.14.4",
+    "cpu": "Apple M4 Pro",
+    "ramGiB": 48,
+    "embeddingDimensions": 1024,
+    "transport": "controlled loopback HTTP, not model quality"
+  },
+  "synthetic": {
+    "notes": 2000,
+    "bytes": 24161180,
+    "totalNotesWithFixtures": 2007
+  },
+  "fileFullRebuild": {
+    "clickedAt": "2026-10-12T09:22:53.255Z",
+    "completedSaveAt": "2026-10-12T09:23:23.052Z",
+    "elapsedSeconds": 29.797
+  },
+  "memory": {
+    "file": {
+      "started": "2026-10-12T09:19:34.838Z",
+      "finished": "2026-10-12T09:30:11.588Z",
+      "samples": 600,
+      "maxSelectedRendererRssBytes": 597753856,
+      "scope": "sampled control-vault renderer; excludes model, other vault and application processes"
+    },
+    "local": {
+      "started": "2026-10-12T09:54:59.059Z",
+      "finished": "2026-10-12T09:58:10.405Z",
+      "samples": 180,
+      "maxSelectedRendererRssBytes": 569950208,
+      "scope": "sampled control-vault renderer; excludes model, other vault and application processes"
+    }
+  },
+  "localQueue": {
+    "offline": false,
+    "delayMs": 5,
+    "requests": [
+      {
+        "time": "2026-10-12T10:03:54.929Z",
+        "endpoint": "/v1/embeddings",
+        "offline": true,
+        "inputs": [
+          {
+            "bytes": 126,
+            "hash": "f82e0dacb2f1b24d85bbd712d30c1906ae76789e2103f5d0f5c55f2b8c310d01",
+            "note": "Локальная-очередь24.md"
+          }
+        ]
+      },
+      {
+        "time": "2026-10-12T12:02:44.453Z",
+        "endpoint": "/v1/embeddings",
+        "offline": false,
+        "inputs": [
+          {
+            "bytes": 180,
+            "hash": "fb7f5a9c72d059ab32afb93af59cb6ba9753f10f042bdd9a5dd78ff8ed94a505",
+            "note": "Локальная-очередь-переименована24.md"
+          }
+        ]
+      }
+    ]
+  },
+  "nativeChecks": [
+    "real LM semantic/exact/follow-up/no-information/partial answers and source fidelity",
+    "source disclosure and opening heading",
+    "real LM ignored malicious note instructions",
+    "unconfirmed [99], wiki and external links rendered without active links",
+    "offline latest-version queue and restart in both storage modes",
+    "manual pause survives full quit/relaunch and search toggling",
+    "paused index remains paused after chat with automatic updates enabled",
+    "file Git exclusion",
+    "editor input during indexing",
+    "Large24 exclusion changes 2008/2008 to 8/8",
+    "active-note indexing command completes"
+  ],
+  "localFullRebuild": {
+    "startedAt": "2026-10-12T09:55:12.590Z",
+    "lastEmbeddingAt": "2026-10-12T09:58:58.912Z",
+    "requests": 2009,
+    "pausedAtCompletedNotes": 1540,
+    "completedNotes": 2007,
+    "elapsedIncludesManualPause": true
+  }
+}
