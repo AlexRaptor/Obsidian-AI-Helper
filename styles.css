@@ -320,6 +320,15 @@
 	margin-top: 0.75em;
 }
 
+.ai-helper-source-similarity,
+.ai-helper-source-summary .ai-helper-source-link {
+	display: block;
+}
+
+.ai-helper-answer-line {
+	min-height: 1em;
+}
+
 .ai-helper-source pre,
 .ai-helper-message-content:has(.ai-helper-source) .ai-helper-markdown {
 	white-space: pre-wrap;

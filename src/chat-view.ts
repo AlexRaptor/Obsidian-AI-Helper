@@ -471,20 +471,26 @@ export class ChatView extends ItemView implements HoverParent {
 					};
 					const partial = sources.some(source => source.partial);
 					if (partial) staging.createDiv({ cls: "ai-helper-search-info ai-helper-search-partial", text: this.t("search-partial") });
-					for (const source of sources) {
-						const similarityEl = staging.createDiv({ cls: "ai-helper-source-similarity", text: `${this.t("search-similarity")}: ${source.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
+					const similarity = (parent: HTMLElement, source: NoteSource, prefix = "") => {
+						const similarityEl = parent.createSpan({ cls: "ai-helper-source-similarity", text: `${prefix}${this.t("search-similarity")}: ${source.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
 						similarityEl.style.color = similarityColor(source.similarity, normalizeSimilarityAppearance(this.plugin.settings.similarityAppearance));
-					}
-					for (const part of content.split(/(\[\d+\])/)) {
-						const number = /^\[(\d+)\]$/.exec(part)?.[1];
-						const source = number ? sources[Number(number) - 1] : undefined;
-						if (source) link(staging, source, Number(number));
-						else staging.createSpan({ text: part });
+					};
+					for (const line of content.split("\n")) {
+						const cited = [...new Set(Array.from(line.matchAll(/\[(\d+)\]/g), match => Number(match[1])))].filter(number => sources[number - 1]);
+						const answer = staging.createDiv({ cls: `ai-helper-answer-line${cited.length ? " ai-helper-source-answer" : ""}` });
+						for (const number of cited) similarity(answer, sources[number - 1], cited.length > 1 ? `[${number}] ` : "");
+						for (const part of line.split(/(\[\d+\])/)) {
+							const number = /^\[(\d+)\]$/.exec(part)?.[1];
+							const source = number ? sources[Number(number) - 1] : undefined;
+							if (source) link(answer, source, Number(number));
+							else answer.createSpan({ text: part });
+						}
 					}
 					for (const [index, source] of sources.entries()) {
 						const details = staging.createEl("details", { cls: "ai-helper-source" });
-						details.createEl("summary", { text: this.t("search-fragment") });
-						link(details, source, index + 1);
+						const summary = details.createEl("summary", { cls: "ai-helper-source-summary", text: this.t("search-fragment") });
+						similarity(summary, source);
+						link(summary, source, index + 1);
 						details.createEl("pre", { text: source.text });
 					}
 					if (partial) staging.createDiv({ cls: "ai-helper-search-info ai-helper-search-coverage", text: this.t("search-partial-answer") });
