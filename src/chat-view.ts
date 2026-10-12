@@ -50,6 +50,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private rendered = new Map<DisplayMessage, MessageRow>();
 	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
+	private releaseChatPriority: (() => void) | null = null;
 	private renderRevision = 0;
 	private activeMessage: DisplayMessage | null = null;
 	private draft = "";
@@ -273,7 +274,8 @@ export class ChatView extends ItemView implements HoverParent {
 		this.indexProgress?.setValue(percent);
 		if (this.indexReason) {
 			this.indexReason.style.display = progress.state === "complete" ? "none" : "";
-			this.indexReason.setText(progress.state === "complete" ? "" : `${this.t(`search-state-${progress.state}`)} — ${this.t("search-partial")}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
+			const state = this.plugin.noteSearch.chatHasPriority && (progress.state === "indexing" || progress.state === "partial") ? "search-chat-priority" : `search-state-${progress.state}` as const;
+			this.indexReason.setText(progress.state === "complete" ? "" : `${this.t(state)} — ${this.t("search-partial")}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
 		}
 		if (this.indexAction) {
 			const key = progress.state === "idle" ? "search-vault-index" : progress.state === "error" ? "search-repeat" : "search-continue";
@@ -287,7 +289,7 @@ export class ChatView extends ItemView implements HoverParent {
 			setIcon(this.indexPause, "pause");
 			this.indexPause.setAttribute("aria-label", this.t("search-pause"));
 			setTooltip(this.indexPause, this.t("search-pause"));
-			this.indexPause.style.display = progress.state === "indexing" ? "" : "none";
+			this.indexPause.style.display = progress.state === "indexing" || (this.plugin.noteSearch.chatHasPriority && progress.state === "partial") ? "" : "none";
 		}
 	}
 
@@ -552,6 +554,8 @@ export class ChatView extends ItemView implements HoverParent {
 		this.activeMessage = null;
 		this.clearUpdateTimer();
 		request?.abort();
+		this.releaseChatPriority?.();
+		this.releaseChatPriority = null;
 		this.setThinking(false);
 	}
 
@@ -595,9 +599,12 @@ export class ChatView extends ItemView implements HoverParent {
 		const serverUrl = settings.serverUrl.trim();
 		const model = settings.model;
 
+		const priority = this.plugin.noteSearch?.acquireChatPriority?.();
+		this.releaseChatPriority = priority?.release ?? null;
 		this.setThinking(true);
 		try {
 			await this.renderMessages();
+			await priority?.ready;
 			if (this.activeRequest !== request) return;
 			if (useSearch) {
 				const instruction = NOTE_SEARCH_INSTRUCTION;
@@ -674,8 +681,10 @@ export class ChatView extends ItemView implements HoverParent {
 			else { pending.content = message; pending.kind = "error"; }
 			if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
 		} finally {
+			priority?.release();
 			if (this.activeRequest === request) {
 				this.activeRequest = null;
+				this.releaseChatPriority = null;
 				this.activeMessage = null;
 				this.clearUpdateTimer();
 				this.setThinking(false);

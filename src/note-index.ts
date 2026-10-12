@@ -157,7 +157,18 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	const check = (version: number, signal?: AbortSignal) => {
 		if (disposed || revision !== version || signal?.aborted) throw new NoteSearchError("search-rebuild");
 	};
-	function cancel() { controller?.abort(); controller = undefined; revision++; }
+	const chatPriorities = new Set<symbol>();
+	const backgroundWaiters = new Set<() => void>();
+	let backgroundRequest: Promise<number[][]> | undefined;
+	const wakeBackground = () => { for (const wake of backgroundWaiters) wake(); backgroundWaiters.clear(); };
+	function cancel() { controller?.abort(); controller = undefined; revision++; wakeBackground(); }
+	async function waitForChat(version: number) {
+		while (chatPriorities.size) {
+			check(version);
+			await new Promise<void>(resolve => backgroundWaiters.add(resolve));
+		}
+		check(version);
+	}
 	function write(action: (store: IDBObjectStore) => void) {
 		const operation = writes.catch(() => {}).then(() => store.write(action));
 		writes = operation;
@@ -245,7 +256,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 
 	function schedule() {
 		clearTimeout(timer); timer = undefined;
-		if (!initialized || !automatic || paused || failed || disposed) return;
+		if (!initialized || !automatic || paused || failed || disposed || chatPriorities.size) return;
 		timer = setTimeout(() => { timer = undefined; void drain().catch(() => {}); }, updateDelaySeconds * 1000);
 	}
 	async function drain(manual = false): Promise<void> {
@@ -318,7 +329,13 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		async function flush() {
 			if (!batch.length) return;
 			check(version);
-			const vectors = await embed(batch.map(fragment => fragment.text), controller?.signal);
+			while (chatPriorities.size) await waitForChat(version);
+			check(version);
+			const request = embed(batch.map(fragment => fragment.text), controller?.signal);
+			backgroundRequest = request;
+			let vectors: number[][];
+			try { vectors = await request; }
+			finally { if (backgroundRequest === request) backgroundRequest = undefined; }
 			check(version);
 			batch.forEach((fragment, index) => fragments.push({ ...fragment, vector: vectors[index] }));
 			batch = []; characters = 0;
@@ -345,6 +362,9 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		return { path, contentHash, fingerprint: identity, fragments };
 	}
 	async function run(paths: string[], full: boolean): Promise<void> {
+		const waitingVersion = revision;
+		while (chatPriorities.size) await waitForChat(waitingVersion);
+		check(waitingVersion);
 		cancel(); controller = new AbortController();
 		const version = revision;
 		const identity = await fingerprint();
@@ -388,6 +408,27 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	}
 	return {
 		get progress(): IndexProgress { return { ...progress }; },
+		get chatHasPriority(): boolean { return chatPriorities.size > 0; },
+		acquireChatPriority(): { ready: Promise<void>; release(): void } {
+			const token = Symbol();
+			if (!disposed) chatPriorities.add(token);
+			clearTimeout(timer); timer = undefined; notify();
+			return {
+				ready: (backgroundRequest ?? Promise.resolve()).then(() => {}, () => {}),
+				release(): void {
+					if (!chatPriorities.delete(token)) return;
+					if (!chatPriorities.size) {
+						wakeBackground();
+						// The suspended operation owns its continuation. Start queued edits
+						// only after it settles, so another drain cannot cancel its batches.
+						const active = operation ?? draining;
+						if (active) void active.catch(() => {}).then(() => schedule());
+						else if (!controller) schedule();
+					}
+					if (!disposed) notify();
+				},
+			};
+		},
 		get excludedFolders(): string[] { return [...excludedFolders]; },
 		subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
 		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
