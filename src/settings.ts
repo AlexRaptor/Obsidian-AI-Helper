@@ -1,4 +1,6 @@
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
+import { IndexStorageModal } from "./index-storage-modal";
+import type { IndexStorageMode } from "./note-index";
 import type { AiHelperPlugin } from "./main";
 import type { EmbeddingConnection } from "./note-search";
 import { DEFAULT_SOURCE_BUDGET_BYTES, sourceBudgetBytes, DEFAULT_MIN_SOURCE_SIMILARITY, isValidMinimumSimilarity, DEFAULT_NOTE_UPDATE_DELAY_SECONDS, isValidNoteUpdateDelay } from "./note-index";
@@ -14,6 +16,8 @@ import {
 } from "./i18n";
 
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
+	indexStorageMode: IndexStorageMode;
+	indexStorageGeneration: string;
 	noteSourceBudget: string;
 	noteSearchMinSimilarity: number;
 	excludedFolders: string[];
@@ -34,6 +38,8 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
+	indexStorageMode: "local",
+	indexStorageGeneration: "",
 	noteSourceBudget: String(DEFAULT_SOURCE_BUDGET_BYTES),
 	noteSearchMinSimilarity: DEFAULT_MIN_SOURCE_SIMILARITY,
 	excludedFolders: [],
@@ -124,6 +130,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						return () => { if (this.embeddingModelSetting === setting) this.embeddingModelSetting = undefined; };
 					}),
 					this.row("embedding-check", "embedding-check-desc", setting => this.renderCheck(setting, true)),
+					this.row("index-storage-mode", "index-storage-desc", setting => this.renderStorage(setting)),
 					this.row("search-vault-index", undefined, setting => this.renderIndex(setting)),
 					this.row("search-vault-clear", "search-clear-desc", setting => { setting.setClass("ai-helper-index-control").addButton(button => button.setWarning().setButtonText(this.t("search-vault-clear")).onClick(() => this.plugin.manageNoteIndex("clear"))); }),
 					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
@@ -286,6 +293,20 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			this.plugin.settings.contextWindow = value.trim(); await this.plugin.saveSettings(); update();
 		})).addButton(button => button.setIcon("refresh-cw").setTooltip(this.t("context-refresh")).onClick(() => this.plugin.contextWindowConnection.refresh()));
 		update(); return () => { active = false; unsubscribe?.(); };
+	}
+
+	private renderStorage(setting: Setting): void {
+		const directory = this.plugin.noteIndexDirectory?.() ?? ".obsidian/plugins/obsidian-ai-helper/note-index";
+		const rule = `/${directory}/`;
+		setting.setDesc(`${this.t("index-storage-desc")} ${directory}/. ${this.t("index-storage-git")} ${rule}`);
+		setting.addDropdown(dropdown => {
+			dropdown.addOption("local", this.t("index-storage-local")).addOption("file", this.t("index-storage-file"))
+				.setValue(this.plugin.settings.indexStorageMode).onChange(value => {
+					dropdown.setValue(this.plugin.settings.indexStorageMode);
+					if ((value !== "local" && value !== "file") || value === this.plugin.settings.indexStorageMode) return;
+					new IndexStorageModal(this.plugin, value, () => dropdown.setValue(this.plugin.settings.indexStorageMode)).open();
+				});
+		});
 	}
 
 	private renderIndex(setting: Setting): () => void {

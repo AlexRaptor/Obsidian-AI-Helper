@@ -1,4 +1,4 @@
-import type { PaneType } from "obsidian";
+import type { DataAdapter, PaneType } from "obsidian";
 import type { ServerClient } from "./server-client";
 import type { EmbeddingConnection } from "./note-search";
 import { lexicalRelevance, repeatedFragment } from "./note-ranking";
@@ -23,7 +23,14 @@ export class NoteSearchError extends Error {
 }
 interface IndexedFragment { text: string; headings: string[]; vector: number[]; }
 interface IndexedNote { path: string; contentHash: string; fingerprint: string; fragments: IndexedFragment[]; }
+export type IndexStorageMode = "local" | "file";
+export interface FileIndexStorage {
+	adapter: Pick<DataAdapter, "exists" | "mkdir" | "read" | "write" | "rename" | "remove">;
+	directory: string;
+}
 interface NoteSearchEnvironment {
+	storageMode?: IndexStorageMode;
+	fileStorage?: FileIndexStorage;
 	vaultPath: string;
 	factory: IDBFactory | undefined;
 	client: ServerClient;
@@ -72,6 +79,12 @@ export interface IndexProgress {
 }
 interface SavedProgress extends IndexProgress { fingerprint: string; }
 interface SavedUpdates { initialized: boolean; pending: string[]; failed: boolean; paused?: boolean; }
+interface IndexEditor {
+	put(value: unknown, key: string): void;
+	delete(key: string): void;
+	clear(): void;
+	updateEntries(update: (value: unknown, key: string) => unknown): void;
+}
 function storage(environment: NoteSearchEnvironment) {
 	async function access<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => () => T): Promise<T> {
 		if (!environment.vaultPath || !environment.factory) throw new NoteSearchError("search-storage");
@@ -124,13 +137,103 @@ function storage(environment: NoteSearchEnvironment) {
 			const updates = store.get("updates");
 			return () => ({ notes: notes.result.filter((_value, index) => !["progress", "updates"].includes(String(keys.result[index]))), progress: progress.result, updates: updates.result });
 		}),
-		write: (action: (store: IDBObjectStore) => void) => access<void>("readwrite", (store) => { action(store); return () => undefined; }),
+		write: (action: (store: IndexEditor) => void) => access<void>("readwrite", (store) => {
+			action({
+				put: (value, key) => { store.put(value, key); },
+				delete: key => { store.delete(key); },
+				clear: () => { store.clear(); },
+				updateEntries: update => {
+					const cursor = store.openCursor();
+					cursor.onsuccess = () => {
+						const entry = cursor.result; if (!entry) return;
+						const value = update(entry.value, String(entry.key));
+						if (value === undefined) entry.delete(); else entry.update(value);
+						entry.continue();
+					};
+				},
+			});
+			return () => undefined;
+		}),
+	};
+}
+
+function fileStorage(environment: NoteSearchEnvironment): ReturnType<typeof storage> {
+	async function access<T>(action: (entries: Map<string, unknown>, adapter: FileIndexStorage["adapter"], path: string) => Promise<T>, reset = false): Promise<T> {
+		try {
+			const options = environment.fileStorage;
+			if (!options || !environment.vaultPath) throw new NoteSearchError("search-storage");
+			const { adapter, directory } = options;
+			const path = `${directory}/index.json`;
+			let entries = new Map<string, unknown>();
+			const readablePath = await adapter.exists(path) ? path : `${path}.bak`;
+			if (!reset && await adapter.exists(readablePath)) {
+				const saved: unknown = JSON.parse(await adapter.read(readablePath));
+				if (!saved || typeof saved !== "object") throw new NoteSearchError("search-storage");
+				const snapshot = saved as { format?: unknown; vault?: unknown; entries?: unknown };
+				if (snapshot.format !== 1 || typeof snapshot.vault !== "string" || !Array.isArray(snapshot.entries)
+					|| !snapshot.entries.every(entry => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string")) throw new NoteSearchError("search-storage");
+				if (snapshot.vault === await hash(environment.vaultPath)) entries = new Map(snapshot.entries);
+			}
+			return await action(entries, adapter, path);
+		} catch (error) {
+			if (error instanceof NoteSearchError) throw error;
+			throw new NoteSearchError("search-storage");
+		}
+	}
+	return {
+		read: () => access(async entries => ({
+			notes: [...entries].filter(([key]) => key !== "progress" && key !== "updates").map(([, value]) => value),
+			progress: entries.get("progress") as SavedProgress | undefined,
+			updates: entries.get("updates") as SavedUpdates | undefined,
+		})),
+		write: async action => {
+			const mutations: Array<(entries: Map<string, unknown>) => void> = [];
+			let cleared = false;
+			action({
+				put: (value, key) => { mutations.push(entries => { entries.set(key, value); }); },
+				delete: key => { mutations.push(entries => { entries.delete(key); }); },
+				clear: () => { mutations.length = 0; cleared = true; },
+				updateEntries: update => { mutations.push(entries => {
+					for (const [key, previous] of entries) {
+						const value = update(previous, key);
+						if (value === undefined) entries.delete(key); else entries.set(key, value);
+					}
+				}); },
+			});
+			return access(async (entries, adapter, path) => {
+				for (const mutate of mutations) mutate(entries);
+				if (cleared && !entries.size) {
+					if (await adapter.exists(path)) await adapter.remove(path);
+					if (await adapter.exists(`${path}.tmp`)) await adapter.remove(`${path}.tmp`);
+					if (await adapter.exists(`${path}.bak`)) await adapter.remove(`${path}.bak`);
+					return;
+				}
+				const directory = environment.fileStorage!.directory;
+				// Create each missing parent through Obsidian's adapter.
+				const parts = directory.split("/");
+				for (let i = 1; i <= parts.length; i++) {
+					const parent = parts.slice(0, i).join("/");
+					if (!await adapter.exists(parent)) await adapter.mkdir(parent);
+				}
+				const snapshot = JSON.stringify({ format: 1, vault: await hash(environment.vaultPath), entries: [...entries] });
+				// Publish a complete snapshot: interrupted writes leave the last saved work readable.
+				await adapter.write(`${path}.tmp`, snapshot);
+				if (await adapter.exists(path)) {
+					if (await adapter.exists(`${path}.bak`)) await adapter.remove(`${path}.bak`);
+					await adapter.rename(path, `${path}.bak`);
+				}
+				await adapter.rename(`${path}.tmp`, path);
+				if (await adapter.exists(`${path}.bak`)) await adapter.remove(`${path}.bak`);
+			}, cleared);
+		},
 	};
 }
 
 export function createNoteSearch(environment: NoteSearchEnvironment) {
-	const store = storage(environment);
+	let storageMode = environment.storageMode ?? "local";
+	let store = selectedStorage();
 	let connection: EmbeddingConnection | undefined;
+	let storageGeneration = "";
 	let fragmentOptions = { ...DEFAULT_FRAGMENT_OPTIONS };
 	let minimumSimilarity = DEFAULT_MIN_SOURCE_SIMILARITY;
 	let excludedFolders: string[] = [];
@@ -151,7 +254,18 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	let progress: IndexProgress = { state: "idle", completed: 0, total: 0 };
 	const listeners = new Set<() => void>();
 	const notify = () => listeners.forEach((listener) => listener());
-	const fingerprint = () => hash(JSON.stringify({ connection, fragmentOptions, format: 2 }));
+	function selectedStorage(): ReturnType<typeof storage> {
+		const selected = storageMode === "file" ? fileStorage(environment) : storage(environment);
+		const report = (error: unknown): never => {
+			if (error instanceof NoteSearchError && error.code === "search-storage" && !disposed) {
+				clearTimeout(timer); timer = undefined;
+				progress = { ...progress, state: "error", error: "search-storage" }; notify();
+			}
+			throw error;
+		};
+		return { read: () => selected.read().catch(report), write: action => selected.write(action).catch(report) };
+	}
+	const fingerprint = () => hash(JSON.stringify({ connection, fragmentOptions, format: 2, ...(storageGeneration ? { storageGeneration } : {}) }));
 	const permitted = (path: string, folders: string[]) => typeof path === "string" && /\.md$/i.test(path) && !path.split("/").some((part) => part === "." || part === "..") && !folders.some((folder) => !folder || path === folder || path.startsWith(folder + "/"));
 	const allowed = (path: string) => permitted(path, excludedFolders);
 	const check = (version: number, signal?: AbortSignal) => {
@@ -169,8 +283,9 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		}
 		check(version);
 	}
-	function write(action: (store: IDBObjectStore) => void) {
-		const operation = writes.catch(() => {}).then(() => store.write(action));
+	function write(action: (store: IndexEditor) => void) {
+		const destination = store;
+		const operation = writes.catch(() => {}).then(() => destination.write(action));
 		writes = operation;
 		void writes.catch(() => {});
 		return operation;
@@ -295,8 +410,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		for (const value of pending) if (matches(value)) pending.delete(value);
 		await saveUpdates();
 		await write(store => {
-			const cursor = store.openCursor();
-			cursor.onsuccess = () => { const entry = cursor.result; if (!entry) return; if (validNote(entry.value) && matches(entry.value.path)) entry.delete(); entry.continue(); };
+			store.updateEntries((value) => validNote(value) && matches(value.path) ? undefined : value);
 		});
 		await coverage();
 		schedule();
@@ -407,6 +521,18 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		progress = { state: saved.state === "indexing" ? "partial" : saved.state, completed: saved.completed, total: saved.total, error: saved.error }; notify();
 	}
 	return {
+		get storageMode(): IndexStorageMode { return storageMode; },
+		async switchStorage(mode: IndexStorageMode): Promise<void> {
+			if (mode === storageMode) return;
+			clearTimeout(timer); timer = undefined; cancel();
+			updatesLoaded = true; initialized = false; failed = false; paused = false; operation = undefined; pending.clear();
+			// Outstanding writes keep their original destination. Never migrate or reuse
+			// a previous index when explicitly selecting a different storage mode.
+			await writes.catch(() => {});
+			storageMode = mode; store = selectedStorage();
+			progress = { state: "idle", completed: 0, total: environment.list?.().filter(allowed).length ?? 0 }; notify();
+			await write(store => store.clear());
+		},
 		get progress(): IndexProgress { return { ...progress }; },
 		get chatHasPriority(): boolean { return chatPriorities.size > 0; },
 		acquireChatPriority(): { ready: Promise<void>; release(): void } {
@@ -431,7 +557,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		get excludedFolders(): string[] { return [...excludedFolders]; },
 		subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
-		configure(next: EmbeddingConnection & { noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
+		configure(next: EmbeddingConnection & { indexStorageGeneration?: string; noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
 			const delay = isValidNoteUpdateDelay(next.noteUpdateDelaySeconds) ? next.noteUpdateDelaySeconds : DEFAULT_NOTE_UPDATE_DELAY_SECONDS;
 			if (updateDelaySeconds !== delay) {
 				updateDelaySeconds = delay;
@@ -444,11 +570,12 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			minimumSimilarity = isValidMinimumSimilarity(next.noteSearchMinSimilarity) ? next.noteSearchMinSimilarity : DEFAULT_MIN_SOURCE_SIMILARITY;
 			const folders = [...new Set((next.excludedFolders ?? []).map((path) => path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/+/g, "/")))];
 			const copy = { embeddingServerUrl: next.embeddingServerUrl, embeddingApiKey: next.embeddingApiKey, embeddingModel: next.embeddingModel };
-			const incompatible = JSON.stringify(connection) !== JSON.stringify(copy) || JSON.stringify(fragmentOptions) !== JSON.stringify(options);
+			const nextGeneration = next.indexStorageGeneration ?? "";
+			const incompatible = storageGeneration !== nextGeneration || JSON.stringify(connection) !== JSON.stringify(copy) || JSON.stringify(fragmentOptions) !== JSON.stringify(options);
 			const exclusionsChanged = JSON.stringify(folders) !== JSON.stringify(excludedFolders);
 			if (!incompatible && !exclusionsChanged) return;
 			const changed = connection !== undefined;
-			connection = copy; fragmentOptions = options; excludedFolders = folders; cancel();
+			storageGeneration = nextGeneration; connection = copy; fragmentOptions = options; excludedFolders = folders; cancel();
 			for (const path of pending) if (!allowed(path) || incompatible) pending.delete(path);
 			if (changed && incompatible) { updatesLoaded = true; initialized = false; failed = false; paused = false; operation = undefined; clearTimeout(timer); timer = undefined; }
 			if (changed && incompatible) {
@@ -457,14 +584,13 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			} else if (changed || folders.length) {
 				const version = revision;
 				void write(store => {
-					const cursor = store.openCursor();
-					cursor.onsuccess = () => {
-						const entry = cursor.result; if (!entry) return;
-						if (entry.key === "updates" && Array.isArray(entry.value?.pending)) {
-							entry.update({ ...entry.value, pending: entry.value.pending.filter((path: string) => permitted(path, folders)) });
-						} else if (entry.key !== "progress" && entry.key !== "updates" && (!validNote(entry.value) || !permitted(entry.value.path, folders))) entry.delete();
-						entry.continue();
-					};
+					store.updateEntries((value, key) => {
+						if (key === "updates") {
+							const updates = value as SavedUpdates | undefined;
+							return Array.isArray(updates?.pending) ? { ...updates, pending: updates.pending.filter(path => permitted(path, folders)) } : value;
+						}
+						return key !== "progress" && (!validNote(value) || !permitted(value.path, folders)) ? undefined : value;
+					});
 				}).then(async () => {
 					if (!changed || version !== revision || disposed) return;
 					if (initialized) { await reconcile(); schedule(); }

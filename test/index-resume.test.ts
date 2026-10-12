@@ -1,9 +1,12 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { createNoteSearch } from "../src/note-index";
 import { createServerClient } from "../src/server-client";
 
+import { fileIndexAdapter } from "./helpers/file-index";
+
 const connection = { embeddingServerUrl: "http://s/v1", embeddingApiKey: "", embeddingModel: "e", noteUpdateDelaySeconds: 0.01 };
+describe.each(["local", "file"] as const)("%s index storage", mode => {
 function fixture() {
 	const notes = new Map([["Ready.md", "ready"], ["Pending.md", "pending"]]);
 	const inputs: string[] = [];
@@ -16,7 +19,7 @@ function fixture() {
 		if (hold && input[0].includes("pending")) return new Promise<Response>(resolve => { finish = resolve; });
 		return response();
 	});
-	const environment = { factory: new IDBFactory(), vaultPath: "/resume", client, list: () => [...notes.keys()], read: async (path: string) => notes.get(path) ?? null, open: async () => {} };
+	const environment = { factory: mode === "local" ? new IDBFactory() : undefined, storageMode: mode, fileStorage: { adapter: fileIndexAdapter(), directory: ".obsidian/plugins/obsidian-ai-helper/note-index" }, vaultPath: "/resume", client, list: () => [...notes.keys()], read: async (path: string) => notes.get(path) ?? null, open: async () => {} };
 	const search = createNoteSearch(environment); search.configure(connection);
 	return { search, environment, notes, inputs, signals, release: () => { hold = false; finish(response()); } };
 }
@@ -120,4 +123,32 @@ it("starts a fresh rebuild when the cancelled resume is still waiting for a vaul
 	finally { finish("ready"); await resuming; }
 	expect(await rebuilding).toBeUndefined();
 	expect(active.progress).toMatchObject({ state: "complete", completed: 2, total: 2 }); active.dispose();
+});
+
+it("retains offline edits and manual pause across restart, then retries only latest versions", async () => {
+	const { search, environment, notes, inputs, release } = fixture();
+	const indexing = search.indexVault(); await vi.waitFor(() => expect(inputs).toHaveLength(2)); release(); await indexing; search.dispose();
+	let offline = true; const attempts: string[] = [];
+	const client = createServerClient(async (_url, init) => {
+		attempts.push(...JSON.parse(String(init?.body)).input);
+		if (offline) throw new Error("offline");
+		return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	});
+	const active = createNoteSearch({ ...environment, client }); active.configure(connection); await active.restore();
+	notes.set("Pending.md", "offline edit"); await active.changed("Pending.md");
+	await vi.waitFor(() => expect(active.progress.state).toBe("error"));
+	notes.set("Pending.md", "latest pending"); await active.changed("Pending.md");
+	notes.set("New.md", "latest new"); await active.changed("New.md");
+	await active.pause(); active.dispose();
+	const restored = createNoteSearch({ ...environment, client }); restored.configure(connection); await restored.restore(); await restored.resume();
+	expect(restored.progress).toMatchObject({ state: "paused", completed: 1, total: 3 });
+	expect(attempts).toHaveLength(1);
+	await expect(restored.resume(true)).rejects.toMatchObject({ code: "search-failed" });
+	expect(restored.progress).toMatchObject({ state: "error", completed: 1, total: 3 });
+	offline = false; await new Promise(resolve => setTimeout(resolve, 60)); expect(attempts).toHaveLength(2);
+	await restored.resume(true);
+	expect(attempts.slice(2)).toEqual([expect.stringContaining("latest pending"), expect.stringContaining("latest new")]);
+	expect(restored.progress).toMatchObject({ state: "complete", completed: 3, total: 3 }); restored.dispose();
+});
+
 });

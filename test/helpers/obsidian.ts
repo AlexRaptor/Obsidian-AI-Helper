@@ -152,9 +152,13 @@ export class PluginSettingTab {
 }
 
 export class Modal {
+	static opened: Modal[] = [];
 	contentEl = new TestElement();
 	constructor(public app: unknown) {}
-	open(): void {}
+	open(): void { Modal.opened.push(this); this.onOpen(); }
+	close(): void { this.onClose(); Modal.opened = Modal.opened.filter(modal => modal !== this); }
+	onOpen(): void {}
+	onClose(): void { this.contentEl.empty(); }
 }
 
 export class FileSystemAdapter {}

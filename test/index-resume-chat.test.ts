@@ -7,10 +7,11 @@ import { createNoteSearch } from "../src/note-index";
 import { createServerClient } from "../src/server-client";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import { t, setLanguage } from "../src/i18n";
+import { fileIndexAdapter } from "./helpers/file-index";
 import { TestElement, Notice } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 
-it("shows whole-vault coverage in the header, pauses and continues through accessible localized buttons", async () => {
+it.each(["local", "file"] as const)("shows %s coverage in the header, pauses and continues through accessible localized buttons", async mode => {
 	setLanguage("en");
 	const notes = new Map([["Ready.md", "ready"], ["Pending.md", "pending"]]);
 	let hold = true; let requests = 0; let finish!: (response: Response) => void;
@@ -20,7 +21,7 @@ it("shows whole-vault coverage in the header, pauses and continues through acces
 		return response();
 	});
 	const settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" };
-	const noteSearch = createNoteSearch({ client, factory: new IDBFactory(), vaultPath: "/coverage-chat", list: () => [...notes.keys()], read: async path => notes.get(path) ?? null, open: async () => {} });
+	const noteSearch = createNoteSearch({ client, factory: mode === "local" ? new IDBFactory() : undefined, storageMode: mode, fileStorage: { adapter: fileIndexAdapter(), directory: ".obsidian/plugins/obsidian-ai-helper/note-index" }, vaultPath: "/coverage-chat", list: () => [...notes.keys()], read: async path => notes.get(path) ?? null, open: async () => {} });
 	noteSearch.configure(settings);
 	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
 	Object.assign(plugin, { settings, noteSearch, serverClient: client });
@@ -53,7 +54,7 @@ it("shows whole-vault coverage in the header, pauses and continues through acces
 		root.find("ai-helper-search-toggle").click(); expect(root.find("ai-helper-index-status").style.display).toBe("none");
 	} finally { await view.onClose(); noteSearch.dispose(); setLanguage("en"); }
 });
-it("displays an offline retry, keeps normal chat available and resumes only on another search transition", async () => {
+it.each(["local", "file"] as const)("displays an offline retry in %s mode, keeps normal chat available and resumes only on another search transition", async mode => {
 	setLanguage("en");
 	let text = "original"; let offline = false; let embeddings = 0;
 	const inputs: string[] = [];
@@ -64,7 +65,7 @@ it("displays an offline retry, keeps normal chat available and resumes only on a
 		return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
 	});
 	const settings = { ...DEFAULT_SETTINGS, serverUrl: "http://s/v1", model: "chat", embeddingServerUrl: "http://s/v1", embeddingModel: "e", noteUpdateDelaySeconds: 0.01 };
-	const noteSearch = createNoteSearch({ client, factory: new IDBFactory(), vaultPath: "/offline-chat", list: () => ["Train.md"], read: async () => text, open: async () => {} });
+	const noteSearch = createNoteSearch({ client, factory: mode === "local" ? new IDBFactory() : undefined, storageMode: mode, fileStorage: { adapter: fileIndexAdapter(), directory: ".obsidian/plugins/obsidian-ai-helper/note-index" }, vaultPath: "/offline-chat", list: () => ["Train.md"], read: async () => text, open: async () => {} });
 	noteSearch.configure(settings); await noteSearch.indexVault(); embeddings = 0; inputs.length = 0;
 	const plugin = { settings, noteSearch, serverClient: client, t } as unknown as AiHelperPlugin;
 	const view = new ChatView({} as WorkspaceLeaf, plugin); await view.onOpen();

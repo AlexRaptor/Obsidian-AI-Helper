@@ -520,3 +520,73 @@ it("restores the saved source budget and defaults invalid persisted values", asy
 		await plugin.loadSettings(); expect(plugin.settings.noteSourceBudget).toBe(expected);
 	}
 });
+
+it("defaults legacy settings to local storage and requires a localized confirmation before switching", async () => {
+	const { Modal } = await import("./helpers/obsidian");
+	const plugin = new AiHelperPlugin({} as App, { id: "obsidian-ai-helper" } as PluginManifest);
+	await plugin.loadSettings();
+	expect(plugin.settings.indexStorageMode).toBe("local");
+	const switchMode = vi.fn(async () => {});
+	Object.assign(plugin, { changeIndexStorage: switchMode });
+	for (const locale of ["en", "ru"] as const) {
+		setLanguage(locale); controls.length = 0;
+		const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+		const setting = controls.find(control => control.name === t("index-storage-mode"))!;
+		expect(setting.description).toContain(".obsidian/plugins/obsidian-ai-helper/note-index");
+		expect(setting.description).toContain(".gitignore");
+		await setting.dropdown!.change("file");
+		expect(plugin.settings.indexStorageMode).toBe("local"); expect(switchMode).not.toHaveBeenCalled();
+		const modal = Modal.opened.at(-1)!;
+		expect(modal.contentEl.getText()).toContain(t("index-storage-warning"));
+		modal.contentEl.find("ai-helper-storage-cancel").click();
+		expect(switchMode).not.toHaveBeenCalled();
+		await setting.dropdown!.change("file");
+		Modal.opened.at(-1)!.contentEl.find("ai-helper-storage-confirm").click();
+		await vi.waitFor(() => expect(switchMode).toHaveBeenCalledWith("file"));
+		switchMode.mockClear(); tab.hide();
+	}
+});
+
+it("persists the explicit mode and rebuilds through the confirmed storage action", async () => {
+	const { fileIndexAdapter } = await import("./helpers/file-index");
+	const adapter = fileIndexAdapter();
+	const plugin = new AiHelperPlugin({} as App, { id: "obsidian-ai-helper" } as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", autoUpdateNotes: false };
+	const client = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+	const search = createNoteSearch({ client, factory: new IDBFactory(), vaultPath: "/confirmed", fileStorage: { adapter, directory: plugin.noteIndexDirectory() }, list: () => ["Train.md"], read: async () => "Train at 18:30", open: async () => {} });
+	plugin.noteSearch = search; search.configure(plugin.settings); await search.indexVault();
+	const save = vi.fn(async () => {}); Object.assign(plugin, { saveData: save });
+	await plugin.changeIndexStorage("file");
+	expect(save).toHaveBeenCalledWith(expect.objectContaining({ indexStorageMode: "file" }));
+	expect(search.storageMode).toBe("file"); expect(search.progress.state).toBe("complete");
+	expect(await search.search("train")).toMatchObject({ path: "Train.md" }); search.dispose();
+});
+
+it("does not reuse an old destination after a failed storage switch and restart", async () => {
+	const { fileIndexAdapter } = await import("./helpers/file-index");
+	const adapter = fileIndexAdapter(); const factory = new IDBFactory();
+	const client = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+	const environment = { client, factory, vaultPath: "/failed-switch", fileStorage: { adapter, directory: ".obsidian/plugins/obsidian-ai-helper/note-index" }, list: () => ["Train.md"], read: async () => "Train at 18:30", open: async () => {} };
+	const settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", autoUpdateNotes: false };
+	const oldFiles = createNoteSearch({ ...environment, storageMode: "file" }); oldFiles.configure(settings); await oldFiles.indexVault(); oldFiles.dispose();
+	const local = createNoteSearch(environment); local.configure(settings); await local.indexVault();
+	const plugin = new AiHelperPlugin({} as App, { id: "obsidian-ai-helper" } as PluginManifest);
+	Object.assign(plugin, { settings, noteSearch: local });
+	let persisted = settings; Object.assign(plugin, { saveData: async (value: typeof settings) => { persisted = JSON.parse(JSON.stringify(value)); } });
+	adapter.setUnavailable(true); await plugin.changeIndexStorage("file"); local.dispose();
+	adapter.setUnavailable(false);
+	const reopened = createNoteSearch({ ...environment, storageMode: persisted.indexStorageMode }); reopened.configure(persisted); await reopened.restore(); await reopened.resume();
+	expect(reopened.progress.state).toBe("idle");
+	await expect(reopened.search("train")).rejects.toMatchObject({ code: "search-rebuild" }); reopened.dispose();
+});
+
+it("keeps the displayed and actual mode consistent if the mode selection cannot be saved", async () => {
+	const client = createServerClient(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+	const search = createNoteSearch({ client, factory: new IDBFactory(), vaultPath: "/settings-failure", list: () => ["Train.md"], read: async () => "Train", open: async () => {} });
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest); plugin.settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" };
+	plugin.noteSearch = search; search.configure(plugin.settings); await search.indexVault();
+	Object.assign(plugin, { saveData: async () => { throw new Error("Settings unavailable"); } });
+	await plugin.changeIndexStorage("file");
+	expect(plugin.settings.indexStorageMode).toBe(search.storageMode);
+	expect(await search.search("train")).toMatchObject({ path: "Train.md" }); search.dispose();
+});

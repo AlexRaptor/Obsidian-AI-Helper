@@ -11,7 +11,7 @@ import { setLanguage, resolveLanguage, t, type LocaleKey } from "./i18n";
 import { createModelConnection } from "./model-connection";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragments";
 import { createNoteSearchConnection } from "./note-search";
-import { createNoteSearch, sourceBudgetBytes, NoteSearchError, isValidMinimumSimilarity, isValidNoteUpdateDelay, type NoteSearch } from "./note-index";
+import { createNoteSearch, sourceBudgetBytes, NoteSearchError, isValidMinimumSimilarity, isValidNoteUpdateDelay, type NoteSearch, type IndexStorageMode } from "./note-index";
 import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { StorageProbeModal } from "./storage-probe-modal";
 import { createContextWindowConnection } from "./context-window";
@@ -32,6 +32,7 @@ export class AiHelperPlugin extends Plugin {
 
 	noteSearch!: NoteSearch;
 	private indexingNote = false;
+	private changingIndexStorage = false;
 	private unloading = false;
 	private indexRestore: Promise<void> = Promise.resolve();
 	private settingsTab?: AiHelperSettingsTab;
@@ -48,6 +49,8 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearch = createNoteSearch({
 			vaultPath: adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "",
 			factory: globalThis.indexedDB,
+			storageMode: this.settings.indexStorageMode,
+			fileStorage: { adapter, directory: this.noteIndexDirectory() },
 			client: this.serverClient,
 			read: async (path) => {
 				const file = this.app.vault.getFileByPath(path);
@@ -174,6 +177,8 @@ export class AiHelperPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		if (!["local", "file"].includes(this.settings.indexStorageMode)) this.settings.indexStorageMode = "local";
+		if (typeof this.settings.indexStorageGeneration !== "string") this.settings.indexStorageGeneration = "";
 		if (!["auto", "en", "ru"].includes(this.settings.language)) this.settings.language = "auto";
 		if (sourceBudgetBytes(this.settings.noteSourceBudget) === undefined) this.settings.noteSourceBudget = DEFAULT_SETTINGS.noteSourceBudget;
 		this.settings.similarityAppearance = normalizeSimilarityAppearance(this.settings.similarityAppearance);
@@ -187,14 +192,14 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async indexActiveNote(): Promise<void> {
-		if (this.indexingNote) return;
+		if (this.indexingNote || this.changingIndexStorage) return;
 		const file = this.app.workspace.getActiveFile();
 		if (!file || file.extension !== "md") { new Notice(this.t("search-note")); return; }
 		await this.indexNote(file.path);
 	}
 
 	async indexNote(path: string): Promise<void> {
-		if (this.indexingNote) return;
+		if (this.indexingNote || this.changingIndexStorage) return;
 		this.indexingNote = true;
 		new Notice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`);
 		try { await this.indexRestore; if (this.unloading) return; await this.noteSearch.index(path); new Notice(this.t("search-indexed")); }
@@ -204,12 +209,44 @@ export class AiHelperPlugin extends Plugin {
 		finally { this.indexingNote = false; }
 	}
 
+	noteIndexDirectory(): string {
+		return `${this.app.vault?.configDir ?? ".obsidian"}/plugins/${this.manifest.id}/note-index`;
+	}
+
+	async changeIndexStorage(mode: IndexStorageMode): Promise<void> {
+		if (this.changingIndexStorage || mode === this.settings.indexStorageMode || this.unloading) return;
+		this.changingIndexStorage = true;
+		try {
+			// Persist the explicit selection even if that storage later fails. No fallback.
+			const previousMode = this.settings.indexStorageMode;
+			const previousGeneration = this.settings.indexStorageGeneration;
+			this.settings.indexStorageMode = mode;
+			this.settings.indexStorageGeneration = globalThis.crypto.randomUUID();
+			try { await this.saveData(this.settings); }
+			catch (error) {
+				this.settings.indexStorageMode = previousMode;
+				this.settings.indexStorageGeneration = previousGeneration;
+				throw error;
+			}
+			// A persisted generation prevents old destination data from being accepted
+			// even if clearing fails or the app stops immediately after saving the mode.
+			this.noteSearch.configure(this.settings);
+			await this.noteSearch.switchStorage(mode);
+			if (this.unloading) return;
+			new Notice(this.noteIndexDisclosure());
+			await this.noteSearch.indexVault();
+			new Notice(this.t("search-state-complete"));
+		} catch (error) {
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-storage"));
+		} finally { this.changingIndexStorage = false; }
+	}
+
 	noteIndexDisclosure(): string {
 		return `${this.t("search-disclosure-embedding")}: ${this.settings.embeddingServerUrl || this.t("search-server-unset")}.\n${this.t("search-disclosure-conversation")}: ${this.settings.serverUrl || this.t("search-server-unset")}.`;
 	}
 
 	async manageNoteIndex(action: "index" | "clear"): Promise<void> {
-		if (action !== "clear" && this.indexingNote) return;
+		if (this.changingIndexStorage || (action !== "clear" && this.indexingNote)) return;
 		if (action !== "clear") { this.indexingNote = true; new Notice(this.noteIndexDisclosure()); }
 		try {
 			if (action === "clear") await this.noteSearch.clear();
