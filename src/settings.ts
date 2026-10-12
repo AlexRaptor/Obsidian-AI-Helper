@@ -296,6 +296,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 	}
 
 	private renderStorage(setting: Setting): void {
+		setting.setClass("ai-helper-index-storage-setting");
 		const directory = this.plugin.noteIndexDirectory?.() ?? ".obsidian/plugins/obsidian-ai-helper/note-index";
 		const rule = `/${directory}/`;
 		setting.setDesc(`${this.t("index-storage-desc")} ${directory}/. ${this.t("index-storage-git")} ${rule}`);

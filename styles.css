@@ -207,6 +207,24 @@
 	flex-wrap: wrap;
 }
 
+.ai-helper-index-storage-setting {
+	flex-wrap: wrap;
+}
+
+.ai-helper-index-storage-setting .setting-item-info {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ai-helper-settings-group .ai-helper-index-storage-setting .setting-item-control {
+	flex: 0 1 18em;
+	min-width: min(100%, 18em);
+}
+
+.ai-helper-index-storage-setting select {
+	width: 100%;
+}
+
 .ai-helper-settings-group .setting-item:has(textarea),
 .ai-helper-excluded-folders .setting-item:has(input) {
 	flex-wrap: wrap;
