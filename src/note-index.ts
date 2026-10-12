@@ -68,7 +68,7 @@ export interface IndexProgress {
 interface SavedProgress extends IndexProgress { fingerprint: string; }
 interface SavedUpdates { initialized: boolean; pending: string[]; failed: boolean; paused?: boolean; }
 function storage(environment: NoteSearchEnvironment) {
-	async function access<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore, set: (value: T) => void) => void): Promise<T> {
+	async function access<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => () => T): Promise<T> {
 		if (!environment.vaultPath || !environment.factory) throw new NoteSearchError("search-storage");
 		const name = `obsidian-ai-helper-note-index-v1-${await hash(environment.vaultPath)}`;
 		return new Promise((resolve, reject) => {
@@ -95,25 +95,31 @@ function storage(environment: NoteSearchEnvironment) {
 					try {
 						const tx = db.transaction("note", mode);
 						transaction = tx;
-						let result: T;
-						action(tx.objectStore("note"), (value) => { result = value; });
+						const readResult = action(tx.objectStore("note"));
 						tx.onabort = fail;
 						tx.onerror = fail;
-						tx.oncomplete = () => { clearTimeout(timer); db?.close(); resolve(result); };
+						tx.oncomplete = () => {
+							try {
+								// All requests are done now; one request's success does not
+								// imply that neighbouring bulk requests have a readable result.
+								const result = readResult();
+								clearTimeout(timer); db?.close(); resolve(result);
+							} catch (error) { actionError = error; fail(); }
+						};
 					} catch (error) { actionError = error; fail(); }
 				};
-			} catch { fail(); }
+			} catch (error) { actionError = error; fail(); }
 		});
 	}
 	return {
-		read: () => access<{ notes: unknown[]; progress?: SavedProgress; updates?: SavedUpdates }>("readonly", (store, set) => {
+		read: () => access<{ notes: unknown[]; progress?: SavedProgress; updates?: SavedUpdates }>("readonly", (store) => {
 			const notes = store.getAll();
 			const keys = store.getAllKeys();
 			const progress = store.get("progress");
 			const updates = store.get("updates");
-			updates.onsuccess = () => set({ notes: notes.result.filter((_value, index) => !["progress", "updates"].includes(String(keys.result[index]))), progress: progress.result, updates: updates.result });
+			return () => ({ notes: notes.result.filter((_value, index) => !["progress", "updates"].includes(String(keys.result[index]))), progress: progress.result, updates: updates.result });
 		}),
-		write: (action: (store: IDBObjectStore) => void) => access<void>("readwrite", (store) => action(store)),
+		write: (action: (store: IDBObjectStore) => void) => access<void>("readwrite", (store) => { action(store); return () => undefined; }),
 	};
 }
 

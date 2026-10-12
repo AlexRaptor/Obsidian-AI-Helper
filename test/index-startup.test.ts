@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { FileSystemAdapter, type App, type PluginManifest } from "obsidian";
+import { FileSystemAdapter, TFile, type App, type PluginManifest } from "obsidian";
 import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
 import { createNoteSearch } from "../src/note-index";
@@ -139,5 +139,40 @@ it.each([
 		await new Promise(resolve => setTimeout(resolve, 60)); expect(embeddings).toBe(attempts);
 		await plugin.noteSearch.resume(true); expect(embeddings).toBe(attempts + 1);
 		expect(plugin.noteSearch.progress).toMatchObject({ state: "complete", completed: 1, total: 1 });
+	} finally { plugin.onunload(); }
+});
+
+
+it("ignores initial file discovery events until the vault is ready and retains the saved index", async () => {
+	const factory = new IDBFactory(); vi.stubGlobal("indexedDB", factory);
+	const settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e", noteUpdateDelaySeconds: 0.01 };
+	let text = "saved train"; const inputs: string[] = [];
+	const client = createServerClient(async (url, init) => {
+		if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [] }));
+		const { input } = JSON.parse(String(init?.body)); inputs.push(...input);
+		return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	});
+	const environment = { factory, vaultPath: "/file-discovery-startup", client, list: () => ["Train.md"], read: async () => text, open: async () => {} };
+	const saved = createNoteSearch(environment); saved.configure(settings); await saved.indexVault(); saved.dispose(); inputs.length = 0;
+	const open = vi.spyOn(factory, "open");
+	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => environment.vaultPath;
+	const note = Object.assign(new TFile(), { path: "Train.md", extension: "md" });
+	const handlers = new Map<string, (...args: any[]) => void>();
+	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, callback); return {}; };
+	let ready!: () => void;
+	const app = { vault: { adapter, on, getMarkdownFiles: () => [note], getFileByPath: () => note, read: async () => text },
+		workspace: { on, onLayoutReady: (callback: () => void) => { ready = callback; }, detachLeavesOfType: () => {} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest); plugin.serverClient = client;
+	vi.spyOn(plugin, "loadData").mockResolvedValue(settings);
+	try {
+		await plugin.onload();
+		for (let count = 0; count < 100; count++) handlers.get("create")!(note);
+		await new Promise(resolve => setTimeout(resolve, 30));
+		expect(open.mock.calls.length).toBe(0);
+		ready();
+		await vi.waitFor(() => expect(plugin.noteSearch.progress).toMatchObject({ state: "complete", completed: 1, total: 1 }));
+		expect(inputs).toEqual([]);
+		text = "new train information"; handlers.get("create")!(note);
+		await vi.waitFor(() => expect(inputs.some(input => input.includes(text))).toBe(true));
 	} finally { plugin.onunload(); }
 });

@@ -62,14 +62,18 @@ export class AiHelperPlugin extends Plugin {
 			open: (path, heading, newLeaf = false) => this.app.workspace.openLinkText(heading ? `${path}#${heading}` : path, "", newLeaf),
 		});
 		this.noteSearch.configure(this.settings);
+		let vaultReady = !this.app.workspace.onLayoutReady;
 		const updateError = (error: unknown) => { if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); };
 		if (this.app.vault?.on) {
 			const changed = (file: TAbstractFile) => {
+				// Initial file discovery also emits create/modify events. Restoration
+				// reconciles their final contents once the complete vault is available.
+				if (!vaultReady) return;
 				if (file instanceof TFile && file.extension === "md") void this.noteSearch.changed(file.path).catch(updateError);
 			};
 			this.registerEvent(this.app.vault.on("create", changed));
 			this.registerEvent(this.app.vault.on("modify", changed));
-			this.registerEvent(this.app.vault.on("delete", file => { void this.noteSearch.removed(file.path).catch(updateError); }));
+			this.registerEvent(this.app.vault.on("delete", file => { if (vaultReady) void this.noteSearch.removed(file.path).catch(updateError); }));
 			this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
 				const updating = this.noteSearch.renamed(file.path, oldPath);
 				this.settings.excludedFolders = this.noteSearch.excludedFolders;
@@ -83,6 +87,7 @@ export class AiHelperPlugin extends Plugin {
 		}
 		const restoreIndex = () => {
 			if (this.unloading) return;
+			vaultReady = true;
 			// The file list is incomplete while Obsidian loads the vault. Never
 			// reconcile it then, and never block plugin loading on derived data.
 			const restoring = this.noteSearch.restore();
