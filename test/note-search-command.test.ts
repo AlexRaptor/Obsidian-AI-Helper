@@ -1,12 +1,58 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { FileSystemAdapter, TFile, type App, type PluginManifest } from "obsidian";
+import { FileSystemAdapter, Menu, TFile, TFolder, type App, type PluginManifest } from "obsidian";
 import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
 import { createServerClient } from "../src/server-client";
-import { DEFAULT_SETTINGS } from "../src/settings";
+import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
+import { en, ru } from "../src/i18n";
 import { Notice } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it.each([
+	{ path: "Private", folders: ["Other"], language: "en", excluded: false },
+	{ path: "Private", folders: [" /Private/ ", "Private", "Other"], language: "ru", excluded: true },
+	{ path: "/", folders: ["/", "Other"], language: "en", excluded: true },
+	{ path: "Private/Nested", folders: ["Private", "Other"], language: "ru", excluded: false },
+] as const)("changes folder exclusions from the menu: $path, $language, excluded=$excluded", async ({ path, folders, language, excluded }) => {
+	vi.stubGlobal("indexedDB", new IDBFactory());
+	const handlers = new Map<string, (...args: any[]) => void>();
+	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, callback); return {}; };
+	const app = { vault: { on, getMarkdownFiles: () => [] }, workspace: { on, detachLeavesOfType: () => {} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
+	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, language, excludedFolders: [...folders] });
+	vi.spyOn(plugin, "refreshModels").mockResolvedValue();
+	vi.spyOn(plugin, "refreshEmbeddingModels").mockResolvedValue();
+	const save = vi.fn(async () => {}); Object.assign(plugin, { saveData: save });
+	const refresh = vi.spyOn(AiHelperSettingsTab.prototype, "refreshExcludedFolders");
+	await plugin.onload();
+	const folder = Object.assign(new TFolder(), { path });
+	const menu = () => {
+		const result = new Menu(); handlers.get("file-menu")!(result, folder);
+		return (result as unknown as { items: Array<{ title: string; callback: () => void }> }).items;
+	};
+	const dictionary = language === "ru" ? ru : en;
+	const first = menu();
+	expect(first).toHaveLength(1);
+	expect(first[0].title).toBe(dictionary[excluded ? "folder-menu-include" : "folder-menu-exclude"]);
+	first[0].callback();
+	const remaining = folders.filter(folder => folder.trim().replace(/^\/+|\/+$/g, "") !== path.replace(/^\/+|\/+$/g, ""));
+	const expected = excluded ? remaining : [...remaining, path];
+	expect(plugin.settings.excludedFolders).toEqual(expected);
+	expect(plugin.noteSearch.excludedFolders).toEqual(expected.map(folder => folder === "/" ? "" : folder));
+	expect(refresh).toHaveBeenCalledOnce();
+	await vi.waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: expected })));
+	const second = menu();
+	expect(second[0].title).toBe(dictionary[excluded ? "folder-menu-exclude" : "folder-menu-include"]);
+	second[0].callback();
+	expect(plugin.settings.excludedFolders).toEqual(excluded ? [...remaining, path] : remaining);
+	const attachmentMenu = new Menu();
+	handlers.get("file-menu")!(attachmentMenu, Object.assign(new TFile(), { path: "Image.png", extension: "png" }));
+	expect((attachmentMenu as unknown as { items: unknown[] }).items).toHaveLength(0);
+	plugin.onunload();
+	second[0].callback();
+	expect(refresh).toHaveBeenCalledTimes(2);
+});
 
 it("indexes only on the explicit active-note command through the public module", async () => {
 	vi.stubGlobal("indexedDB", new IDBFactory());

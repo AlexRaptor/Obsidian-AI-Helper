@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, TFile, type TAbstractFile, parseYaml, getLanguage as getAppLanguage } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile, TFolder, type TAbstractFile, parseYaml, getLanguage as getAppLanguage } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -83,6 +83,20 @@ export class AiHelperPlugin extends Plugin {
 			}));
 			this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
+				if (file instanceof TFolder) {
+					const normalize = (path: string) => path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/+/g, "/");
+					const path = normalize(file.path);
+					const excluded = this.settings.excludedFolders.some(folder => normalize(folder) === path);
+					menu.addItem(item => item.setTitle(this.t(excluded ? "folder-menu-include" : "folder-menu-exclude"))
+						.setIcon(excluded ? "folder-plus" : "folder-minus").onClick(() => {
+							if (this.unloading) return;
+							const currentPath = normalize(file.path);
+							this.settings.excludedFolders = this.settings.excludedFolders.filter(folder => normalize(folder) !== currentPath);
+							if (!excluded) this.settings.excludedFolders.push(currentPath || "/");
+							void this.saveSettings().catch(updateError);
+							this.settingsTab?.refreshExcludedFolders();
+						}));
+				}
 			}));
 		}
 		const restoreIndex = () => {
