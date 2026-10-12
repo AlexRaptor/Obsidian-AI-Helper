@@ -1,4 +1,4 @@
-import { ItemView, TFile, TFolder, parseYaml, type Editor, type WorkspaceLeaf } from "obsidian";
+import { ItemView, TFile, TFolder, parseYaml, type Editor, type HoverParent, type HoverPopover, type WorkspaceLeaf } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { folderSourceData, type FolderSource } from "./folder-descriptions";
 import { effectiveContextWindow } from "./context-window";
@@ -16,7 +16,7 @@ type NoteSnapshot = { path: string; title: string; text: string; properties: Rec
 type Recommendation = { source: FolderSource; explanation: string };
 type ReviewResult = { outcome: "recommendations" | "stay" | "none" | "insufficient"; explanation: string; candidates: Recommendation[] };
 
-function snapshot(file: TFile, editor: Editor): NoteSnapshot {
+function snapshot(file: TFile, editor: Pick<Editor, "getValue">): NoteSnapshot {
 	const text = editor.getValue();
 	const yaml = text.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/);
 	const properties: unknown = yaml ? parseYaml(yaml[1]) : {};
@@ -41,8 +41,10 @@ function parseResult(content: string, sources: FolderSource[]): ReviewResult {
 	return { outcome: value.outcome, explanation: value.explanation, candidates };
 }
 
-export class NoteReviewView extends ItemView {
-	private target?: { file: TFile; editor: Editor };
+export class NoteReviewView extends ItemView implements HoverParent {
+	hoverPopover: HoverPopover | null = null;
+	private renderRevision = 0;
+	private target?: { file: TFile; editor: Pick<Editor, "getValue"> };
 	private analyzed?: NoteSnapshot;
 	private request?: AbortController;
 	private result?: ReviewResult;
@@ -65,7 +67,7 @@ export class NoteReviewView extends ItemView {
 		this.registerEvent(this.app.vault.on("delete", file => { if (file === this.target?.file) { this.stale = true; this.stop(); } else this.descriptionsChanged(file.path); }));
 		this.render();
 	}
-	async onClose(): Promise<void> { this.closed = true; this.request?.abort(); this.request = undefined; this.target = undefined; }
+	async onClose(): Promise<void> { this.hoverPopover?.unload(); this.hoverPopover = null; this.closed = true; this.request?.abort(); this.request = undefined; this.target = undefined; }
 
 	private changed(): void {
 		if (!this.analyzed || !this.target || this.closed) return;
@@ -78,7 +80,7 @@ export class NoteReviewView extends ItemView {
 			this.sources.some(source => source.descriptions.some(description => description.path === path || description.path.startsWith(`${path}/`))))) { this.stale = true; this.render(); }
 	}
 
-	async analyze(file: TFile, editor: Editor): Promise<void> {
+	async analyze(file: TFile, editor: Pick<Editor, "getValue">): Promise<void> {
 		this.target = { file, editor };
 		await this.refresh();
 	}
@@ -135,6 +137,8 @@ export class NoteReviewView extends ItemView {
 	refreshLanguage(): void { this.render(); }
 	private render(): void {
 		if (this.closed) return;
+		const revision = ++this.renderRevision;
+		this.hoverPopover?.unload(); this.hoverPopover = null;
 		const root = this.contentEl; root.empty(); root.addClass("ai-helper-note-review");
 		root.createEl("h2", { text: this.plugin.t("review-title") });
 		if (this.target) {
@@ -146,7 +150,7 @@ export class NoteReviewView extends ItemView {
 		refresh.disabled = !this.target; refresh.addEventListener("click", () => { void this.refresh(); });
 		const stop = actions.createEl("button", { cls: "ai-helper-review-stop", text: this.plugin.t("review-stop") });
 		stop.disabled = !this.request; stop.addEventListener("click", () => this.stop());
-		root.createDiv({ text: this.plugin.t(this.status), attr: { role: "status", "aria-live": "polite" } });
+		root.createDiv({ cls: this.request ? "ai-helper-thinking" : "", text: this.plugin.t(this.status), attr: { role: "status", "aria-live": "polite" } });
 		if (this.stale) root.createDiv({ cls: "ai-helper-review-stale", text: this.plugin.t("review-stale"), attr: { role: "status" } });
 		if (!this.result) return;
 		if (this.result.outcome !== "recommendations") root.createEl("h3", { text: this.plugin.t(`review-${this.result.outcome}`) });
@@ -155,7 +159,17 @@ export class NoteReviewView extends ItemView {
 			const item = root.createDiv({ cls: "ai-helper-review-candidate" });
 			item.createEl("h3", { text: source.folderPath });
 			item.createEl("p", { text: explanation });
-			const link = item.createEl("a", { cls: "internal-link ai-helper-review-source", text: source.path, attr: { href: source.path } });
+			const link = item.createEl("a", { cls: "internal-link ai-helper-review-source", text: source.path, attr: { href: "#", "data-href": source.path } });
+			let hovered = false;
+			link.addEventListener("mouseleave", () => { hovered = false; });
+			link.addEventListener("mouseover", event => {
+				event.stopPropagation(); hovered = true;
+				void this.plugin.folderDescriptions.validateSource(source).then(() => {
+					if (!hovered || this.closed || this.renderRevision !== revision) return;
+					this.app.workspace.trigger("hover-link", { event, source: VIEW_TYPE_NOTE_REVIEW,
+						hoverParent: this, targetEl: link, linktext: source.path, sourcePath: "" });
+				}).catch(() => {});
+			});
 			link.addEventListener("click", event => {
 				event.preventDefault();
 				void this.plugin.folderDescriptions.open(source).catch(() => { this.stale = true; this.status = "review-source-changed"; this.render(); });

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { type App, type PluginManifest, TFile, TFolder, type WorkspaceLeaf } from "obsidian";
+import { type App, type PluginManifest, MarkdownView, TFile, TFolder, type WorkspaceLeaf } from "obsidian";
 import { AiHelperPlugin } from "../src/main";
 import { NoteReviewView, VIEW_TYPE_NOTE_REVIEW } from "../src/note-review-view";
 import { DEFAULT_SETTINGS } from "../src/settings";
@@ -31,6 +31,7 @@ async function setup() {
 	const file = files.get("Личное/План.md")!;
 	let text = "---\nстатус: активный\n---\nЛичный план изучения GTD [[Секрет]]";
 	const editor = { getValue: () => text };
+	const markdown = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file, editor, getMode: (): "source" | "preview" => "source", getViewData: () => text });
 	const events = new Map<string, Array<(...args: any[]) => void>>();
 	const on = (name: string, cb: (...args: any[]) => void) => { events.set(name, [...events.get(name) ?? [], cb]); return {}; };
 	const openFile = vi.fn(async () => {}), create = vi.fn(), renameFile = vi.fn(), remove = vi.fn();
@@ -38,20 +39,21 @@ async function setup() {
 	let view: NoteReviewView;
 	const leaf = { get view() { return view; } };
 	const ensureSideLeaf = vi.fn(async () => leaf);
-	const app = { vault: { on, getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path), read, create, delete: remove }, fileManager: { renameFile }, workspace: { on, getLeavesOfType: () => [], ensureSideLeaf, getLeaf: () => ({ openFile }), trigger: vi.fn() } } as unknown as App;
+	const app = { vault: { on, getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path), read, create, delete: remove }, fileManager: { renameFile }, workspace: { on, getActiveViewOfType: () => markdown, getLeavesOfType: () => [], ensureSideLeaf, getLeaf: () => ({ openFile }), trigger: vi.fn() } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, language: "ru", serverUrl: "http://model/v1", model: "диалог", contextWindow: "32768", excludedFolders: ["Личное"], systemPrompt: "НЕ ОТПРАВЛЯТЬ" });
 	vi.spyOn(plugin.serverClient, "listModels").mockResolvedValue({ ok: true, value: ["диалог"] });
 	vi.spyOn(plugin.serverClient, "getContextWindow").mockResolvedValue({ ok: true, value: undefined });
 	const chat = vi.spyOn(plugin.serverClient, "chat").mockResolvedValue({ ok: true, value: { content: JSON.stringify({ outcome: "recommendations", explanation: "По назначению заметки", candidates: [{ folder: "Знания", explanation: "Справка о методе" }] }) } });
 	const commands = vi.spyOn(plugin, "addCommand");
+	const hoverSource = vi.spyOn(plugin, "registerHoverLinkSource");
 	await plugin.onload();
 	view = new NoteReviewView({} as WorkspaceLeaf, plugin); Object.assign(view, { app }); await view.onOpen();
 	const command = commands.mock.calls.find(([c]) => c.id === "suggest-note-folder")![0];
 	const root = view.contentEl as unknown as TestElement;
-	const start = async () => { command.editorCallback!(editor as any, { file, editor } as any); await flushPromises(); await vi.waitFor(() => expect(root.find("ai-helper-review-stop").disabled).toBe(true)); };
+	const start = async () => { command.callback!(); await flushPromises(); await vi.waitFor(() => expect(root.find("ai-helper-review-stop").disabled).toBe(true)); };
 	const emit = (name: string, ...args: any[]) => events.get(name)?.forEach(cb => cb(...args));
-	return { plugin, view, root, start, chat, ensureSideLeaf, file, files, folders, texts, editor, read, openFile, create, renameFile, remove, emit, edit(value: string) { text = value; emit("editor-change", editor, { file }); } };
+	return { plugin, view, root, start, chat, ensureSideLeaf, file, files, folders, texts, editor, markdown, command, hoverSource, trigger: app.workspace.trigger as ReturnType<typeof vi.fn>, read, openFile, create, renameFile, remove, emit, edit(value: string) { text = value; emit("editor-change", editor, { file }); } };
 }
 
 it("команда открывает отдельную правую вкладку и передаёт редактор, свойства и все содержательные описания без индекса", async () => {
@@ -77,7 +79,7 @@ it("команда открывает отдельную правую вклад
 it("отмечает изменения во время и после запроса, обновляет текущий текст без автоматических запросов", async () => {
 	const s = await setup();
 	const pending = deferred<ServerClientResult<ChatCompletionResult>>(); s.chat.mockReturnValueOnce(pending.promise);
-	void s.start(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
+	s.command.callback!(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
 	s.edit("---\nстатус: завершён\n---\nОбновлённое содержание");
 	expect(s.root.getText()).toContain("Рекомендации устарели"); expect(s.chat).toHaveBeenCalledTimes(1);
 	pending.resolve({ ok: true, value: { content: '{"outcome":"stay","explanation":"Текущее место подходит","candidates":[]}' } });
@@ -93,7 +95,7 @@ it("отмечает изменения во время и после запро
 
 it.each(["stop", "close"])("игнорирует поздний результат после %s и допускает повтор после остановки", async action => {
 	const s = await setup(); const pending = deferred<ServerClientResult<ChatCompletionResult>>(); s.chat.mockReturnValueOnce(pending.promise);
-	void s.start(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
+	s.command.callback!(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
 	if (action === "stop") s.root.find("ai-helper-review-stop").click(); else await s.view.onClose();
 	expect(s.chat.mock.calls[0][3]?.signal?.aborted).toBe(true);
 	pending.resolve({ ok: true, value: { content: '{"outcome":"none","explanation":"ПОЗДНИЙ РЕЗУЛЬТАТ","candidates":[]}' } }); await flushPromises();
@@ -163,7 +165,7 @@ it("устаревает при изменении любого переданн
 
 it("согласует резерв контекста с лимитом ответа и сообщает об изменении описания во время запроса без требования индекса", async () => {
 	const s = await setup(); const pending = deferred<ServerClientResult<ChatCompletionResult>>(); s.chat.mockReturnValueOnce(pending.promise);
-	void s.start(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
+	s.command.callback!(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
 	expect(s.chat.mock.calls[0][3]?.maxTokens).toBe("1024");
 	s.texts.set("Знания/_folder.md", "Новые правила");
 	pending.resolve({ ok: true, value: { content: '{"outcome":"recommendations","explanation":"Совет","candidates":[{"folder":"Знания","explanation":"Справка"}]}' } });
@@ -182,4 +184,47 @@ it("отмечает новый набор кандидатов после за�
 	s.root.find("ai-helper-review-refresh").click(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(2)); await flushPromises();
 	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).folders).toHaveLength(5);
 	s.emit("create", { path: "Новая/_folder.md" }); expect(s.root.getText()).toContain("Рекомендации устарели"); await s.view.onClose();
+});
+
+it("регистрирует нативное превью и показывает его при наведении на проверенное описание", async () => {
+	const s = await setup(); await s.start();
+	expect(s.hoverSource).toHaveBeenCalledWith(VIEW_TYPE_NOTE_REVIEW, expect.objectContaining({ defaultMod: true }));
+	const link = s.root.find("ai-helper-review-source");
+	link.dispatchEvent({ type: "mouseover", stopPropagation() {} } as any); await flushPromises();
+	expect(s.trigger).toHaveBeenCalledWith("hover-link", expect.objectContaining({ source: VIEW_TYPE_NOTE_REVIEW, hoverParent: s.view, targetEl: link, linktext: "Знания/_folder.md" }));
+	await s.view.onClose();
+});
+
+it("анимирует ожидание тем же стилем, что и чат, и прекращает его при остановке", async () => {
+	const s = await setup(); const pending = deferred<ServerClientResult<ChatCompletionResult>>(); s.chat.mockReturnValueOnce(pending.promise);
+	s.command.callback!(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1));
+	expect(s.root.find("ai-helper-thinking").getText()).toBe("Анализ заметки…");
+	s.root.find("ai-helper-review-stop").click(); expect(() => s.root.find("ai-helper-thinking")).toThrow();
+	pending.resolve({ ok: false, error: { message: "Остановка" } }); await flushPromises(); await s.view.onClose();
+});
+
+it("команда доступна в режиме чтения и анализирует отображаемый текст, а не неактивный редактор", async () => {
+	const s = await setup(); s.markdown.getMode = () => "preview";
+	s.markdown.getViewData = () => "Текст открытой заметки в режиме чтения";
+	expect(s.command.editorCallback).toBeUndefined(); expect(s.command.callback).toBeTypeOf("function");
+	s.command.callback!(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1)); await flushPromises();
+	expect(JSON.parse(s.chat.mock.calls[0][2][1].content).note.text).toBe("Текст открытой заметки в режиме чтения");
+	await s.view.onClose();
+});
+
+it.each(["mouseleave", "close", "refresh"] as const)("не показывает запоздалое превью после %s", async action => {
+	const s = await setup(); await s.start(); const link = s.root.find("ai-helper-review-source");
+	const pending = deferred<string>(); s.read.mockReturnValueOnce(pending.promise);
+	link.dispatchEvent({ type: "mouseover", stopPropagation() {} } as any);
+	if (action === "mouseleave") link.dispatchEvent({ type: "mouseleave" });
+	else if (action === "close") await s.view.onClose();
+	else s.root.find("ai-helper-review-refresh").click();
+	pending.resolve(s.texts.get("_folder.md")!); await flushPromises();
+	expect(s.trigger).not.toHaveBeenCalledWith("hover-link", expect.anything()); await s.view.onClose();
+});
+
+it("не показывает превью описания, которое изменилось после анализа", async () => {
+	const s = await setup(); await s.start(); s.texts.set("Знания/_folder.md", "Другие критерии");
+	s.root.find("ai-helper-review-source").dispatchEvent({ type: "mouseover", stopPropagation() {} } as any); await flushPromises();
+	expect(s.trigger).not.toHaveBeenCalledWith("hover-link", expect.anything()); await s.view.onClose();
 });

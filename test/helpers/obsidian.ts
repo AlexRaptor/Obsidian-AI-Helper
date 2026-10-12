@@ -264,3 +264,5 @@ export class DropdownComponent {
 	setValue(value: string): this { this.selectEl.value = value; return this; }
 	onChange(callback: (value: string) => void): this { this.selectEl.addEventListener("change", () => callback(this.selectEl.value)); return this; }
 }
+
+export class MarkdownView {}

@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, MarkdownView, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -133,8 +133,16 @@ export class AiHelperPlugin extends Plugin {
 		this.registerHoverLinkSource(VIEW_TYPE_CHAT, { display: this.manifest.name, defaultMod: true });
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 		this.registerView(VIEW_TYPE_NOTE_REVIEW, leaf => new NoteReviewView(leaf, this));
-		this.addCommand({ id: "suggest-note-folder", name: this.t("review-command"), editorCallback: (editor, info) => {
-			if (info.file?.extension === "md") void this.suggestNoteFolder(info.file, editor).catch(() => new Notice(this.t("review-error")));
+		this.registerHoverLinkSource(VIEW_TYPE_NOTE_REVIEW, { display: this.t("review-title"), defaultMod: true });
+		this.addCommand({ id: "suggest-note-folder", name: this.t("review-command"), callback: () => {
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!view?.file || view.file.extension !== "md") { new Notice(this.t("search-note")); return; }
+			const file = view.file;
+			const text = { getValue: () => {
+				if (view.file !== file) throw new Error("The editor is showing another note");
+				return view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
+			} };
+			void this.suggestNoteFolder(file, text).catch(() => new Notice(this.t("review-error")));
 		} });
 		this.addRibbonIcon(
 			"message-square",
@@ -394,7 +402,7 @@ export class AiHelperPlugin extends Plugin {
 		view?.clearConversation();
 	}
 
-	async suggestNoteFolder(file: TFile, editor: Editor): Promise<void> {
+	async suggestNoteFolder(file: TFile, editor: Pick<Editor, "getValue">): Promise<void> {
 		const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_NOTE_REVIEW, "right", { active: true, reveal: true });
 		if (!this.unloading && leaf.view instanceof NoteReviewView) await leaf.view.analyze(file, editor);
 	}
