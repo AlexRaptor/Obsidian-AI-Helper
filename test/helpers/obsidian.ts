@@ -251,3 +251,15 @@ export class ButtonComponent {
 	setTooltip(text: string): this { setTooltip(this.buttonEl, text); return this; }
 	onClick(callback: () => void): this { this.buttonEl.addEventListener("click", callback); return this; }
 }
+
+export class DropdownComponent {
+	selectEl: TestElement;
+	constructor(parent: TestElement) { this.selectEl = parent.createEl("select"); }
+	addOption(value: string, label: string): this {
+		const existing = this.selectEl.children.find(child => child.value === value);
+		const option = existing ?? this.selectEl.createEl("option");
+		option.value = value; option.setText(label); return this;
+	}
+	setValue(value: string): this { this.selectEl.value = value; return this; }
+	onChange(callback: (value: string) => void): this { this.selectEl.addEventListener("change", () => callback(this.selectEl.value)); return this; }
+}

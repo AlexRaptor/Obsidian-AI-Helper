@@ -116,7 +116,7 @@ describe("stopping real chat streams", () => {
 		const { view, root, input, send, ask } = await setup(fetch);
 		await ask("old question"); root.find("ai-helper-clear-btn").click(); await flushPromises();
 		await ask("new question"); response.resolve(json("late old text")); await flushPromises();
-		expect(root.getText()).not.toContain("old"); expect(send.attributes["aria-label"]).toBe("Stop");
+		expect(root.find("ai-helper-messages").getText()).not.toContain("old"); expect(send.attributes["aria-label"]).toBe("Stop");
 		const rendering = deferred<void>();
 		vi.spyOn(MarkdownRenderer, "render").mockImplementationOnce(async (_app, _text, element) => {
 			await rendering.promise; element.setText("stale rendered text");

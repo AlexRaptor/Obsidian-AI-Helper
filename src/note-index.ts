@@ -17,7 +17,7 @@ export function serializeNoteSources(sources: NoteSource[]): string {
 	const data = sources.map((source, index) => ({ source: `[${index + 1}]`, path: source.path, headings: source.headings, text: source.text }));
 	return JSON.stringify(data.length === 1 ? data[0] : data);
 }
-export type NoteSearchErrorCode = "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed" | "search-excluded" | "search-query-failed";
+export type NoteSearchErrorCode = "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed" | "search-excluded" | "search-query-failed" | "search-folder-failed";
 export class NoteSearchError extends Error {
 	constructor(public readonly code: NoteSearchErrorCode) { super(code); }
 }
@@ -285,6 +285,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	let fragmentOptions = { ...DEFAULT_FRAGMENT_OPTIONS };
 	let minimumSimilarity = DEFAULT_MIN_SOURCE_SIMILARITY;
 	let excludedFolders: string[] = [];
+	let folderDescriptionName: string | undefined;
 	let revision = 0;
 	let writes: Promise<unknown> = Promise.resolve();
 	let disposed = false;
@@ -315,7 +316,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 	}
 	const fingerprint = () => hash(JSON.stringify({ connection, fragmentOptions, format: 2, ...(storageGeneration ? { storageGeneration } : {}) }));
 	const permitted = (path: string, folders: string[]) => typeof path === "string" && /\.md$/i.test(path) && !path.split("/").some((part) => part === "." || part === "..") && !folders.some((folder) => !folder || path === folder || path.startsWith(folder + "/"));
-	const allowed = (path: string) => permitted(path, excludedFolders);
+	const allowed = (path: string) => permitted(path, excludedFolders) && path.split("/").pop() !== folderDescriptionName;
 	const check = (version: number, signal?: AbortSignal) => {
 		if (disposed || revision !== version || signal?.aborted) throw new NoteSearchError("search-rebuild");
 	};
@@ -605,7 +606,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		get excludedFolders(): string[] { return [...excludedFolders]; },
 		subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
-		configure(next: EmbeddingConnection & { indexStorageGeneration?: string; noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
+		configure(next: EmbeddingConnection & { folderDescriptionName?: string; indexStorageGeneration?: string; noteSearchMinSimilarity?: number; excludedFolders?: string[]; autoUpdateNotes?: boolean; noteUpdateDelaySeconds?: number } & Partial<FragmentOptions>): void {
 			const delay = isValidNoteUpdateDelay(next.noteUpdateDelaySeconds) ? next.noteUpdateDelaySeconds : DEFAULT_NOTE_UPDATE_DELAY_SECONDS;
 			if (updateDelaySeconds !== delay) {
 				updateDelaySeconds = delay;
@@ -620,9 +621,10 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const copy = { embeddingServerUrl: next.embeddingServerUrl, embeddingApiKey: next.embeddingApiKey, embeddingModel: next.embeddingModel };
 			const nextGeneration = next.indexStorageGeneration ?? "";
 			const incompatible = storageGeneration !== nextGeneration || JSON.stringify(connection) !== JSON.stringify(copy) || JSON.stringify(fragmentOptions) !== JSON.stringify(options);
-			const exclusionsChanged = JSON.stringify(folders) !== JSON.stringify(excludedFolders);
+			const exclusionsChanged = JSON.stringify(folders) !== JSON.stringify(excludedFolders) || folderDescriptionName !== next.folderDescriptionName;
 			if (!incompatible && !exclusionsChanged) return;
 			const changed = connection !== undefined;
+			folderDescriptionName = next.folderDescriptionName;
 			storageGeneration = nextGeneration; connection = copy; fragmentOptions = options; excludedFolders = folders; cancel();
 			for (const path of pending) if (!allowed(path) || incompatible) pending.delete(path);
 			if (changed && incompatible) { updatesLoaded = true; initialized = false; failed = false; paused = false; operation = undefined; clearTimeout(timer); timer = undefined; }
