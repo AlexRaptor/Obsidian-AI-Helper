@@ -318,6 +318,16 @@
 
 .ai-helper-source {
 	margin-top: 0.75em;
+	padding-inline-start: 1.25em;
+}
+
+.ai-helper-source-summary {
+	list-style-position: outside;
+}
+
+.ai-helper-source > pre {
+	margin-inline-start: 0;
+	padding-inline-start: 0;
 }
 
 .ai-helper-source-similarity,
