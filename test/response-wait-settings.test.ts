@@ -679,3 +679,218 @@ it("keeps name confirmation open while saving and restores the old name on failu
 	await buttons("ai-helper-description-cancel").click(); expect(Modal.opened).not.toContain(modal);
 	tab.hide();
 });
+
+
+async function descriptionRenameSettings(name = "about.md") {
+	const { TFile, TFolder, Modal } = await import("./helpers/obsidian");
+	const entries = new Map<string, { file: InstanceType<typeof TFile>; text: string }>();
+	const add = (path: string, text: string) => {
+		const folderPath = path.split("/").slice(0, -1).join("/");
+		const file = Object.assign(new TFile(), { path, name: path.split("/").at(-1)!, parent: Object.assign(new TFolder(), { path: folderPath }) });
+		entries.set(path, { file, text }); return file;
+	};
+	add("_folder.md", "Root rules"); add("Private/_folder.md", "Private rules");
+	add("Empty/_folder.md", "## Purpose\n<!-- What this folder is for -->\n");
+	add("Other/Note.md", "Ordinary note");
+	let fail = (_from: string, _to: string) => false;
+	const moves: string[] = [];
+	const app = { vault: {
+		getMarkdownFiles: () => [...entries.values()].map(entry => entry.file),
+		getAbstractFileByPath: (path: string) => entries.get(path)?.file ?? null,
+		adapter: { exists: async (path: string) => entries.has(path) },
+		read: async (file: { path: string }) => entries.get(file.path)!.text,
+	}, fileManager: { renameFile: async (file: { path: string; name: string }, path: string) => {
+		moves.push(path);
+		if (fail(file.path, path)) throw new Error("Controlled rename failure");
+		if (entries.has(path)) throw new Error("Occupied destination");
+		const entry = entries.get(file.path)!; entries.delete(file.path);
+		file.path = path; file.name = path.split("/").at(-1)!; entries.set(path, entry);
+	} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, excludedFolders: ["Private"] };
+	const saved: string[] = [];
+	const save = vi.spyOn(plugin, "saveSettings").mockImplementation(async () => { saved.push(plugin.settings.folderDescriptionName); });
+	const tab = new AiHelperSettingsTab(app, plugin); tab.display();
+	const row = controls.find(control => control.name === t("folder-description-name"))!;
+	await row.input!.change(name); await row.button!.click();
+	const modal = Modal.opened.at(-1)!;
+	const button = (cls: string) => controls.filter(control => control.button?.buttonEl.classes.has(cls)).at(-1)!.button!;
+	return { plugin, entries, add, moves, saved, save, tab, modal, button, setFailure: (value: typeof fail) => { fail = value; } };
+}
+
+it("renames every description through settings before saving, including root, templates and exclusions", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		expect(env.modal.contentEl.getText()).toContain("3");
+		await env.button("ai-helper-description-rename").click();
+		expect([...env.entries.keys()].sort()).toEqual(["Empty/about.md", "Other/Note.md", "Private/about.md", "about.md"]);
+		expect(env.entries.get("Private/about.md")!.text).toBe("Private rules");
+		expect(env.entries.get("Empty/about.md")!.text).toBe("## Purpose\n<!-- What this folder is for -->\n");
+		expect(env.saved).toEqual(["about.md"]);
+		expect(env.plugin.folderDescriptions.list()).toHaveLength(3);
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it.each(["retry", "settings only"])("checks all conflicts before moving files and allows %s", async choice => {
+	const env = await descriptionRenameSettings();
+	try {
+		env.add("Private/about.md", "Keep private conflict"); env.add("Empty/about.md", "Keep empty conflict");
+		await env.button("ai-helper-description-rename").click();
+		expect(env.moves).toEqual([]); expect(env.saved).toEqual([]);
+		expect(env.plugin.settings.folderDescriptionName).toBe("_folder.md");
+		expect(env.modal.contentEl.getText()).toContain("Private/about.md");
+		expect(env.modal.contentEl.getText()).toContain("Empty/about.md");
+		if (choice === "retry") {
+			env.entries.delete("Private/about.md"); env.entries.delete("Empty/about.md");
+			await env.button("ai-helper-description-rename").click();
+			expect(env.entries.has("Private/_folder.md")).toBe(false);
+		} else {
+			await env.button("ai-helper-description-confirm").click();
+			expect(env.entries.get("Private/about.md")!.text).toBe("Keep private conflict");
+			expect(env.moves).toEqual([]);
+		}
+		expect(env.saved).toEqual(["about.md"]);
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("restores renamed files and the old setting when a later rename fails", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		env.setFailure((_from, to) => to === "Empty/about.md");
+		await env.button("ai-helper-description-rename").click();
+		expect([...env.entries.keys()].sort()).toEqual(["Empty/_folder.md", "Other/Note.md", "Private/_folder.md", "_folder.md"]);
+		expect(env.entries.get("Private/_folder.md")!.text).toBe("Private rules");
+		expect(env.saved).toEqual([]); expect(env.plugin.settings.folderDescriptionName).toBe("_folder.md");
+		expect(env.modal.contentEl.getText()).toContain(t("folder-description-restored"));
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("reports exact residual paths and continues restoring other files when rollback fails", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		env.setFailure((_from, to) => to === "Empty/about.md" || to === "Private/_folder.md");
+		await env.button("ai-helper-description-rename").click();
+		expect([...env.entries.keys()].sort()).toEqual(["Empty/_folder.md", "Other/Note.md", "Private/about.md", "_folder.md"]);
+		expect(env.saved).toEqual([]); expect(env.plugin.settings.folderDescriptionName).toBe("_folder.md");
+		expect(env.modal.contentEl.getText()).toContain(t("folder-description-restore-incomplete"));
+		expect(env.modal.contentEl.getText()).toContain("Private/about.md → Private/_folder.md");
+		expect(env.modal.contentEl.getText()).not.toContain(t("folder-description-restored"));
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("restores the whole rename set if the new setting cannot be persisted", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		env.save.mockRejectedValue(new Error("Settings unavailable"));
+		await env.button("ai-helper-description-rename").click();
+		expect([...env.entries.keys()].sort()).toEqual(["Empty/_folder.md", "Other/Note.md", "Private/_folder.md", "_folder.md"]);
+		expect(env.plugin.settings.folderDescriptionName).toBe("_folder.md");
+		expect(env.modal.contentEl.getText()).toContain(t("folder-description-restored"));
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("preflights folders and adapter-only destinations as conflicts", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		const { TFolder } = await import("./helpers/obsidian");
+		const lookup = env.plugin.app.vault.getAbstractFileByPath.bind(env.plugin.app.vault);
+		vi.spyOn(env.plugin.app.vault, "getAbstractFileByPath").mockImplementation(path => path === "Private/about.md" ? Object.assign(new TFolder(), { path }) : lookup(path));
+		vi.spyOn(env.plugin.app.vault.adapter, "exists").mockImplementation(async path => path === "Empty/about.md");
+		await env.button("ai-helper-description-rename").click();
+		expect(env.moves).toEqual([]); expect(env.saved).toEqual([]);
+		expect(env.modal.contentEl.getText()).toContain("Private/about.md");
+		expect(env.modal.contentEl.getText()).toContain("Empty/about.md");
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("preserves a file that appears at the old path during rollback", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		env.setFailure((_from, to) => {
+			if (to !== "Empty/about.md") return false;
+			env.add("Private/_folder.md", "External content"); return true;
+		});
+		await env.button("ai-helper-description-rename").click();
+		expect(env.entries.get("Private/_folder.md")!.text).toBe("External content");
+		expect(env.entries.get("Private/about.md")!.text).toBe("Private rules");
+		expect(env.modal.contentEl.getText()).toContain("Private/about.md → Private/_folder.md");
+		expect(env.entries.has("about.md")).toBe(false);
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("keeps the previous setting and disables all actions until renaming finishes", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		const pending = deferred<void>();
+		const rename = env.plugin.app.fileManager.renameFile.bind(env.plugin.app.fileManager);
+		let first = true;
+		vi.spyOn(env.plugin.app.fileManager, "renameFile").mockImplementation(async (file, path) => {
+			if (first) { first = false; await pending.promise; } await rename(file, path);
+		});
+		const operation = env.button("ai-helper-description-rename").click();
+		await vi.waitFor(() => expect(first).toBe(false));
+		expect(env.plugin.settings.folderDescriptionName).toBe("_folder.md"); expect(env.saved).toEqual([]);
+		for (const cls of ["ai-helper-description-confirm", "ai-helper-description-rename", "ai-helper-description-cancel"]) expect(env.button(cls).buttonEl.disabled).toBe(true);
+		env.modal.close();
+		const { Modal } = await import("./helpers/obsidian"); expect(Modal.opened).toContain(env.modal);
+		pending.resolve(); await operation;
+		expect(env.saved).toEqual(["about.md"]);
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it.each(["cancel", "settings only"])("preserves all vault contents when choosing %s", async choice => {
+	const env = await descriptionRenameSettings();
+	try {
+		const contents = [...env.entries].map(([path, entry]) => [path, entry.text]);
+		await env.button(choice === "cancel" ? "ai-helper-description-cancel" : "ai-helper-description-confirm").click();
+		expect([...env.entries].map(([path, entry]) => [path, entry.text])).toEqual(contents);
+		expect(env.moves).toEqual([]);
+		expect(env.plugin.settings.folderDescriptionName).toBe(choice === "cancel" ? "_folder.md" : "about.md");
+		expect(env.saved).toEqual(choice === "cancel" ? [] : ["about.md"]);
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("restores a file even if the external operation moves it and then rejects", async () => {
+	const env = await descriptionRenameSettings();
+	try {
+		const rename = env.plugin.app.fileManager.renameFile.bind(env.plugin.app.fileManager);
+		vi.spyOn(env.plugin.app.fileManager, "renameFile").mockImplementation(async (file, path) => {
+			await rename(file, path);
+			if (path === "Private/about.md") throw new Error("Link update failed after move");
+		});
+		await env.button("ai-helper-description-rename").click();
+		expect([...env.entries.keys()].sort()).toEqual(["Empty/_folder.md", "Other/Note.md", "Private/_folder.md", "_folder.md"]);
+		expect(env.plugin.settings.folderDescriptionName).toBe("_folder.md"); expect(env.saved).toEqual([]);
+		expect(env.modal.contentEl.getText()).toContain(t("folder-description-restored"));
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+
+it.each(["success", "rollback"])("supports case-only name changes on a case-insensitive vault (%s)", async outcome => {
+	const env = await descriptionRenameSettings("_Folder.md");
+	try {
+		vi.spyOn(env.plugin.app.vault.adapter, "exists").mockImplementation(async (path, sensitive) =>
+			sensitive ? env.entries.has(path) : [...env.entries.keys()].some(key => key.toLowerCase() === path.toLowerCase()));
+		if (outcome === "rollback") env.setFailure((_from, to) => to === "Empty/_Folder.md");
+		await env.button("ai-helper-description-rename").click();
+		if (outcome === "success") {
+			expect([...env.entries.keys()].sort()).toEqual(["Empty/_Folder.md", "Other/Note.md", "Private/_Folder.md", "_Folder.md"]);
+			expect(env.saved).toEqual(["_Folder.md"]);
+		} else {
+			expect([...env.entries.keys()].sort()).toEqual(["Empty/_folder.md", "Other/Note.md", "Private/_folder.md", "_folder.md"]);
+			expect(env.saved).toEqual([]);
+			expect(env.modal.contentEl.getText()).toContain(t("folder-description-restored"));
+		}
+	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+it("does not overwrite a distinct case-only destination on a case-sensitive vault", async () => {
+	const env = await descriptionRenameSettings("_Folder.md");
+	try {
+		env.add("Private/_Folder.md", "Different description");
+		await env.button("ai-helper-description-rename").click();
+		expect(env.moves).toEqual([]); expect(env.saved).toEqual([]);
+		expect(env.entries.get("Private/_Folder.md")!.text).toBe("Different description");
+		expect(env.modal.contentEl.getText()).toContain("Private/_Folder.md");
+	} finally { env.modal.close(); env.tab.hide(); }
+});

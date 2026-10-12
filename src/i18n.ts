@@ -15,12 +15,16 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 
 export const en = {
 	"folder-description-name": "Folder description file name",
-	"folder-description-name-desc": "One Markdown file name for all folders. Existing files are kept when the name changes.",
+	"folder-description-name-desc": "One Markdown file name for all folders. Choose whether to rename existing descriptions when changing it.",
 	"folder-description-name-invalid": "Enter a valid file name ending in .md, without a path.",
 	"folder-description-apply": "Apply",
-	"folder-description-change": "Files with the current name: {count}. Save “{name}” without renaming files? Only the new name will be recognized.",
+	"folder-description-change": "Files with the current name: {count}. Choose how to apply “{name}”. Only the new name will be recognized after saving.",
 	"folder-description-cancel": "Cancel",
 	"folder-description-confirm": "Save without renaming",
+	"folder-description-rename": "Rename existing descriptions",
+	"folder-description-conflicts": "Nothing was renamed. These destinations are occupied. Resolve the conflicts and retry, or save without renaming:",
+	"folder-description-restored": "Renaming or saving failed. The previous setting is kept; all file names have been restored.",
+	"folder-description-restore-incomplete": "Renaming or saving failed. The previous setting is kept. Some file names could not be restored (current path → original path). Restore them manually before retrying:",
 	"folder-description-save-error": "Could not save the description name. The previous name is kept.",
 
 	"folder-description-create": "Create description",
@@ -256,12 +260,16 @@ export const en = {
 
 export const ru = {
 	"folder-description-name": "Имя файла описания папки",
-	"folder-description-name-desc": "Единое имя Markdown-файла для всех папок. При смене имени существующие файлы сохраняются.",
+	"folder-description-name-desc": "Единое имя Markdown-файла для всех папок. При смене имени можно переименовать существующие описания.",
 	"folder-description-name-invalid": "Введите допустимое имя файла с расширением .md без пути.",
 	"folder-description-apply": "Применить",
-	"folder-description-change": "Файлов с текущим именем: {count}. Сохранить «{name}» без переименования файлов? Будет распознаваться только новое имя.",
+	"folder-description-change": "Файлов с текущим именем: {count}. Выберите, как применить «{name}». После сохранения будет распознаваться только новое имя.",
 	"folder-description-cancel": "Отмена",
 	"folder-description-confirm": "Сохранить без переименования",
+	"folder-description-rename": "Переименовать существующие описания",
+	"folder-description-conflicts": "Файлы не переименованы. Эти назначения заняты. Устраните конфликты и повторите действие либо сохраните без переименования:",
+	"folder-description-restored": "Переименование или сохранение не удалось. Сохранена прежняя настройка; все имена файлов восстановлены.",
+	"folder-description-restore-incomplete": "Переименование или сохранение не удалось. Сохранена прежняя настройка. Не все имена файлов удалось восстановить (текущий путь → исходный путь). Восстановите их вручную перед повторной попыткой:",
 	"folder-description-save-error": "Не удалось сохранить имя описания. Сохранено прежнее имя.",
 
 	"folder-description-create": "Создать описание",
