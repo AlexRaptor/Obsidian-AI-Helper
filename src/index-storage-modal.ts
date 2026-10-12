@@ -14,7 +14,9 @@ export class IndexStorageModal extends Modal {
 		confirm.addEventListener("click", () => {
 			confirm.disabled = true;
 			this.close();
-			void this.plugin.changeIndexStorage(this.mode).finally(this.finished);
+			const changing = this.plugin.changeIndexStorage(this.mode);
+			this.finished();
+			void changing.finally(this.finished);
 		});
 	}
 	onClose(): void { this.contentEl.empty(); this.finished(); }

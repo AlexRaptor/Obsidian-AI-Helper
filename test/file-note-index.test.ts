@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createNoteSearch } from "../src/note-index";
 import { createServerClient } from "../src/server-client";
 import { fileIndexAdapter } from "./helpers/file-index";
@@ -94,4 +94,44 @@ it("recovers completed work when publishing a new file snapshot is interrupted",
 	await restored.resume(true);
 	expect(inputs).toHaveLength(3); expect(inputs[2]).toContain("latest text");
 	expect(restored.progress.state).toBe("complete"); restored.dispose();
+});
+
+it.each(["local", "file"] as const)("keeps %s storage empty after deletion during automatic indexing and a late model response", async mode => {
+	const { IDBFactory } = await import("fake-indexeddb");
+	let finish!: (response: Response) => void; let requests = 0;
+	const response = () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	const client = createServerClient(async () => { requests++; return requests === 2 ? new Promise<Response>(resolve => { finish = resolve; }) : response(); });
+	const notes = new Map([["Ready.md", "ready"], ["Pending.md", "pending"]]);
+	const environment = { client, factory: new IDBFactory(), vaultPath: "/delete-active", storageMode: mode, fileStorage: { adapter: fileIndexAdapter(), directory: ".obsidian/plugins/obsidian-ai-helper/note-index" }, list: () => [...notes.keys()], read: async (path: string) => notes.get(path) ?? null, open: async () => {} };
+	const search = createNoteSearch(environment); search.configure({ ...connection, autoUpdateNotes: true, noteUpdateDelaySeconds: 0.01 });
+	const indexing = search.indexVault().catch(error => error);
+	await vi.waitFor(() => expect(requests).toBe(2));
+	await search.clear(); finish(response()); expect(await indexing).toMatchObject({ code: "search-rebuild" });
+	notes.set("Pending.md", "new text after deletion"); await search.changed("Pending.md");
+	await new Promise(resolve => setTimeout(resolve, 40));
+	expect(requests).toBe(2); expect(search.progress).toMatchObject({ state: "idle", completed: 0, total: 2 });
+	await expect(search.search("ready")).rejects.toMatchObject({ code: "search-rebuild" }); search.dispose();
+	const restored = createNoteSearch(environment); restored.configure(connection); await restored.restore(); await restored.resume();
+	expect(restored.progress).toMatchObject({ state: "idle", completed: 0 }); expect(requests).toBe(2); restored.dispose();
+});
+
+it("restores the previous single-file format and preserves it when saving a pause in the new format", async () => {
+	const adapter = fileIndexAdapter();
+	// A complete index in the format used by the previous release.
+	const fingerprint = "1d500f12ce4c02d88443a2596ab5a849c13ed0c672a436f7f49c72e41b7b59bd";
+	adapter.files.set(".obsidian/plugins/obsidian-ai-helper/note-index/index.json", JSON.stringify({ format: 1,
+		vault: "c73272cf05cadf8ef7b0f813e2182e97a2f755b76e4115cef74f6ab4979aab74", entries: [
+			["progress", { fingerprint, state: "complete", completed: 1, total: 1 }],
+			["updates", { initialized: true, pending: [], failed: false, paused: false }],
+			["Train.md", { path: "Train.md", contentHash: "66ee1cb237c6384849229bb4fd7272d039a92379362e45e529c55a48598e4d74", fingerprint, fragments: [{ text: "Train\nTrain.md\n\nTrain at 18:30", headings: [], vector: [1, 0] }] }],
+		] }));
+	let requests = 0;
+	const client = createServerClient(async () => { requests++; return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })); });
+	const environment = { client, factory: undefined, vaultPath: "/legacy-files", storageMode: "file" as const, fileStorage: { adapter, directory: ".obsidian/plugins/obsidian-ai-helper/note-index" }, list: () => ["Train.md"], read: async () => "Train at 18:30", open: async () => {} };
+	const search = createNoteSearch(environment); search.configure(connection); await search.restore();
+	expect(search.progress).toMatchObject({ state: "complete", completed: 1, total: 1 });
+	await search.pause(); search.dispose();
+	const restored = createNoteSearch(environment); restored.configure(connection); await restored.restore(); await restored.resume();
+	expect(restored.progress).toMatchObject({ state: "paused", completed: 1, total: 1 }); expect(requests).toBe(0);
+	expect(await restored.search("train")).toMatchObject({ path: "Train.md", text: expect.stringContaining("18:30") }); restored.dispose();
 });

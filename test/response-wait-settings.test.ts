@@ -8,13 +8,13 @@ import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
 import { en, ru, setLanguage, t } from "../src/i18n";
 import { deferred, TestElement } from "./helpers/obsidian";
 
-const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; toggle?: { change: (value: boolean) => Promise<void> }; slider?: { value: number; change: (value: number) => Promise<void> }; picker?: { value: string; disabled: boolean; change: (value: string) => Promise<void> }; button?: { click: () => Promise<void> }; dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
+const controls = vi.hoisted(() => [] as Array<{ name: string; description: string; toggle?: { change: (value: boolean) => Promise<void> }; slider?: { value: number; change: (value: number) => Promise<void> }; picker?: { value: string; disabled: boolean; change: (value: string) => Promise<void> }; button?: { buttonEl: TestElement; click: () => Promise<void> }; dropdown?: { selectEl: TestElement; value: string; options: Record<string, string>; change: (value: string) => Promise<void> }; input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> } }>);
 vi.mock("obsidian", async () => {
 	const helper = await import("./helpers/obsidian");
 	const MockSetting = class {
 			name = ""; get description() { return this.descEl.getText(); } controlEl = new helper.TestElement(); descEl = new helper.TestElement();
 			input?: { value: string; inputEl: TestElement; change: (value: string) => Promise<void> };
-			dropdown?: { value: string; options: Record<string, string>; change: (value: string) => Promise<void> };
+			dropdown?: { selectEl: TestElement; value: string; options: Record<string, string>; change: (value: string) => Promise<void> };
 			constructor() {
 				controls.push(this);
 				this.controlEl.empty = () => { this.input = undefined; this.dropdown = undefined; };
@@ -39,7 +39,7 @@ vi.mock("obsidian", async () => {
 				this.input = input; callback(input); return this;
 			}
 			addDropdown(callback: (dropdown: unknown) => void) {
-				const dropdown = { selectEl: new helper.TestElement(), value: "", options: {} as Record<string, string>, change: async (_value: string) => {},
+				const dropdown = { selectEl: new helper.TestElement(), setDisabled(value: boolean) { this.selectEl.disabled = value; return this; }, value: "", options: {} as Record<string, string>, change: async (_value: string) => {},
 					addOption(value: string, label: string) { this.options[value] = label; return this; },
 					setValue(value: string) { this.value = value; return this; },
 					onChange(change: (value: string) => Promise<void>) { this.change = change; return this; } };
@@ -53,7 +53,7 @@ vi.mock("obsidian", async () => {
 				Object.assign(this, { picker }); callback(picker); return this;
 			}
 			addButton(callback: (button: unknown) => void) {
-				const button = { buttonEl: new helper.TestElement(), click: async () => {}, setIcon() { return this; }, setWarning() { this.buttonEl.addClass("mod-warning"); return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
+				const button = { buttonEl: new helper.TestElement(), setDisabled(value: boolean) { this.buttonEl.disabled = value; return this; }, click: async () => {}, setIcon() { return this; }, setWarning() { this.buttonEl.addClass("mod-warning"); return this; }, setTooltip() { return this; }, setButtonText() { return this; }, onClick(click: () => Promise<void>) { this.click = click; return this; } };
 				(this as unknown as { button: typeof button }).button = button;
 				callback(button); return this;
 			}
@@ -589,4 +589,40 @@ it("keeps the displayed and actual mode consistent if the mode selection cannot 
 	await plugin.changeIndexStorage("file");
 	expect(plugin.settings.indexStorageMode).toBe(search.storageMode);
 	expect(await search.search("train")).toMatchObject({ path: "Train.md" }); search.dispose();
+});
+
+it("shows the confirmed mode while rebuilding and ignores a repeated selection", async () => {
+	const { fileIndexAdapter } = await import("./helpers/file-index");
+	const { Modal } = await import("./helpers/obsidian");
+	const adapter = fileIndexAdapter();
+	const plugin = new AiHelperPlugin({} as App, { id: "obsidian-ai-helper" } as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" };
+	const waiting = deferred<Response>(); let hold = false; let requests = 0;
+	const response = () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	const client = createServerClient(async () => { requests++; return hold ? waiting.promise : response(); });
+	const search = createNoteSearch({ client, factory: new IDBFactory(), vaultPath: "/visible-switch", fileStorage: { adapter, directory: plugin.noteIndexDirectory() }, list: () => ["Train.md"], read: async () => "Train at 18:30", open: async () => {} });
+	plugin.noteSearch = search; search.configure(plugin.settings); await search.indexVault();
+	Object.assign(plugin, { saveData: async () => {} });
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	let dropdown = controls.find(control => control.name === t("index-storage-mode"))!.dropdown!;
+	let clear = controls.find(control => control.name === t("search-vault-clear"))!.button!;
+	try {
+		hold = true; await dropdown.change("file");
+		Modal.opened.at(-1)!.contentEl.find("ai-helper-storage-confirm").click();
+		await vi.waitFor(() => expect(requests).toBe(2));
+		expect(search.progress.state).toBe("indexing");
+		expect(dropdown.value).toBe("file");
+		expect(dropdown.selectEl.disabled).toBe(true); expect(clear.buttonEl.disabled).toBe(true);
+		controls.length = 0; tab.display();
+		dropdown = controls.find(control => control.name === t("index-storage-mode"))!.dropdown!;
+		clear = controls.find(control => control.name === t("search-vault-clear"))!.button!;
+		expect(dropdown.value).toBe("file"); expect(dropdown.selectEl.disabled).toBe(true);
+		await dropdown.change("file"); await dropdown.change("local"); expect(Modal.opened).toHaveLength(0);
+		expect(requests).toBe(2);
+	} finally {
+		hold = false; waiting.resolve(response());
+		await vi.waitFor(() => expect(search.progress.state).toBe("complete"));
+		await vi.waitFor(() => expect(dropdown.selectEl.disabled).toBe(false)); expect(clear.buttonEl.disabled).toBe(false);
+		tab.hide(); search.dispose();
+	}
 });

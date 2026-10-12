@@ -33,6 +33,7 @@ export class AiHelperPlugin extends Plugin {
 	noteSearch!: NoteSearch;
 	private indexingNote = false;
 	private changingIndexStorage = false;
+	private indexStorageListeners = new Set<() => void>();
 	private unloading = false;
 	private indexRestore: Promise<void> = Promise.resolve();
 	private settingsTab?: AiHelperSettingsTab;
@@ -67,17 +68,24 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearch.configure(this.settings);
 		let vaultReady = !this.app.workspace.onLayoutReady;
 		const updateError = (error: unknown) => { if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); };
+		const indexDirectory = this.noteIndexDirectory();
+		const isIndexPath = (path: string) => path === indexDirectory || path.startsWith(`${indexDirectory}/`);
 		if (this.app.vault?.on) {
 			const changed = (file: TAbstractFile) => {
 				// Initial file discovery also emits create/modify events. Restoration
 				// reconciles their final contents once the complete vault is available.
-				if (!vaultReady) return;
+				if (!vaultReady || isIndexPath(file.path)) return;
 				if (file instanceof TFile && file.extension === "md") void this.noteSearch.changed(file.path).catch(updateError);
 			};
 			this.registerEvent(this.app.vault.on("create", changed));
 			this.registerEvent(this.app.vault.on("modify", changed));
-			this.registerEvent(this.app.vault.on("delete", file => { if (vaultReady) void this.noteSearch.removed(file.path).catch(updateError); }));
+			this.registerEvent(this.app.vault.on("delete", file => {
+				if (!vaultReady || isIndexPath(file.path) || (file instanceof TFile && file.extension !== "md")) return;
+				void this.noteSearch.removed(file.path).catch(updateError);
+			}));
 			this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+				if (isIndexPath(file.path) || isIndexPath(oldPath)) return;
+				if (file instanceof TFile && file.extension !== "md" && !/\.md$/i.test(oldPath)) return;
 				const updating = this.noteSearch.renamed(file.path, oldPath);
 				this.settings.excludedFolders = this.noteSearch.excludedFolders;
 				this.settingsTab?.refreshExcludedFolders();
@@ -164,6 +172,7 @@ export class AiHelperPlugin extends Plugin {
 
 	onunload(): void {
 		this.unloading = true;
+		this.indexStorageListeners.clear();
 		this.noteSearch?.dispose();
 		this.noteSearchConnection.cancel();
 		this.modelConnection.cancel();
@@ -213,6 +222,12 @@ export class AiHelperPlugin extends Plugin {
 		return `${this.app.vault?.configDir ?? ".obsidian"}/plugins/${this.manifest.id}/note-index`;
 	}
 
+	get isChangingIndexStorage(): boolean { return this.changingIndexStorage; }
+	subscribeIndexStorage(listener: () => void): () => void {
+		this.indexStorageListeners.add(listener);
+		return () => { this.indexStorageListeners.delete(listener); };
+	}
+
 	async changeIndexStorage(mode: IndexStorageMode): Promise<void> {
 		if (this.changingIndexStorage || mode === this.settings.indexStorageMode || this.unloading) return;
 		this.changingIndexStorage = true;
@@ -222,6 +237,7 @@ export class AiHelperPlugin extends Plugin {
 			const previousGeneration = this.settings.indexStorageGeneration;
 			this.settings.indexStorageMode = mode;
 			this.settings.indexStorageGeneration = globalThis.crypto.randomUUID();
+			this.indexStorageListeners.forEach(listener => listener());
 			try { await this.saveData(this.settings); }
 			catch (error) {
 				this.settings.indexStorageMode = previousMode;
@@ -238,7 +254,10 @@ export class AiHelperPlugin extends Plugin {
 			new Notice(this.t("search-state-complete"));
 		} catch (error) {
 			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-storage"));
-		} finally { this.changingIndexStorage = false; }
+		} finally {
+			this.changingIndexStorage = false;
+			this.indexStorageListeners.forEach(listener => listener());
+		}
 	}
 
 	noteIndexDisclosure(): string {

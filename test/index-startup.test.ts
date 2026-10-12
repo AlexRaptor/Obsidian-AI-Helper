@@ -176,3 +176,38 @@ it("ignores initial file discovery events until the vault is ready and retains t
 		await vi.waitFor(() => expect(inputs.some(input => input.includes(text))).toBe(true));
 	} finally { plugin.onunload(); }
 });
+
+it("ignores events from index snapshots while switching a completed vault to files", async () => {
+	const { fileIndexAdapter } = await import("./helpers/file-index");
+	const factory = new IDBFactory(); vi.stubGlobal("indexedDB", factory);
+	const settings = { ...DEFAULT_SETTINGS, embeddingServerUrl: "http://s/v1", embeddingModel: "e" };
+	let embeddings = 0;
+	const client = createServerClient(async url => {
+		if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [] }));
+		embeddings++; return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }));
+	});
+	const indexed = createNoteSearch({ client, factory, vaultPath: "/snapshot-events", list: () => ["Train.md"], read: async () => "Train", open: async () => {} });
+	indexed.configure(settings); await indexed.indexVault(); indexed.dispose(); embeddings = 0;
+	const files = fileIndexAdapter(); const adapter = Object.assign(new FileSystemAdapter(), files);
+	adapter.getBasePath = () => "/snapshot-events";
+	const handlers = new Map<string, (...args: any[]) => void>();
+	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, callback); return {}; };
+	let ready!: () => void; let snapshotEvents = 0;
+	const rename = files.rename;
+	adapter.rename = async (from, to) => {
+		await rename(from, to);
+		// Bound the reproduction; the unfixed feedback loop would keep writing.
+		if (++snapshotEvents <= 8) handlers.get("rename")?.(Object.assign(new TFile(), { path: to, extension: to.split(".").at(-1) }), from);
+	};
+	const note = Object.assign(new TFile(), { path: "Train.md", extension: "md" });
+	const app = { vault: { adapter, on, getMarkdownFiles: () => [note], getFileByPath: () => note, read: async () => "Train" },
+		workspace: { on, onLayoutReady: (callback: () => void) => { ready = callback; }, detachLeavesOfType: () => {} } } as unknown as App;
+	const plugin = new AiHelperPlugin(app, { id: "obsidian-ai-helper" } as PluginManifest); plugin.serverClient = client;
+	vi.spyOn(plugin, "loadData").mockResolvedValue(settings); Object.assign(plugin, { saveData: async () => {} });
+	try {
+		await plugin.onload(); ready(); await vi.waitFor(() => expect(plugin.noteSearch.progress.state).toBe("complete"));
+		await plugin.changeIndexStorage("file");
+		expect(plugin.noteSearch.progress).toMatchObject({ state: "complete", completed: 1, total: 1 });
+		expect(embeddings).toBe(1);
+	} finally { plugin.onunload(); }
+});

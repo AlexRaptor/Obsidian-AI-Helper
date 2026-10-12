@@ -132,7 +132,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					this.row("embedding-check", "embedding-check-desc", setting => this.renderCheck(setting, true)),
 					this.row("index-storage-mode", "index-storage-desc", setting => this.renderStorage(setting)),
 					this.row("search-vault-index", undefined, setting => this.renderIndex(setting)),
-					this.row("search-vault-clear", "search-clear-desc", setting => { setting.setClass("ai-helper-index-control").addButton(button => button.setWarning().setButtonText(this.t("search-vault-clear")).onClick(() => this.plugin.manageNoteIndex("clear"))); }),
+					this.row("search-vault-clear", "search-clear-desc", setting => this.renderClearIndex(setting)),
 					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
 				]),
 				this.folderDefinitions(),
@@ -295,21 +295,31 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		update(); return () => { active = false; unsubscribe?.(); };
 	}
 
-	private renderStorage(setting: Setting): void {
+	private renderStorage(setting: Setting): () => void {
 		setting.setClass("ai-helper-index-storage-setting");
 		const directory = this.plugin.noteIndexDirectory?.() ?? ".obsidian/plugins/obsidian-ai-helper/note-index";
 		const rule = `/${directory}/`;
 		const description = `${this.t("index-storage-desc")} ${directory}/. ${this.t("index-storage-git")} ${rule}`;
 		setting.descEl.empty();
 		for (const paragraph of description.split("\n\n")) setting.descEl.createEl("p", { text: paragraph });
+		let active = true;
+		let update = () => {};
 		setting.addDropdown(dropdown => {
+			update = () => {
+				if (!active) return;
+				dropdown.setValue(this.plugin.settings.indexStorageMode).setDisabled(this.plugin.isChangingIndexStorage ?? false);
+			};
 			dropdown.addOption("local", this.t("index-storage-local")).addOption("file", this.t("index-storage-file"))
 				.setValue(this.plugin.settings.indexStorageMode).onChange(value => {
-					dropdown.setValue(this.plugin.settings.indexStorageMode);
+					update();
+					if (this.plugin.isChangingIndexStorage) return;
 					if ((value !== "local" && value !== "file") || value === this.plugin.settings.indexStorageMode) return;
-					new IndexStorageModal(this.plugin, value, () => dropdown.setValue(this.plugin.settings.indexStorageMode)).open();
+					new IndexStorageModal(this.plugin, value, update).open();
 				});
 		});
+		const unsubscribe = this.plugin.subscribeIndexStorage?.(update);
+		update();
+		return () => { active = false; unsubscribe?.(); };
 	}
 
 	private renderIndex(setting: Setting): () => void {
@@ -330,6 +340,17 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const unsubscribe = this.plugin.noteSearch?.subscribe(update);
 		setting.addButton(button => button.setButtonText(this.t("search-vault-index")).onClick(async () => { await this.plugin.manageNoteIndex("index"); update(); }));
 		update(); return () => { active = false; unsubscribe?.(); };
+	}
+
+	private renderClearIndex(setting: Setting): () => void {
+		let update = () => {};
+		setting.setClass("ai-helper-index-control").addButton(button => {
+			update = () => { button.setDisabled(this.plugin.isChangingIndexStorage ?? false); };
+			button.setWarning().setButtonText(this.t("search-vault-clear")).onClick(() => this.plugin.manageNoteIndex("clear"));
+		});
+		const unsubscribe = this.plugin.subscribeIndexStorage?.(update);
+		update();
+		return () => unsubscribe?.();
 	}
 
 	private renderSimilarity(setting: Setting): void {

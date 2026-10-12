@@ -25,7 +25,7 @@ interface IndexedFragment { text: string; headings: string[]; vector: number[]; 
 interface IndexedNote { path: string; contentHash: string; fingerprint: string; fragments: IndexedFragment[]; }
 export type IndexStorageMode = "local" | "file";
 export interface FileIndexStorage {
-	adapter: Pick<DataAdapter, "exists" | "mkdir" | "read" | "write" | "rename" | "remove">;
+	adapter: Pick<DataAdapter, "exists" | "mkdir" | "read" | "write" | "rename" | "remove" | "rmdir">;
 	directory: string;
 }
 interface NoteSearchEnvironment {
@@ -158,23 +158,44 @@ function storage(environment: NoteSearchEnvironment) {
 }
 
 function fileStorage(environment: NoteSearchEnvironment): ReturnType<typeof storage> {
-	async function access<T>(action: (entries: Map<string, unknown>, adapter: FileIndexStorage["adapter"], path: string) => Promise<T>, reset = false): Promise<T> {
+	// Records are immutable and content-addressed. Progress writes update only
+	// the small manifest, not every completed note's text and vector data.
+	const records = new Map<string, unknown>();
+	const recordIds = new WeakMap<object, string>();
+	async function access<T>(action: (entries: Map<string, unknown>, adapter: FileIndexStorage["adapter"], path: string, previousRecords: Set<string>) => Promise<T>, reset = false): Promise<T> {
 		try {
 			const options = environment.fileStorage;
 			if (!options || !environment.vaultPath) throw new NoteSearchError("search-storage");
 			const { adapter, directory } = options;
 			const path = `${directory}/index.json`;
 			let entries = new Map<string, unknown>();
+			const previousRecords = new Set<string>();
 			const readablePath = await adapter.exists(path) ? path : `${path}.bak`;
 			if (!reset && await adapter.exists(readablePath)) {
 				const saved: unknown = JSON.parse(await adapter.read(readablePath));
 				if (!saved || typeof saved !== "object") throw new NoteSearchError("search-storage");
 				const snapshot = saved as { format?: unknown; vault?: unknown; entries?: unknown };
-				if (snapshot.format !== 1 || typeof snapshot.vault !== "string" || !Array.isArray(snapshot.entries)
+				if ((snapshot.format !== 1 && snapshot.format !== 2) || typeof snapshot.vault !== "string" || !Array.isArray(snapshot.entries)
 					|| !snapshot.entries.every(entry => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string")) throw new NoteSearchError("search-storage");
-				if (snapshot.vault === await hash(environment.vaultPath)) entries = new Map(snapshot.entries);
+				if (snapshot.vault === await hash(environment.vaultPath)) {
+					entries = new Map(snapshot.entries);
+					if (snapshot.format === 2) for (const [key, reference] of entries) {
+						if (key === "progress" || key === "updates") continue;
+						const id = (reference as { record?: unknown } | null)?.record;
+						if (typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)) throw new NoteSearchError("search-storage");
+						previousRecords.add(id);
+						if (!records.has(id)) {
+							const text = await adapter.read(`${directory}/notes/${id}.json`);
+							if (await hash(text) !== id) throw new NoteSearchError("search-storage");
+							const value: unknown = JSON.parse(text);
+							if (!validNote(value)) throw new NoteSearchError("search-storage");
+							records.set(id, value); recordIds.set(value, id);
+						}
+						entries.set(key, records.get(id));
+					}
+				}
 			}
-			return await action(entries, adapter, path);
+			return await action(entries, adapter, path, previousRecords);
 		} catch (error) {
 			if (error instanceof NoteSearchError) throw error;
 			throw new NoteSearchError("search-storage");
@@ -200,23 +221,36 @@ function fileStorage(environment: NoteSearchEnvironment): ReturnType<typeof stor
 					}
 				}); },
 			});
-			return access(async (entries, adapter, path) => {
+			return access(async (entries, adapter, path, previousRecords) => {
 				for (const mutate of mutations) mutate(entries);
+				const directory = environment.fileStorage!.directory;
 				if (cleared && !entries.size) {
-					if (await adapter.exists(path)) await adapter.remove(path);
-					if (await adapter.exists(`${path}.tmp`)) await adapter.remove(`${path}.tmp`);
-					if (await adapter.exists(`${path}.bak`)) await adapter.remove(`${path}.bak`);
+					if (await adapter.exists(directory)) await adapter.rmdir(directory, true);
+					records.clear();
 					return;
 				}
-				const directory = environment.fileStorage!.directory;
 				// Create each missing parent through Obsidian's adapter.
-				const parts = directory.split("/");
+				const parts = `${directory}/notes`.split("/");
 				for (let i = 1; i <= parts.length; i++) {
 					const parent = parts.slice(0, i).join("/");
 					if (!await adapter.exists(parent)) await adapter.mkdir(parent);
 				}
-				const snapshot = JSON.stringify({ format: 1, vault: await hash(environment.vaultPath), entries: [...entries] });
-				// Publish a complete snapshot: interrupted writes leave the last saved work readable.
+				const manifest: Array<[string, unknown]> = [];
+				const currentRecords = new Set<string>();
+				for (const [key, value] of entries) {
+					if (key === "progress" || key === "updates") { manifest.push([key, value]); continue; }
+					let id = value && typeof value === "object" ? recordIds.get(value) : undefined;
+					if (!id || !records.has(id)) {
+						if (!validNote(value)) continue;
+						const text = JSON.stringify(value);
+						id = await hash(text);
+						await adapter.write(`${directory}/notes/${id}.json`, text);
+						records.set(id, value); recordIds.set(value, id);
+					}
+					currentRecords.add(id); manifest.push([key, { record: id }]);
+				}
+				const snapshot = JSON.stringify({ format: 2, vault: await hash(environment.vaultPath), entries: manifest });
+				// Keep the prior manifest readable until all new records are published.
 				await adapter.write(`${path}.tmp`, snapshot);
 				if (await adapter.exists(path)) {
 					if (await adapter.exists(`${path}.bak`)) await adapter.remove(`${path}.bak`);
@@ -224,6 +258,10 @@ function fileStorage(environment: NoteSearchEnvironment): ReturnType<typeof stor
 				}
 				await adapter.rename(`${path}.tmp`, path);
 				if (await adapter.exists(`${path}.bak`)) await adapter.remove(`${path}.bak`);
+				for (const id of previousRecords) if (!currentRecords.has(id)) {
+					if (await adapter.exists(`${directory}/notes/${id}.json`)) await adapter.remove(`${directory}/notes/${id}.json`);
+					records.delete(id);
+				}
 			}, cleared);
 		},
 	};
