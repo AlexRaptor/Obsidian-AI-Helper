@@ -462,3 +462,19 @@
 .ai-helper-description-name {
 	flex-wrap: wrap;
 }
+
+.ai-helper-note-review {
+	overflow-y: auto;
+}
+
+.ai-helper-review-path,
+.ai-helper-review-candidate {
+	overflow-wrap: anywhere;
+}
+
+.ai-helper-review-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+	margin-block: var(--size-4-3);
+}

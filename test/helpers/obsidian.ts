@@ -92,6 +92,7 @@ class TestText {
 }
 
 export class Component {
+	registerEvent(_event: unknown): void {}
 	registerDomEvent(el: TestElement, event: string, callback: (evt: any) => void): void { el.addEventListener(event, callback); }
 	load(): void {}
 	addChild<T>(child: T): T { return child; }

@@ -1,10 +1,11 @@
-import { FileSystemAdapter, Notice, Plugin, TFile, TFolder, type TAbstractFile, parseYaml, getLanguage as getAppLanguage } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
 	AiHelperSettingsTab,
 	type ModelStatus,
 } from "./settings";
+import { NoteReviewView, VIEW_TYPE_NOTE_REVIEW } from "./note-review-view";
 import { ChatView, VIEW_TYPE_CHAT } from "./chat-view";
 import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, resolveLanguage, t, type LocaleKey } from "./i18n";
@@ -131,6 +132,10 @@ export class AiHelperPlugin extends Plugin {
 
 		this.registerHoverLinkSource(VIEW_TYPE_CHAT, { display: this.manifest.name, defaultMod: true });
 		this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
+		this.registerView(VIEW_TYPE_NOTE_REVIEW, leaf => new NoteReviewView(leaf, this));
+		this.addCommand({ id: "suggest-note-folder", name: this.t("review-command"), editorCallback: (editor, info) => {
+			if (info.file?.extension === "md") void this.suggestNoteFolder(info.file, editor).catch(() => new Notice(this.t("review-error")));
+		} });
 		this.addRibbonIcon(
 			"message-square",
 			this.t("ribbon"),
@@ -188,6 +193,7 @@ export class AiHelperPlugin extends Plugin {
 		this.modelRequest?.abort();
 		this.modelRequest = null;
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_NOTE_REVIEW);
 	}
 
 	async loadSettings(): Promise<void> {
@@ -362,6 +368,9 @@ export class AiHelperPlugin extends Plugin {
 				await leaf.view.refreshLocale();
 			}
 		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_NOTE_REVIEW)) {
+			if (leaf.view instanceof NoteReviewView) leaf.view.refreshLanguage();
+		}
 	}
 
 	applyLanguage(): void {
@@ -383,6 +392,11 @@ export class AiHelperPlugin extends Plugin {
 			if (leaf.view instanceof ChatView) view = leaf.view;
 		}
 		view?.clearConversation();
+	}
+
+	async suggestNoteFolder(file: TFile, editor: Editor): Promise<void> {
+		const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_NOTE_REVIEW, "right", { active: true, reveal: true });
+		if (!this.unloading && leaf.view instanceof NoteReviewView) await leaf.view.analyze(file, editor);
 	}
 
 	async toggleView(): Promise<void> {

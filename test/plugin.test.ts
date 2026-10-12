@@ -23,7 +23,7 @@ describe("chat toggle", () => {
 		await plugin.onload();
 		const toggle = trigger === "ribbon"
 			? () => ribbon.mock.calls[0][2]({} as MouseEvent)
-			: () => command.mock.calls[0][0].callback!();
+			: () => command.mock.calls.find(([c]) => c.id === "toggle-view")![0].callback!();
 
 		await toggle();
 		expect(workspace.ensureSideLeaf).toHaveBeenCalledWith(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
@@ -49,7 +49,7 @@ describe("plugin model loading", () => {
 		const load = plugin.onload().then(() => { loaded = true; });
 		await flushPromises();
 		expect(loaded).toBe(true);
-		expect(registerView).toHaveBeenCalledTimes(1);
+		expect(registerView).toHaveBeenCalledTimes(2);
 		expect(addSettingTab).toHaveBeenCalledTimes(1);
 		pending.resolve({ ok: true, value: ["m"] });
 		await load;

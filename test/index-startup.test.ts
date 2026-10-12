@@ -30,7 +30,7 @@ it("loads promptly on repeated starts after an excluded-folder rename without wa
 		let loaded = false; const loading = plugin.onload().then(() => { loaded = true; });
 		try {
 			await vi.waitFor(() => expect(loaded).toBe(true), { timeout: 200 });
-			expect(registerView).toHaveBeenCalledOnce(); expect(read).not.toHaveBeenCalled();
+			expect(registerView).toHaveBeenCalledWith("ai-helper-chat", expect.any(Function)); expect(read).not.toHaveBeenCalled();
 			ready(); await vi.waitFor(() => expect(read).toHaveBeenCalled());
 		} finally { reading.resolve("train"); await loading; plugin.onunload(); }
 	}

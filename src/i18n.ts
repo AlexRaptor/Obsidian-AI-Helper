@@ -14,6 +14,25 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"review-title": "Note review",
+	"review-command": "Suggest a folder for the current note",
+	"review-empty": "Run the command in an open Markdown note.",
+	"review-refresh": "Refresh recommendations",
+	"review-stop": "Stop analysis",
+	"review-loading": "Analyzing the note…",
+	"review-stopped": "Analysis stopped. You can retry.",
+	"review-ready": "Recommendations are ready.",
+	"review-stale": "The note or its descriptions changed. Recommendations are outdated; refresh them.",
+	"review-stay": "Keep in the current folder",
+	"review-none": "No suitable folder",
+	"review-insufficient": "Insufficient note content",
+	"review-error": "Could not analyze the note. Check its properties and retry.",
+	"review-server-error": "The model server request failed. Check the connection, conversation model and generation settings, then retry.",
+	"review-invalid": "The model returned an invalid recommendation. No files changed. Retry.",
+	"review-missing": "The note is no longer available. Open another note and run the command.",
+	"review-budget": "The note and all folder descriptions exceed the available context. Nothing was truncated. Increase the context window or reduce the content and retry.",
+	"review-source-changed": "The description changed or disappeared. Refresh recommendations.",
+
 	"folder-description-name": "Folder description file name",
 	"folder-description-name-desc": "One Markdown file name for all folders. Choose whether to rename existing descriptions when changing it.",
 	"folder-description-name-invalid": "Enter a valid file name ending in .md, without a path.",
@@ -268,6 +287,25 @@ export const en = {
 } as const;
 
 export const ru = {
+	"review-title": "Разбор заметок",
+	"review-command": "Предложить папку для текущей заметки",
+	"review-empty": "Выполните команду в открытой Markdown-заметке.",
+	"review-refresh": "Обновить рекомендации",
+	"review-stop": "Остановить анализ",
+	"review-loading": "Анализ заметки…",
+	"review-stopped": "Анализ остановлен. Можно повторить.",
+	"review-ready": "Рекомендации готовы.",
+	"review-stale": "Заметка или её описания изменились. Рекомендации устарели; обновите их.",
+	"review-stay": "Оставить в текущей папке",
+	"review-none": "Подходящей папки нет",
+	"review-insufficient": "Недостаточно содержания заметки",
+	"review-error": "Не удалось проанализировать заметку. Проверьте свойства и повторите.",
+	"review-server-error": "Ошибка запроса к модель-серверу. Проверьте подключение, модель диалога и параметры генерации, затем повторите.",
+	"review-invalid": "Модель вернула некорректную рекомендацию. Файлы не изменены. Повторите анализ.",
+	"review-missing": "Заметка больше недоступна. Откройте другую заметку и выполните команду.",
+	"review-budget": "Заметка и все описания папок превышают доступный контекст. Ничего не усекалось. Увеличьте окно контекста или уменьшите содержимое и повторите.",
+	"review-source-changed": "Описание изменилось или исчезло. Обновите рекомендации.",
+
 	"folder-description-name": "Имя файла описания папки",
 	"folder-description-name-desc": "Единое имя Markdown-файла для всех папок. При смене имени можно переименовать существующие описания.",
 	"folder-description-name-invalid": "Введите допустимое имя файла с расширением .md без пути.",
