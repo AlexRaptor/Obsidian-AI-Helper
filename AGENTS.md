@@ -18,6 +18,12 @@ There is no standalone runtime. To run:
 3. Copy `main.js`, `manifest.json`, and `styles.css` into `<vault>/.obsidian/plugins/<manifest id>/`
 4. Reload Obsidian (Ctrl/Cmd+R); check the console for errors
 
+## Manual testing
+
+- Описания ручных тест-кейсов и инструкции размещать в `docs/testing`.
+- Отдельные тестовые хранилища, их исходные данные и генераторы размещать в `docs/fixtures`.
+- Агент выполняет автоматические проверки, подготавливает файлы для ручной проверки и сообщает пользователю точные пути. Ручную проверку выполняет пользователь; Computer Use для неё применять только по его явной просьбе.
+
 ## Conventions
 
 - Все сообщения коммитов (заголовок и тело) пишите на русском языке.

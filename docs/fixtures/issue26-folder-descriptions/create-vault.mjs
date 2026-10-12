@@ -2,7 +2,7 @@ import { mkdir, writeFile, copyFile, readFile, access } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
 const destination = process.argv[2];
-if (!destination) throw new Error("Usage: node test/fixtures/manual-folder-descriptions/create-vault.mjs /absolute/new/vault");
+if (!destination) throw new Error("Usage: node docs/fixtures/issue26-folder-descriptions/create-vault.mjs docs/fixtures/issue26-folder-descriptions/vault");
 const vault = resolve(destination);
 try { await access(vault); throw new Error("Destination already exists; choose a new directory to preserve previous results."); }
 catch (error) { if (error.code !== "ENOENT") throw error; }

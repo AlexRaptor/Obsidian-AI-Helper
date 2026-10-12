@@ -6,10 +6,10 @@
 
 ```sh
 npm run build
-node test/fixtures/manual-folder-descriptions/create-vault.mjs /tmp/issue26-folder-vault
+node docs/fixtures/issue26-folder-descriptions/create-vault.mjs docs/fixtures/issue26-folder-descriptions/vault
 ```
 
-Генератор создаёт настоящее хранилище, копирует текущие `main.js`, `manifest.json`, `styles.css` в папку с `manifest.id`. Все точные пути и содержимое исходных файлов заданы строками в `create-vault.mjs`. Существующий каталог генератор не изменяет: для повтора выберите новый путь, например `/tmp/issue26-folder-vault-repeat`.
+Генератор создаёт настоящее хранилище, копирует текущие `main.js`, `manifest.json`, `styles.css` в папку с `manifest.id`. Все точные пути и содержимое исходных файлов заданы строками в `docs/fixtures/issue26-folder-descriptions/create-vault.mjs`. Существующий каталог генератор не изменяет: для повтора выберите новый путь, например `docs/fixtures/issue26-folder-descriptions/vault-repeat`.
 
 Откройте папку через Obsidian → Управление хранилищами → Открыть папку как хранилище. Включите доверие и сторонние плагины только в этом тестовом хранилище; убедитесь, что AI Helper включён. Используйте стандартную тему без других сторонних плагинов. Генератор задаёт исходный режим редактора (`livePreview: false`). Язык Obsidian может быть любым; язык плагина задан `ru`, имя описания по умолчанию `_folder.md`, исключена `Private`, автоматическое обновление индекса отключено. Адреса серверов и модели пусты; индекс не строить.
 
