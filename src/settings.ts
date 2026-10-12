@@ -299,7 +299,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		setting.setClass("ai-helper-index-storage-setting");
 		const directory = this.plugin.noteIndexDirectory?.() ?? ".obsidian/plugins/obsidian-ai-helper/note-index";
 		const rule = `/${directory}/`;
-		setting.setDesc(`${this.t("index-storage-desc")} ${directory}/. ${this.t("index-storage-git")} ${rule}`);
+		const description = `${this.t("index-storage-desc")} ${directory}/. ${this.t("index-storage-git")} ${rule}`;
+		setting.descEl.empty();
+		for (const paragraph of description.split("\n\n")) setting.descEl.createEl("p", { text: paragraph });
 		setting.addDropdown(dropdown => {
 			dropdown.addOption("local", this.t("index-storage-local")).addOption("file", this.t("index-storage-file"))
 				.setValue(this.plugin.settings.indexStorageMode).onChange(value => {
