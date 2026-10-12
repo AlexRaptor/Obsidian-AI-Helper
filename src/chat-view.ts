@@ -2,12 +2,14 @@ import { ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRender
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
-import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, sourceBudgetBytes, type NoteSource } from "./note-index";
+import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
 import { effectiveContextWindow } from "./context-window";
 import { prepareSearchMarkdown, visitSearchAnswerText } from "./search-answer-markdown";
-import { FOLDER_SEARCH_INSTRUCTION, serializeFolderSources, type FolderSource } from "./folder-descriptions";
+import { FOLDER_SEARCH_INSTRUCTION, FOLDER_PLACEMENT_INSTRUCTION, folderSourceData, serializeFolderSources, type FolderSource } from "./folder-descriptions";
+
+const MIXED_SEARCH_INSTRUCTION = `${NOTE_SEARCH_INSTRUCTION} ${FOLDER_PLACEMENT_INSTRUCTION} Sources with kind note provide substantive evidence; sources with kind folder define placement rules. Distinguish notes from folders, and use only folder descriptions to justify placement. Source numbers share one sequence across both kinds.`;
 
 type ChatSource = NoteSource | FolderSource;
 const isFolderSource = (source: ChatSource): source is FolderSource => "kind" in source && source.kind === "folder";
@@ -31,7 +33,7 @@ export class ChatView extends ItemView implements HoverParent {
 	plugin: AiHelperPlugin;
 	conversation = new Conversation();
 	private searchEnabled = false;
-	private searchType: "notes" | "folders" = "notes";
+	private searchType: "notes" | "folders" | "mixed" = "notes";
 	private searchTypeSelect: DropdownComponent | null = null;
 	private indexStatusEl: HTMLElement | null = null;
 	private indexTitleEl: HTMLElement | null = null;
@@ -82,7 +84,7 @@ export class ChatView extends ItemView implements HoverParent {
 
 	toggleSearch(): void {
 		this.searchEnabled = !this.searchEnabled;
-		if (this.searchEnabled && this.searchType === "notes") void this.plugin.noteSearch.resume?.().catch(() => {});
+		if (this.searchEnabled && this.searchType !== "folders") void this.plugin.noteSearch.resume?.().catch(() => {});
 		this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
 		this.updateSearchType();
 		this.updateIndexStatus();
@@ -235,9 +237,9 @@ export class ChatView extends ItemView implements HoverParent {
 		this.searchBtn.setAttribute("aria-label", this.t("search-toggle"));
 		this.searchBtn.setAttribute("aria-pressed", String(this.searchEnabled));
 		this.searchTypeSelect = new DropdownComponent(actions).setValue(this.searchType).onChange(value => {
-			if (value !== "notes" && value !== "folders") return;
+			if (value !== "notes" && value !== "folders" && value !== "mixed") return;
 			this.searchType = value;
-			if (this.searchEnabled && value === "notes") void this.plugin.noteSearch.resume?.().catch(() => {});
+			if (this.searchEnabled && value !== "folders") void this.plugin.noteSearch.resume?.().catch(() => {});
 			this.updateIndexStatus();
 		});
 		this.searchTypeSelect.selectEl.addClass("ai-helper-search-type");
@@ -279,7 +281,7 @@ export class ChatView extends ItemView implements HoverParent {
 
 	private updateSearchType(): void {
 		this.searchTypeSelect?.selectEl.empty();
-		this.searchTypeSelect?.addOption("notes", this.t("search-type-notes")).addOption("folders", this.t("search-type-folders")).setValue(this.searchType);
+		this.searchTypeSelect?.addOption("notes", this.t("search-type-notes")).addOption("folders", this.t("search-type-folders")).addOption("mixed", this.t("search-type-mixed")).setValue(this.searchType);
 		if (this.searchTypeSelect) {
 			this.searchTypeSelect.selectEl.style.display = this.searchEnabled ? "" : "none";
 			this.searchTypeSelect.selectEl.setAttribute("aria-label", this.t("search-type"));
@@ -297,7 +299,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private updateIndexStatus(): void {
 		const progress = this.plugin.noteSearch?.progress;
 		if (!this.indexStatusEl) return;
-		this.indexStatusEl.style.display = this.searchEnabled && this.searchType === "notes" && progress ? "" : "none";
+		this.indexStatusEl.style.display = this.searchEnabled && this.searchType !== "folders" && progress ? "" : "none";
 		this.indexTitleEl?.setText(this.t("search-state-indexing"));
 		if (!progress) return;
 		const percent = progress.total ? Math.min(100, Math.round(progress.completed / progress.total * 100)) : progress.state === "complete" ? 100 : 0;
@@ -651,7 +653,9 @@ export class ChatView extends ItemView implements HoverParent {
 		};
 		const useSearch = this.searchEnabled;
 		const useFolders = useSearch && this.searchType === "folders";
-		pending.folderSearch = useFolders;
+		const useMixed = useSearch && this.searchType === "mixed";
+		const hasFolders = useFolders || useMixed;
+		pending.folderSearch = hasFolders;
 		const serverUrl = settings.serverUrl.trim();
 		const model = settings.model;
 
@@ -663,7 +667,7 @@ export class ChatView extends ItemView implements HoverParent {
 			if (!useFolders) await priority?.ready;
 			if (this.activeRequest !== request) return;
 			if (useSearch) {
-				const instruction = useFolders ? FOLDER_SEARCH_INSTRUCTION : NOTE_SEARCH_INSTRUCTION;
+				const instruction = useMixed ? MIXED_SEARCH_INSTRUCTION : useFolders ? FOLDER_SEARCH_INSTRUCTION : NOTE_SEARCH_INSTRUCTION;
 				const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value) ?? (settings.contextWindow ? NaN : 8192);
 				const reserve = settings.maxTokens ? Number(settings.maxTokens) : 1024;
 				// Conservatively count each UTF-8 byte as a token, including protocol overhead.
@@ -674,7 +678,7 @@ export class ChatView extends ItemView implements HoverParent {
 				// Search counts the quoted content; add the message object and array comma.
 				const sourceEnvelopeBytes = new TextEncoder().encode(JSON.stringify({ role: "user", content: "" })).length - 1;
 				if (!Number.isSafeInteger(window) || !Number.isSafeInteger(reserve) || reserve <= 0) throw new NoteSearchError("search-budget");
-				const configuredBudget = useFolders ? window : sourceBudgetBytes(settings.noteSourceBudget);
+				const configuredBudget = hasFolders ? window : sourceBudgetBytes(settings.noteSourceBudget);
 				if (configuredBudget === undefined) throw new NoteSearchError("search-budget");
 				const available = Math.min(configuredBudget, window - bytes - reserve - 256 - sourceEnvelopeBytes);
 				if (available <= 0) throw new NoteSearchError("search-budget");
@@ -693,15 +697,28 @@ export class ChatView extends ItemView implements HoverParent {
 				}
 				let sources: ChatSource[];
 				let data: string;
-				if (useFolders) {
+				if (hasFolders) {
 					const folders = await this.plugin.folderDescriptions.sources(request.signal);
 					sources = folders; data = serializeFolderSources(folders);
+					if (useMixed) {
+						// Keep every description intact before allocating the remaining budget to notes.
+						const folderData = folderSourceData(folders).map(source => ({ kind: "folder", ...source }));
+						const folderBytes = new TextEncoder().encode(JSON.stringify(JSON.stringify(folderData))).length;
+						const noteBudget = sourceBudgetBytes(settings.noteSourceBudget);
+						if (noteBudget === undefined || available - folderBytes - 256 <= 0) throw new NoteSearchError("search-budget");
+						const notes = await this.plugin.noteSearch.searchSources(query, request.signal, Math.min(noteBudget, available - folderBytes - 256));
+						sources = [...folders, ...notes];
+						data = JSON.stringify([
+							...folderData,
+							...noteSourceData(notes, folders.length + 1).map(source => ({ kind: "note", ...source })),
+						]);
+					}
 				} else {
 					const notes = await this.plugin.noteSearch.searchSources(query, request.signal, available);
 					sources = notes; data = serializeNoteSources(notes);
 				}
 				if (this.activeRequest !== request) return;
-				if (!useFolders && !sources.length) { pending.content = (this.plugin.noteSearch.progress.state !== "complete" ? this.t("search-partial") + " " : "") + this.t("search-empty"); pending.kind = "text"; return; }
+				if (!hasFolders && !sources.length) { pending.content = (this.plugin.noteSearch.progress.state !== "complete" ? this.t("search-partial") + " " : "") + this.t("search-empty"); pending.kind = "text"; return; }
 				params.maxTokens = String(reserve);
 				// Keep the user's question last; the source remains data for this request only.
 				requestMessages.splice(requestMessages.length - 1, 0,
@@ -739,7 +756,7 @@ export class ChatView extends ItemView implements HoverParent {
 			}
 		} catch (error) {
 			if (this.activeRequest !== request) return;
-			const message = error instanceof NoteSearchError ? this.t(useFolders && error.code === "search-budget" ? "search-folder-budget" : useFolders && error.code === "search-rebuild" ? "search-folder-changed" : error.code) : error instanceof Error ? error.message : String(error);
+			const message = error instanceof NoteSearchError ? this.t(hasFolders && error.code === "search-budget" ? (useMixed ? "search-mixed-budget" : "search-folder-budget") : useFolders && error.code === "search-rebuild" ? "search-folder-changed" : error.code) : error instanceof Error ? error.message : String(error);
 			if (pending.kind === "text") pending.error = message;
 			else { pending.content = message; pending.kind = "error"; }
 			if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;

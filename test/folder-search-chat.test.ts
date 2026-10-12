@@ -23,7 +23,7 @@ async function setup(initial: Record<string, string> = { "Знания/_folder.m
 	}
 	const read = vi.fn(async (file: TFile) => texts.get(file.path)!);
 	const openFile = vi.fn(async () => {});
-	const create = vi.fn(), rename = vi.fn(), remove = vi.fn();
+	const create = vi.fn(), rename = vi.fn(), remove = vi.fn(), openNote = vi.fn();
 	const app = { vault: { getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path), read, create, rename, delete: remove }, workspace: { getLeaf: () => ({ openFile }), trigger: vi.fn() } } as unknown as App;
 	const requests: Array<{ url: string; messages?: Array<{ role: string; content: string }>; input?: string[] }> = [];
 	let answer = "Храните справочную заметку в Знания [1]. [[Выдумка.md]]";
@@ -33,13 +33,14 @@ async function setup(initial: Record<string, string> = { "Знания/_folder.m
 	});
 	const client = createServerClient(fetcher);
 	const settings = { ...DEFAULT_SETTINGS, serverUrl: "http://model/v1", model: "диалог", excludedFolders: ["Личное"], autoUpdateNotes: false };
-	const noteSearch = createNoteSearch({ factory: new IDBFactory(), vaultPath: "/папки", client, read: async path => texts.get(path) ?? null, open: vi.fn() });
+	const noteSearch = createNoteSearch({ factory: new IDBFactory(), vaultPath: "/папки", client, read: async path => texts.get(path) ?? null, open: openNote });
 	noteSearch.configure(settings);
 	const plugin = { settings, serverClient: client, noteSearch, folderDescriptions: new FolderDescriptions(app, () => settings.folderDescriptionName, t), t } as unknown as AiHelperPlugin;
 	const view = new ChatView({} as WorkspaceLeaf, plugin);
 	Object.assign(view, { app }); await view.onOpen();
 	const root = view.contentEl as unknown as TestElement;
-	return { view, root, requests, fetcher, read, openFile, texts, files, create, rename, remove, settings, setAnswer: (value: string) => { answer = value; },
+	return { view, root, requests, fetcher, read, openFile, openNote, texts, files, create, rename, remove, settings, setAnswer: (value: string) => { answer = value; },
+		mode(value: string) { const select = root.find("ai-helper-search-type"); select.value = value; select.dispatchEvent({ type: "change" }); },
 		folders() { root.find("ai-helper-search-toggle").click(); const select = root.find("ai-helper-search-type"); select.value = "folders"; select.dispatchEvent({ type: "change" }); },
 		async send(text = "Где создать заметку о GTD?") { root.find("ai-helper-input").value = text; root.find("ai-helper-send").click(); await vi.waitFor(() => expect(root.find("ai-helper-send").attributes["aria-label"]).toBe(t("send"))); await flushPromises(); },
 	};
@@ -217,7 +218,110 @@ it("обновляет язык нативного выбора, сохраня�
 	s.root.find("ai-helper-search-toggle").click(); expect(s.root.find("ai-helper-search-type").style.display).toBe("none");
 	setLanguage("en"); await s.view.refreshLocale(); s.root.find("ai-helper-search-toggle").click();
 	const select = s.root.find("ai-helper-search-type"); expect(select.value).toBe("folders");
-	expect(select.children.map(option => option.getText())).toEqual(["Notes", "Folders"]);
+	expect(select.children.map(option => option.getText())).toEqual(["Notes", "Folders", "Notes and folders"]);
 	expect(s.root.find("ai-helper-index-status").style.display).toBe("none");
 	await s.view.onClose();
+});
+
+it("смешивает заметки и папки с отдельными исключениями, без дубликатов и с проверенными ссылками", async () => {
+	const s = await setup({
+		"Знания/Метод.md": "GTD: собирайте задачи в единый список.",
+		"Знания/_folder.md": "Справочные материалы о GTD.",
+		"Личное/_folder.md": "Личные планы GTD.",
+		"Личное/Секрет.md": "СЕКРЕТНЫЙ текст GTD.",
+	});
+	Object.assign(s.settings, { embeddingServerUrl: "http://model/v1", embeddingModel: "embedding", contextWindow: "32768" });
+	// Old index records must be filtered before ranking, even in mixed mode.
+	s.view.plugin.noteSearch.configure({ ...s.settings, excludedFolders: [], folderDescriptionName: "other.md" });
+	for (const path of s.texts.keys()) await s.view.plugin.noteSearch.index(path);
+	s.view.plugin.noteSearch.configure(s.settings); s.requests.length = 0;
+	s.root.find("ai-helper-search-toggle").click(); s.mode("mixed");
+	s.setAnswer("Знания [1] и Личное [2] подходят по назначению. Метод GTD [3]. [[Выдумка.md]]");
+	await s.send("Что такое GTD и где создать справочную заметку?");
+	const data = JSON.parse(s.requests.find(request => request.messages)!.messages!.at(-2)!.content);
+	expect(data.map((source: { kind: string; path: string }) => [source.kind, source.path])).toEqual([
+		["folder", "Знания/_folder.md"], ["folder", "Личное/_folder.md"], ["note", "Знания/Метод.md"],
+	]);
+	expect(JSON.stringify(data)).not.toContain("СЕКРЕТНЫЙ");
+	expect(data.map((source: { source: string }) => source.source)).toEqual(["[1]", "[2]", "[3]"]);
+	expect(s.root.getText()).toContain("Знания → Знания/_folder.md");
+	const collectLinks = (el: TestElement): TestElement[] => [...(el.classes.has("ai-helper-source-link") ? [el] : []), ...el.children.flatMap(collectLinks)];
+	const links = collectLinks(s.root);
+	const noteLink = links.find(link => link.getText().includes("Знания/Метод.md"))!;
+	links[0].click(); noteLink.click(); await flushPromises();
+	expect(s.openFile).toHaveBeenCalledWith(s.files.get("Знания/_folder.md"));
+	await vi.waitFor(() => expect(s.openNote).toHaveBeenCalledWith("Знания/Метод.md"));
+	s.texts.set("Знания/Метод.md", "Изменённый метод."); noteLink.click(); await flushPromises();
+	expect(s.openNote).toHaveBeenCalledTimes(1);
+	expect(s.create).not.toHaveBeenCalled(); expect(s.rename).not.toHaveBeenCalled(); expect(s.remove).not.toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it("переключает три режима, обновляет контекст и использует историю для уточнения смешанного вопроса", async () => {
+	const s = await setup({ "Знания/_folder.md": "Справочные материалы GTD.", "Метод.md": "GTD: регулярный обзор задач." });
+	Object.assign(s.settings, { embeddingServerUrl: "http://model/v1", embeddingModel: "embedding", contextWindow: "32768" });
+	s.view.plugin.noteSearch.configure(s.settings); await s.view.plugin.noteSearch.index("Метод.md"); s.requests.length = 0;
+	s.root.find("ai-helper-search-toggle").click(); s.mode("mixed");
+	s.setAnswer("Это справка или личный план? [1] [2]"); await s.send();
+	const history = s.view.getMessages();
+	s.texts.set("Знания/_folder.md", "Обновлённые правила GTD для справки.");
+	s.setAnswer("GTD справочные материалы"); await s.send("Это справка, куда её положить?");
+	const chats = s.requests.filter(request => request.messages);
+	expect(chats).toHaveLength(3);
+	expect(chats[1].messages!.slice(1, 3)).toEqual(history.map(message => ({ role: message.role === "model" ? "assistant" : "user", content: message.content })));
+	expect(chats[2].messages!.at(-2)!.content).toContain("Обновлённые правила");
+	expect(s.requests.filter(request => request.input).at(-1)!.input).toEqual(["GTD справочные материалы"]);
+	s.mode("notes"); s.requests.length = 0; await s.send("Расскажи о методе");
+	const noteData = JSON.parse(s.requests.filter(request => request.messages).at(-1)!.messages!.at(-2)!.content);
+	expect(noteData.path).toBe("Метод.md"); expect(JSON.stringify(noteData)).not.toContain("_folder.md");
+	s.mode("folders"); s.requests.length = 0; await s.send("Где хранить?");
+	const folderData = JSON.parse(s.requests[0].messages!.at(-2)!.content);
+	expect(folderData.map((source: { path: string }) => source.path)).toEqual(["Знания/_folder.md"]);
+	expect(s.requests.some(request => request.input)).toBe(false);
+	s.mode("mixed"); s.requests.length = 0; await s.send("И что говорит метод?");
+	const mixedData = JSON.parse(s.requests.filter(request => request.messages).at(-1)!.messages!.at(-2)!.content);
+	expect(mixedData.map((source: { kind: string }) => source.kind)).toEqual(["folder", "note"]);
+	expect(s.view.getMessages().some(message => message.content.includes("Обновлённые правила"))).toBe(false);
+	await s.view.onClose();
+});
+
+it("сохраняет полный набор описаний и историю при нехватке общего контекста или бюджета заметок", async () => {
+	const s = await setup({ "Знания/_folder.md": "Справочные материалы GTD.", "Метод.md": "GTD: регулярный обзор задач." });
+	Object.assign(s.settings, { embeddingServerUrl: "http://model/v1", embeddingModel: "embedding", contextWindow: "32768" });
+	s.view.plugin.noteSearch.configure(s.settings); await s.view.plugin.noteSearch.index("Метод.md"); s.requests.length = 0;
+	s.root.find("ai-helper-search-toggle").click(); s.mode("mixed"); await s.send();
+	const history = s.view.getMessages(); s.requests.length = 0;
+	s.texts.set("Знания/_folder.md", "Справочные материалы GTD. ".repeat(1500));
+	s.settings.contextWindow = "8192"; await s.send("Уточни место");
+	expect(s.requests.some(request => request.messages?.at(-2)?.content.includes('"descriptions"'))).toBe(false);
+	expect(s.root.getText()).toContain("Описания не исключались и не усекались");
+	expect(s.root.find("ai-helper-input").value).toBe("Уточни место"); expect(s.view.getMessages()).toEqual(history);
+	s.settings.contextWindow = "131072"; s.requests.length = 0; await s.send("Уточни место");
+	const data = JSON.parse(s.requests.filter(request => request.messages).at(-1)!.messages!.at(-2)!.content);
+	expect(data[0].descriptions[0].text).toBe(s.texts.get("Знания/_folder.md")!.trim());
+	expect(data[1].path).toBe("Метод.md");
+	const afterRetry = s.view.getMessages(); s.settings.noteSourceBudget = "1"; s.requests.length = 0; await s.send("Ещё раз");
+	expect(s.view.getMessages()).toEqual(afterRetry); expect(s.root.getText()).toContain("Описания не исключались и не усекались");
+	await s.view.onClose();
+});
+
+it("требует обычный индекс для смешанного режима, но позволяет переключиться на независимый поиск папок", async () => {
+	const s = await setup(); s.root.find("ai-helper-search-toggle").click(); s.mode("mixed"); await s.send();
+	expect(s.view.getMessages()).toEqual([]); expect(s.requests).toHaveLength(0);
+	expect(s.root.getText()).toContain(t("search-rebuild"));
+	s.mode("folders"); await s.send();
+	expect(s.view.getMessages()).toHaveLength(2); expect(s.requests).toHaveLength(1);
+	expect(s.requests[0].messages!.at(-2)!.content).toContain("Знания/_folder.md");
+	await s.view.onClose();
+});
+
+it("при отсутствии релевантной заметки в смешанном режиме всё ещё отправляет папки для совета", async () => {
+	const s = await setup({ "Знания/_folder.md": "Справочные материалы GTD.", "Метод.md": "Регулярный обзор задач." });
+	Object.assign(s.settings, { embeddingServerUrl: "http://model/v1", embeddingModel: "embedding", noteSearchMinSimilarity: 0.9 });
+	s.view.plugin.noteSearch.configure(s.settings); await s.view.plugin.noteSearch.index("Метод.md"); s.requests.length = 0;
+	s.fetcher.mockImplementationOnce(async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [0, 1] }] })));
+	s.root.find("ai-helper-search-toggle").click(); s.mode("mixed"); await s.send("Где хранить астрономию?");
+	const data = JSON.parse(s.requests.find(request => request.messages)!.messages!.at(-2)!.content);
+	expect(data.map((source: { kind: string }) => source.kind)).toEqual(["folder"]);
+	expect(s.view.getMessages()).toHaveLength(2); await s.view.onClose();
 });
