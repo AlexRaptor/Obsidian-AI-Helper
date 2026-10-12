@@ -94,9 +94,16 @@ function storage(environment: NoteSearchEnvironment) {
 			let expired = false;
 			let transaction: IDBTransaction | undefined;
 			let actionError: unknown;
+			const releaseTransactionHandlers = () => {
+				if (!transaction) return;
+				transaction.oncomplete = null;
+				transaction.onerror = null;
+				transaction.onabort = null;
+			};
 			const fail = () => {
 				if (expired) return;
 				expired = true; clearTimeout(timer);
+				releaseTransactionHandlers();
 				try { transaction?.abort(); } catch { /* Already completed or aborted. */ }
 				db?.close(); reject(actionError instanceof NoteSearchError ? actionError : new NoteSearchError("search-storage"));
 			};
@@ -121,6 +128,9 @@ function storage(environment: NoteSearchEnvironment) {
 								// All requests are done now; one request's success does not
 								// imply that neighbouring bulk requests have a readable result.
 								const result = readResult();
+								// Release request results even when an IDB implementation
+								// retains completed transaction objects.
+								releaseTransactionHandlers();
 								clearTimeout(timer); db?.close(); resolve(result);
 							} catch (error) { actionError = error; fail(); }
 						};
@@ -730,6 +740,13 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		async searchSources(question: string, signal?: AbortSignal, budgetBytes = DEFAULT_SOURCE_BUDGET_BYTES): Promise<NoteSource[]> {
 			const version = revision;
 			const threshold = minimumSimilarity;
+			let lastYield = performance.now();
+			async function yieldToInterface() {
+				if (performance.now() - lastYield < 8) return;
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+				check(version, signal);
+				lastYield = performance.now();
+			}
 			try { await settleWrites(); } catch { throw new NoteSearchError("search-storage"); }
 			const saved = await store.read();
 			check(version, signal);
@@ -747,22 +764,25 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			if (!current.length) throw new NoteSearchError("search-rebuild");
 			const [vector] = await embed([question], signal);
 			check(version, signal);
+			const queryMagnitude = Math.hypot(...vector);
 			const candidates: Array<{ source: NoteSource; rank: number }> = [];
 			for (const note of current) {
 				for (const fragment of note.fragments) {
 					if (vector.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
-					const similarity = vector.reduce((sum, value, index) => sum + value * fragment.vector[index], 0) / (Math.hypot(...vector) * Math.hypot(...fragment.vector));
+					const similarity = vector.reduce((sum, value, index) => sum + value * fragment.vector[index], 0) / (queryMagnitude * Math.hypot(...fragment.vector));
 					const lexical = lexicalRelevance(question, fragment.text);
 					const rank = similarity + 2 * lexical;
 					if (similarity + 1e-12 >= threshold || lexical > 0) {
 						candidates.push({ rank, source: { similarity, path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, partial: progress.state !== "complete" || current.length !== notes.length } });
 					}
+					await yieldToInterface();
 				}
 			}
 			const selected: NoteSource[] = [];
 			const budget = budgetBytes;
 			if (!Number.isSafeInteger(budget) || budget <= 0) throw new NoteSearchError("search-budget");
 			for (const { source } of candidates.sort((a, b) => b.rank - a.rank)) {
+				await yieldToInterface();
 				if (selected.some(other => repeatedFragment(other.text, source.text))) continue;
 				// Source JSON is itself a message string in the HTTP JSON envelope.
 				if (new TextEncoder().encode(JSON.stringify(serializeNoteSources([...selected, source]))).length > budget) continue;

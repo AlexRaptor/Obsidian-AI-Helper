@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-12T06:24:41.488Z",
+  "hardware": {
+    "cpu": "Apple M4 Pro",
+    "memoryBytes": 51539607552,
+    "node": "v26.11.1"
+  },
+  "transport": "mock",
+  "storage": "local (fake-indexeddb)",
+  "embeddingModel": "fixed 1024-dimension vector",
+  "notes": 2000,
+  "bytes": 24161180,
+  "measurements": {
+    "firstPart": {
+      "milliseconds": 38,
+      "embeddingRequests": 10
+    },
+    "pause": {
+      "milliseconds": 5,
+      "completed": 10
+    },
+    "resume": {
+      "milliseconds": 305997,
+      "embeddingRequests": 1990
+    },
+    "updateOne": {
+      "milliseconds": 1565,
+      "embeddingRequests": 1
+    },
+    "search1": {
+      "milliseconds": 1858,
+      "embeddingRequests": 1
+    },
+    "search2": {
+      "milliseconds": 1826,
+      "embeddingRequests": 1
+    },
+    "search3": {
+      "milliseconds": 1768,
+      "embeddingRequests": 1
+    }
+  },
+  "status": "passed",
+  "coverage": {
+    "state": "complete",
+    "completed": 2000,
+    "total": 2000
+  },
+  "memory": {
+    "initialRss": 21924888,
+    "peakRss": 2470884296,
+    "finalRss": 1715894240
+  },
+  "eventLoop": {
+    "maxMilliseconds": 283,
+    "p99Milliseconds": 256
+  },
+  "writtenBytes": 0
+}
