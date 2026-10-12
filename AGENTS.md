@@ -26,6 +26,8 @@ There is no standalone runtime. To run:
 - `@types/node` and `obsidian` are dev/prod deps of the scaffold; don't add Node-only libraries (fs, path, child_process) — use Obsidian APIs (`App.vault`, `DataAdapter`) instead.
 - `manifest.json` `id` must match the plugin folder name in the vault; the `id` is the source of truth.
 - No linter/formatter config exists yet; follow existing code style once files land.
+- Максимально соблюдать Obsidian-нативность интерфейса: использовать публичные компоненты и API Obsidian, переменные темы и стандартное поведение элементов; собственный CSS ограничивать необходимой компоновкой.
+- Для всех полей, предполагающих длинный ввод (например, пути папок и системный промпт), задавать ширину минимум 50% контейнера строки настройки. На узких экранах разрешать перенос элементов, сохраняя доступность поля и соседних действий.
 - Vitest maps `obsidian` to `test/helpers/obsidian.ts` because the npm package provides type definitions only. Test view behavior through its input and buttons; the helper does not replace validation inside Obsidian.
 
 ## Agent skills

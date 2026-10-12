@@ -207,7 +207,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const paths = [...this.plugin.settings.excludedFolders];
 		if (this.folderDraft !== undefined) paths.push(this.folderDraft);
 		return {
-			type: "list", heading: this.t("setting-excluded-folders"), cls: "ai-helper-settings-group",
+			type: "list", heading: this.t("setting-excluded-folders"), cls: "ai-helper-settings-group ai-helper-excluded-folders",
 			addItem: { name: this.t("folder-add"), action: () => { this.folderDraft = ""; this.update(); } },
 			onDelete: index => {
 				if (index === this.plugin.settings.excludedFolders.length) { this.folderDraft = undefined; this.update(); return; }
@@ -476,8 +476,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				setting.setDesc(this.t("setting-top-p-desc")); await this.plugin.saveSettings();
 			});
 		});
-		setting.controlEl.createSpan({ text: this.t("use-server-top-p") });
+		const serverControl = setting.controlEl.createDiv({ cls: "ai-helper-top-p-server" });
+		serverControl.createSpan({ cls: "setting-item-description", text: this.t("use-server-top-p") });
 		setting.addToggle(toggle => {
+			serverControl.appendChild(toggle.toggleEl);
 			toggle.toggleEl.setAttribute("aria-label", this.t("use-server-top-p"));
 			toggle.setTooltip(this.t("use-server-top-p")).setValue(!this.plugin.settings.topP).onChange(async useServer => {
 			this.plugin.settings.topP = useServer ? "" : lastManual;

@@ -207,6 +207,34 @@
 	flex-wrap: wrap;
 }
 
+.ai-helper-settings-group .setting-item:has(textarea),
+.ai-helper-excluded-folders .setting-item:has(input) {
+	flex-wrap: wrap;
+}
+
+.ai-helper-settings-group .setting-item:has(textarea) .setting-item-control,
+.ai-helper-excluded-folders .setting-item:has(input) .setting-item-control {
+	flex: 1 1 50%;
+	min-width: 50%;
+}
+
+.ai-helper-excluded-folders .setting-item-control .search-input-container,
+.ai-helper-excluded-folders .setting-item-control input {
+	width: 100%;
+	min-width: 0;
+}
+
+.ai-helper-top-p-server {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	max-width: 100%;
+}
+
+.ai-helper-top-p-server .checkbox-container {
+	flex-shrink: 0;
+}
+
 .ai-helper-embedding-destination {
 	margin-top: 6px;
 	font-size: var(--font-ui-small);
