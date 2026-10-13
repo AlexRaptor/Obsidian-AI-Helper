@@ -151,6 +151,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					this.row("search-vault-clear", "search-clear-desc", setting => this.renderClearIndex(setting)),
 					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
 				]),
+				{ name: this.t("setting-excluded-folders"), desc: this.t("setting-excluded-folders-desc") },
 				this.folderDefinitions(),
 				{ ...this.row("search-missing-folder", undefined, setting => this.renderFolderWarnings(setting)), searchable: false, visible: () => this.missingFolders().length > 0 },
 				this.group("settings-group-index-updates", [
@@ -229,7 +230,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const paths = [...this.plugin.settings.excludedFolders];
 		if (this.folderDraft !== undefined) paths.push(this.folderDraft);
 		return {
-			type: "list", heading: this.t("setting-excluded-folders"), cls: "ai-helper-settings-group ai-helper-excluded-folders",
+			type: "list", cls: "ai-helper-settings-group ai-helper-excluded-folders",
 			addItem: { name: this.t("folder-add"), action: () => { this.folderDraft = ""; this.update(); } },
 			onDelete: index => {
 				if (index === this.plugin.settings.excludedFolders.length) { this.folderDraft = undefined; this.update(); return; }
@@ -237,8 +238,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				void this.plugin.saveSettings().then(() => this.update());
 			},
 			items: paths.map((path, index) => ({
-				name: this.t("setting-excluded-folders"),
-				desc: this.t("setting-excluded-folders-desc"),
+				name: "",
 				control: { type: "folder", key: index === this.plugin.settings.excludedFolders.length ? "excluded-folder:new" : `excluded-folder:${index}`, includeRoot: true,
 					validate: value => { if (!value.trim() || this.plugin.settings.excludedFolders.some((folder, other) => other !== index && folder === value.trim())) return this.t("folder-invalid"); },
 				},

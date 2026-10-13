@@ -389,10 +389,9 @@ it("shows the renamed exclusion immediately in open settings and persists it bef
 	const saving = vi.fn(async () => {}); Object.assign(plugin, { saveData: saving });
 	const tabs = vi.spyOn(plugin, "addSettingTab"); await plugin.onload();
 	const tab = tabs.mock.calls[0][0] as AiHelperSettingsTab; tab.display();
-	const setting = controls.find(value => value.name === en["setting-excluded-folders"])!;
 	handlers.get("rename")!({ path: "Secrets" }, "Private");
 	try {
-		expect(controls.filter(value => value.name === en["setting-excluded-folders"]).slice(-3).map(value => value.input!.value)).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
+		expect(controls.filter(value => value.name === "" && value.input).slice(-3).map(value => value.input!.value)).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		expect(plugin.settings.excludedFolders).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		await vi.waitFor(() => expect(saving).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: ["Secrets", "Secrets/Nested", "Private-public"] })));
 	} finally { plugin.onunload(); }
@@ -492,7 +491,7 @@ it("renders a draft folder without persisting an empty exclusion", () => {
 	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
 	const page = tab.getSettingDefinitions().find(def => "type" in def && def.type === "page" && def.name === en["settings-page-search"]) as any;
 	page.items.find((def: any) => def.type === "list").addItem.action();
-	expect(controls.filter(row => row.name === en["setting-excluded-folders"]).slice(-1)[0].input!.value).toBe("");
+	expect(controls.filter(row => row.name === "" && row.input).slice(-1)[0].input!.value).toBe("");
 	expect(plugin.settings.excludedFolders).toEqual([]); expect(plugin.saveSettings).not.toHaveBeenCalled();
 });
 
