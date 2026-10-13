@@ -88,6 +88,25 @@ it("команда открывает отдельную правую вклад
 	await s.view.onClose();
 });
 
+it.each([
+	["4.Archives/Работа/КПР-2025q4.md", "4.Archives/Работа", "КПР-2025q4.md", "КПР-2025q4"],
+	["4.Archives/Работа/КПР/КПР-2025q4.md", "4.Archives/Работа/КПР", "КПР-2025q4.md", "КПР-2025q4"],
+	["КПР-2025q4.md", "/", "КПР-2025q4.md", "КПР-2025q4"],
+])("однозначно передаёт текущую папку и имя файла для %s", async (path, currentFolder, fileName, title) => {
+	const s = await setup();
+	const parentPath = currentFolder === "/" ? "" : currentFolder;
+	if (!s.folders.has(parentPath)) s.folders.set(parentPath, Object.assign(new TFolder(), { path: parentPath }));
+	await s.renameFile(s.file, path);
+	Object.assign(s.file, { name: fileName, basename: title });
+	s.edit("Командный план развития за четвёртый квартал 2025 года.");
+	await s.start();
+	const messages = s.chat.mock.calls[0][2];
+	expect(JSON.parse(messages[1].content).note).toMatchObject({ path, currentFolder, fileName, title });
+	expect(messages[0].content).toContain("note.currentFolder");
+	expect(messages[0].content).toContain("note.fileName");
+	await s.view.onClose();
+});
+
 it("отмечает изменения во время и после запроса, обновляет текущий текст без автоматических запросов", async () => {
 	const s = await setup();
 	const pending = deferred<ServerClientResult<ChatCompletionResult>>(); s.chat.mockReturnValueOnce(pending.promise);
