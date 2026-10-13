@@ -56,6 +56,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	private sources: FolderSource[] = [];
 	private stale = false;
 	private status: LocaleKey = "review-empty";
+	private contextBudget?: { required: number; available: number };
 	private closed = false;
 	private moving = false;
 	private conflictPath?: string;
@@ -75,6 +76,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	}
 
 	private resetRun(): void {
+		this.contextBudget = undefined;
 		this.navigationRevision++;
 		this.request?.abort(); this.request = undefined;
 		this.preview = undefined; this.queue = undefined; this.target = undefined; this.reviewLeaf = undefined;
@@ -213,6 +215,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	}
 	private async refresh(): Promise<void> {
 		if (!this.target || this.closed) return;
+		this.contextBudget = undefined;
 		this.request?.abort();
 		const active = new AbortController(); this.request = active;
 		this.conflictPath = undefined; this.noteOpenError = false; this.result = undefined; this.sources = []; this.stale = false; this.status = "review-loading";
@@ -231,8 +234,12 @@ export class NoteReviewView extends ItemView implements HoverParent {
 				{ role: "user" as const, content: JSON.stringify({ note, folders: folderSourceData(sources) }) }];
 			const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection.value) ?? (settings.contextWindow ? NaN : 8192);
 			const reserve = settings.maxTokens ? Number(settings.maxTokens) : 1024;
-			if (!Number.isSafeInteger(window) || !Number.isSafeInteger(reserve) || reserve <= 0 ||
-				new TextEncoder().encode(JSON.stringify(messages)).length + reserve + 256 > window) throw new ReviewError("review-budget");
+			if (!Number.isSafeInteger(window) || !Number.isSafeInteger(reserve) || reserve <= 0) throw new ReviewError("review-budget");
+			const required = new TextEncoder().encode(JSON.stringify(messages)).length + reserve + 256;
+			if (required > window) {
+				this.contextBudget = { required, available: window };
+				throw new ReviewError("review-budget");
+			}
 			const response = await this.plugin.serverClient.chat(settings.serverUrl, settings.model, messages, {
 				apiKey: settings.apiKey, signal: active.signal, responseWait: settings.responseWait,
 				temperature: settings.temperature, maxTokens: String(reserve), topP: settings.topP,
@@ -393,7 +400,12 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		const tone: StatusTone = this.status === "review-moved" ? "success"
 			: ["review-stale", "review-missing", "review-folder-missing", "review-source-changed", "review-budget", "review-conflict", "review-conflict-missing"].includes(this.status) ? "warning"
 			: ["review-empty", "review-opening", "review-loading", "review-stopped", "review-ready", "review-stay"].includes(this.status) ? "info" : "error";
-		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: this.plugin.t(this.status),
+		let statusText = this.plugin.t(this.status);
+		if (this.status === "review-budget" && this.contextBudget) {
+			statusText += " " + this.plugin.t("review-budget-details")
+				.replace("{required}", String(this.contextBudget.required)).replace("{available}", String(this.contextBudget.available));
+		}
+		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: statusText,
 			attr: { role: "status", "aria-live": "polite" } });
 		setStatusTone(status, tone);
 		if (this.noteOpenError) {

@@ -56,6 +56,7 @@ export const en = {
 	"review-invalid": "The model returned an invalid recommendation. No files changed. Retry.",
 	"review-missing": "The note is no longer available. Open another note and run the command.",
 	"review-budget": "The note and all folder descriptions exceed the available context. Nothing was truncated. Increase the context window or reduce the content and retry.",
+	"review-budget-details": "Estimated required context: {required} tokens (including the answer reserve and overhead). Current context window: {available} tokens. The estimate counts each UTF-8 byte of the request as one token.",
 	"review-source-changed": "The description changed or disappeared. Refresh recommendations.",
 
 	"folder-description-name": "Folder description file name",
@@ -361,6 +362,7 @@ export const ru = {
 	"review-invalid": "Модель вернула некорректную рекомендацию. Файлы не изменены. Повторите анализ.",
 	"review-missing": "Заметка больше недоступна. Откройте другую заметку и выполните команду.",
 	"review-budget": "Заметка и все описания папок превышают доступный контекст. Ничего не усекалось. Увеличьте окно контекста или уменьшите содержимое и повторите.",
+	"review-budget-details": "По оценке требуется: {required} токенов (с учётом резерва ответа и служебных расходов). Текущее окно контекста: {available} токенов. При оценке каждый байт UTF-8 запроса считается одним токеном.",
 	"review-source-changed": "Описание изменилось или исчезло. Обновите рекомендации.",
 
 	"folder-description-name": "Имя файла описания папки",

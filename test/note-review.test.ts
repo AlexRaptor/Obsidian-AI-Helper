@@ -159,7 +159,12 @@ it.each(["stay", "none", "insufficient"] as const)("показывает доп�
 it("останавливает превышение контекста без усечения и позволяет повторить после исправления настроек", async () => {
 	const s = await setup(); s.plugin.settings.contextWindow = "1000"; await s.start();
 	expect(s.chat).not.toHaveBeenCalled(); expect(s.root.getText()).toContain("Ничего не усекалось");
+	const budgetMessage = s.root.find("ai-helper-review-status").getText();
+	expect(budgetMessage).toContain("Текущее окно контекста: 1000 токенов");
 	s.plugin.settings.contextWindow = "32768"; s.root.find("ai-helper-review-refresh").click(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(1)); await flushPromises();
+	const required = new TextEncoder().encode(JSON.stringify(s.chat.mock.calls[0][2])).length + 1024 + 256;
+	expect(budgetMessage).toContain(`По оценке требуется: ${required} токенов`);
+	expect(s.root.getText()).not.toContain("По оценке требуется:");
 	expect(JSON.parse(s.chat.mock.calls[0][2][1].content).folders).toHaveLength(4);
 	await s.view.onClose();
 });
