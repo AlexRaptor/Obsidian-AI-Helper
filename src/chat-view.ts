@@ -1,4 +1,5 @@
-import { ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Notice, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType } from "obsidian";
+import { ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType } from "obsidian";
+import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -104,6 +105,7 @@ export class ChatView extends ItemView implements HoverParent {
 		const limit = effectiveContextWindow(this.plugin.settings.contextWindow, this.plugin.contextWindowConnection?.value) ?? NaN;
 
 		if (this.contextLabelEl) {
+			setStatusTone(this.contextLabelEl, used === undefined || !Number.isFinite(limit) || limit <= 0 || used >= limit ? "warning" : "muted");
 			if (used === undefined) {
 				this.contextLabelEl.setText(this.t("header-context-unavailable"));
 			} else if (!Number.isFinite(limit) || limit <= 0) {
@@ -257,12 +259,12 @@ export class ChatView extends ItemView implements HoverParent {
 			this.updateIndexStatus();
 			const action = first ? this.plugin.manageNoteIndex("index") : this.plugin.noteSearch.resume(true);
 			void action.catch(error => {
-				if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"));
+				if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "error");
 			}).finally(() => { this.indexActionPending = false; this.updateIndexStatus(); });
 		});
 		this.indexPause = this.indexStatusEl.createEl("button", { cls: "ai-helper-index-pause", attr: { type: "button" } });
 		this.indexPause.addEventListener("click", () => {
-			void this.plugin.noteSearch.pause().catch(() => new Notice(this.t("search-storage")));
+			void this.plugin.noteSearch.pause().catch(() => showStatusNotice(this.t("search-storage"), "error"));
 		});
 		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
 		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
@@ -312,6 +314,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.indexReason) {
 			this.indexReason.style.display = progress.state === "complete" ? "none" : "";
 			const state = this.plugin.noteSearch.chatHasPriority && (progress.state === "indexing" || progress.state === "partial") ? "search-chat-priority" : `search-state-${progress.state}` as const;
+			setStatusTone(this.indexReason, indexStatusTone(progress));
 			this.indexReason.setText(progress.state === "complete" ? "" : `${this.t(state)} — ${this.t("search-partial")}${progress.error ? ` — ${this.t(progress.error === "search-failed" ? "search-waiting" : progress.error)}` : ""}`);
 		}
 		if (this.indexAction) {
@@ -424,7 +427,7 @@ export class ChatView extends ItemView implements HoverParent {
 				this.updateCopyButton(message, row);
 			}, 2000);
 		} catch {
-			if (this.rendered.get(message) === row) new Notice(this.t("chat-copy-failed"));
+			if (this.rendered.get(message) === row) showStatusNotice(this.t("chat-copy-failed"), "error");
 		} finally {
 			row.copying = false;
 			if (this.rendered.get(message) === row) this.updateCopyButton(message, row);
@@ -481,7 +484,7 @@ export class ChatView extends ItemView implements HoverParent {
 					// Render formatting while keeping model-supplied links inert.
 					const sources = message.sources ?? [];
 					const link = (parent: HTMLElement, source: ChatSource, number: number) => {
-						const unavailable = () => new Notice(this.t(isFolderSource(source) ? "search-folder-changed" : "search-rebuild"));
+						const unavailable = () => showStatusNotice(this.t(isFolderSource(source) ? "search-folder-changed" : "search-rebuild"), "warning");
 						const linktext = source.path + (source.headings.length ? `#${source.headings[source.headings.length - 1]}` : "");
 						const button = parent.createEl("a", { cls: "ai-helper-source-link internal-link", text: `[${number}] ${isFolderSource(source) ? source.folderPath + " → " + source.path : source.path}${source.headings.length ? " → " + source.headings.join(" → ") : ""}`, attr: { href: "#", "data-href": linktext } });
 						const open = (evt: MouseEvent) => {
@@ -563,7 +566,7 @@ export class ChatView extends ItemView implements HoverParent {
 					staging.createSpan({ text: ` ${content}` });
 				} else staging.createSpan({ cls: kind === "thinking" ? "ai-helper-thinking" : "", text: content });
 				if (stopped) staging.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
-				if (error) staging.createDiv({ cls: "ai-helper-error-prefix", text: `${this.t("chat-error-prefix")}: ${error}` });
+				if (error) staging.createDiv({ cls: "ai-helper-error-prefix ai-helper-inline-error", text: `${this.t("chat-error-prefix")}: ${error}` });
 				if (revision !== this.renderRevision || current.revision !== rowRevision || this.messagesEl !== el) return;
 				current.content.empty();
 				current.content.appendChild(staging);

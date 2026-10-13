@@ -1,4 +1,5 @@
-import { FileSystemAdapter, Notice, Plugin, MarkdownView, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
+import { FileSystemAdapter, Plugin, MarkdownView, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
+import { showStatusNotice } from "./ui-status";
 import {
 	AiHelperSettings,
 	DEFAULT_SETTINGS,
@@ -71,7 +72,7 @@ export class AiHelperPlugin extends Plugin {
 		});
 		this.noteSearch.configure(this.settings);
 		let vaultReady = !this.app.workspace.onLayoutReady;
-		const updateError = (error: unknown) => { if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed")); };
+		const updateError = (error: unknown) => { if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "error"); };
 		const indexDirectory = this.noteIndexDirectory();
 		const isIndexPath = (path: string) => path === indexDirectory || path.startsWith(`${indexDirectory}/`);
 		if (this.app.vault?.on) {
@@ -100,7 +101,7 @@ export class AiHelperPlugin extends Plugin {
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
 				if (file instanceof TFolder) {
 					menu.addItem(item => item.setTitle(this.t("folder-description-create")).setIcon("file-plus").onClick(() => {
-						if (!this.unloading) void this.folderDescriptions.createAndOpen(file).catch(() => new Notice(this.t("folder-description-error")));
+						if (!this.unloading) void this.folderDescriptions.createAndOpen(file).catch(() => showStatusNotice(this.t("folder-description-error"), "error"));
 					}));
 					const normalize = (path: string) => path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/+/g, "/");
 					const path = normalize(file.path);
@@ -136,7 +137,7 @@ export class AiHelperPlugin extends Plugin {
 		this.registerHoverLinkSource(VIEW_TYPE_NOTE_REVIEW, { display: this.t("review-title"), defaultMod: true });
 		this.addCommand({ id: "suggest-note-folder", name: this.t("review-command"), callback: () => {
 			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-			if (!view?.file || view.file.extension !== "md") { new Notice(this.t("search-note")); return; }
+			if (!view?.file || view.file.extension !== "md") { showStatusNotice(this.t("search-note"), "warning"); return; }
 			const file = view.file;
 			const text = { save: async () => {
 				if (view.file !== file) throw new Error("The editor is showing another note");
@@ -145,7 +146,7 @@ export class AiHelperPlugin extends Plugin {
 				if (view.file !== file) throw new Error("The editor is showing another note");
 				return view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
 			} };
-			void this.suggestNoteFolder(file, text).catch(() => new Notice(this.t("review-error")));
+			void this.suggestNoteFolder(file, text).catch(() => showStatusNotice(this.t("review-error"), "error"));
 		} });
 		this.addRibbonIcon(
 			"message-square",
@@ -227,17 +228,17 @@ export class AiHelperPlugin extends Plugin {
 	async indexActiveNote(): Promise<void> {
 		if (this.indexingNote || this.changingIndexStorage) return;
 		const file = this.app.workspace.getActiveFile();
-		if (!file || file.extension !== "md") { new Notice(this.t("search-note")); return; }
+		if (!file || file.extension !== "md") { showStatusNotice(this.t("search-note"), "warning"); return; }
 		await this.indexNote(file.path);
 	}
 
 	async indexNote(path: string): Promise<void> {
 		if (this.indexingNote || this.changingIndexStorage) return;
 		this.indexingNote = true;
-		new Notice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`);
-		try { await this.indexRestore; if (this.unloading) return; await this.noteSearch.index(path); new Notice(this.t("search-indexed")); }
+		showStatusNotice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`, "info");
+		try { await this.indexRestore; if (this.unloading) return; await this.noteSearch.index(path); showStatusNotice(this.t("search-indexed"), "success"); }
 		catch (error) {
-			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"));
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "error");
 		}
 		finally { this.indexingNote = false; }
 	}
@@ -273,11 +274,11 @@ export class AiHelperPlugin extends Plugin {
 			this.noteSearch.configure(this.settings);
 			await this.noteSearch.switchStorage(mode);
 			if (this.unloading) return;
-			new Notice(this.noteIndexDisclosure());
+			showStatusNotice(this.noteIndexDisclosure(), "info");
 			await this.noteSearch.indexVault();
-			new Notice(this.t("search-state-complete"));
+			showStatusNotice(this.t("search-state-complete"), "success");
 		} catch (error) {
-			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-storage"));
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-storage"), "error");
 		} finally {
 			this.changingIndexStorage = false;
 			this.indexStorageListeners.forEach(listener => listener());
@@ -290,13 +291,13 @@ export class AiHelperPlugin extends Plugin {
 
 	async manageNoteIndex(action: "index" | "clear"): Promise<void> {
 		if (this.changingIndexStorage || (action !== "clear" && this.indexingNote)) return;
-		if (action !== "clear") { this.indexingNote = true; new Notice(this.noteIndexDisclosure()); }
+		if (action !== "clear") { this.indexingNote = true; showStatusNotice(this.noteIndexDisclosure(), "info"); }
 		try {
 			if (action === "clear") await this.noteSearch.clear();
 			else { await this.indexRestore; if (this.unloading) return; await this.noteSearch.rebuild(); }
-			new Notice(this.t(action === "clear" ? "search-cleared" : "search-state-complete"));
+			showStatusNotice(this.t(action === "clear" ? "search-cleared" : "search-state-complete"), "success");
 		} catch (error) {
-			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) new Notice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"));
+			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "error");
 		}
 		finally { if (action !== "clear") this.indexingNote = false; }
 	}

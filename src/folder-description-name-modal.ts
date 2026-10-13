@@ -1,4 +1,5 @@
-import { Modal, Notice, Setting, type ButtonComponent } from "obsidian";
+import { Modal, Setting, type ButtonComponent } from "obsidian";
+import { showStatusNotice, setStatusTone } from "./ui-status";
 import { DescriptionRenameConflict, DescriptionRenameFailure } from "./folder-descriptions";
 import type { AiHelperPlugin } from "./main";
 
@@ -41,14 +42,16 @@ export class FolderDescriptionNameModal extends Modal {
 				} catch (error) {
 					this.plugin.settings.folderDescriptionName = previous;
 					if (error instanceof DescriptionRenameConflict) {
+						setStatusTone(this.resultEl, "warning");
 						this.resultEl?.createEl("p", { text: this.plugin.t("folder-description-conflicts") });
 						const list = this.resultEl?.createEl("ul");
 						error.paths.forEach(path => list?.createEl("li", { text: path }));
 					} else if (error instanceof DescriptionRenameFailure) {
+						setStatusTone(this.resultEl, "error");
 						this.resultEl?.createEl("p", { text: this.plugin.t(error.remaining.length ? "folder-description-restore-incomplete" : "folder-description-restored") });
 						const list = this.resultEl?.createEl("ul");
 						error.remaining.forEach(({ original, current }) => list?.createEl("li", { text: `${current} → ${original}` }));
-					} else new Notice(this.plugin.t("folder-description-save-error"));
+					} else showStatusNotice(this.plugin.t("folder-description-save-error"), "error");
 				} finally {
 					this.saving = false;
 					this.buttons.forEach(button => button.setDisabled(false));

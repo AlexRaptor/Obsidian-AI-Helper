@@ -1,4 +1,5 @@
 import { FileSystemAdapter, Modal } from "obsidian";
+import { setStatusTone } from "./ui-status";
 import { t, type LocaleKey } from "./i18n";
 import { createNoteSearchStorageProbe, PROBE_LIMIT_BYTES, StorageProbeError } from "./note-search";
 
@@ -7,6 +8,7 @@ export class StorageProbeModal extends Modal {
 		this.contentEl.createEl("h2", { text: t("probe-title") });
 		this.contentEl.createEl("p", { text: t("probe-description") });
 		const output = this.contentEl.createEl("pre", { text: t("probe-ready") });
+		setStatusTone(output, "info");
 		output.style.whiteSpace = "pre-wrap";
 		const buttons: HTMLButtonElement[] = [];
 		const adapter = this.app.vault.adapter;
@@ -16,14 +18,14 @@ export class StorageProbeModal extends Modal {
 			buttons.push(button);
 			button.addEventListener("click", async () => {
 				buttons.forEach((item) => { item.disabled = true; });
-				output.setText(t("probe-running"));
+				output.setText(t("probe-running")); setStatusTone(output, "info");
 				try {
 					const probe = await createNoteSearchStorageProbe(vaultPath, globalThis.indexedDB);
 					const result = await action(probe);
-					output.setText(`${result}\n${probe.databaseName}`);
+					output.setText(`${result}\n${probe.databaseName}`); setStatusTone(output, result === t("probe-empty") ? "info" : "success");
 				} catch (error) {
 					const code = error instanceof StorageProbeError ? error.code : "unavailable";
-					output.setText(t(`probe-error-${code}`));
+					output.setText(t(`probe-error-${code}`)); setStatusTone(output, "error");
 				} finally { buttons.forEach((item) => { item.disabled = false; }); }
 			});
 		};

@@ -1,4 +1,5 @@
 import { ItemView, TFile, TFolder, parseYaml, type Editor, type HoverParent, type HoverPopover, type WorkspaceLeaf } from "obsidian";
+import { setStatusTone, type StatusTone } from "./ui-status";
 import type { AiHelperPlugin } from "./main";
 import { folderSourceData, type FolderSource } from "./folder-descriptions";
 import { effectiveContextWindow } from "./context-window";
@@ -211,12 +212,15 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		refresh.disabled = !this.target || this.moving; refresh.addEventListener("click", () => { void this.refresh(); });
 		const stop = actions.createEl("button", { cls: "ai-helper-review-stop", text: this.plugin.t("review-stop") });
 		stop.disabled = !this.request; stop.addEventListener("click", () => this.stop());
-		const informational = ["review-empty", "review-loading", "review-stopped", "review-ready", "review-stale", "review-stay", "review-moved"].includes(this.status);
-		root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: this.plugin.t(this.status),
-			attr: { role: "status", "aria-live": "polite", "data-state": informational ? "info" : "error" } });
+		const tone: StatusTone = this.status === "review-moved" ? "success"
+			: ["review-stale", "review-missing", "review-folder-missing", "review-source-changed", "review-budget", "review-conflict", "review-conflict-missing"].includes(this.status) ? "warning"
+			: ["review-empty", "review-loading", "review-stopped", "review-ready", "review-stay"].includes(this.status) ? "info" : "error";
+		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: this.plugin.t(this.status),
+			attr: { role: "status", "aria-live": "polite" } });
+		setStatusTone(status, tone);
 		if (this.conflictPath) {
 			const path = this.conflictPath;
-			root.createDiv({ text: path });
+			root.createDiv({ cls: "ai-helper-review-path", text: path });
 			const open = root.createEl("button", { cls: "ai-helper-review-open-conflict", text: this.plugin.t("review-open-conflict") });
 			open.addEventListener("click", () => {
 				const file = this.app.vault.getAbstractFileByPath(path);
@@ -226,7 +230,10 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		}
 		if (this.stale) root.createDiv({ cls: "ai-helper-review-stale", text: this.plugin.t("review-stale"), attr: { role: "status" } });
 		if (!this.result) return;
-		if (this.result.outcome !== "recommendations") root.createEl("h3", { text: this.plugin.t(`review-${this.result.outcome}`) });
+		if (this.result.outcome !== "recommendations") {
+			const outcome = root.createEl("h3", { text: this.plugin.t(`review-${this.result.outcome}`) });
+			setStatusTone(outcome, this.result.outcome === "insufficient" ? "warning" : "info");
+		}
 		root.createEl("p", { text: this.result.explanation });
 		for (const candidate of this.result.candidates) {
 			const { source, explanation } = candidate;

@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
+import { setStatusTone, indexStatusTone } from "./ui-status";
 import { isValidFolderDescriptionName, DEFAULT_FOLDER_DESCRIPTION_NAME } from "./folder-descriptions";
 import { FolderDescriptionNameModal } from "./folder-description-name-modal";
 import { IndexStorageModal } from "./index-storage-modal";
@@ -250,7 +251,10 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 
 	private renderFolderWarnings(setting: Setting): () => void {
 		setting.descEl.setAttribute("aria-live", "polite");
-		const update = () => setting.setDesc(this.missingFolders().join(", "));
+		const update = () => {
+			const missing = this.missingFolders();
+			setting.setDesc(missing.join(", ")); setStatusTone(setting.descEl, missing.length ? "warning" : "muted");
+		};
 		this.updateFolderWarnings = update; update();
 		return () => { if (this.updateFolderWarnings === update) this.updateFolderWarnings = undefined; };
 	}
@@ -279,6 +283,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				: embedding ? status.state === "verified" && "dimensions" in status ? `${this.t("embedding-verified")} ${status.dimensions}` : this.t(status.state === "checking" ? "embedding-checking" : "embedding-idle")
 				: this.t(status.state === "verified" ? "model-verified" : status.state === "checking" ? "model-checking" : "model-idle");
 			statusEl.setText(message); statusEl.setAttribute("data-state", status.state);
+			setStatusTone(statusEl, status.state === "verified" ? "success" : status.state === "error" ? "error" : "info");
 		};
 		if (embedding) this.updateEmbeddingStatus = update; else this.updateModelStatus = update;
 		setting.addButton(button => button.setButtonText(this.t(embedding ? "embedding-check" : "model-check")).onClick(async () => {
@@ -302,6 +307,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			const connection = this.plugin.contextWindowConnection;
 			const manual = this.plugin.settings.contextWindow;
 			const tokens = effectiveContextWindow(manual, connection?.value);
+			setStatusTone(status, manual && !tokens ? "error" : connection?.checking || tokens ? "info" : "warning");
 			status.setText(manual ? (tokens ? `${this.t("context-manual")}: ${tokens}` : this.t("context-invalid"))
 				: connection?.checking ? this.t("context-checking") : tokens ? `${this.t("context-auto")}: ${tokens} (${connection?.value?.source})` : this.t("context-unknown"));
 		};
@@ -309,7 +315,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		setting.addText(text => text.setPlaceholder(this.t("setting-context-window-placeholder")).setValue(this.plugin.settings.contextWindow).onChange(async value => {
 			const valid = !value.trim() || effectiveContextWindow(value) !== undefined;
 			text.inputEl.setAttribute("aria-invalid", String(!valid));
-			if (!valid) { status.setText(this.t("context-invalid")); return; }
+			if (!valid) { status.setText(this.t("context-invalid")); setStatusTone(status, "error"); return; }
 			this.plugin.settings.contextWindow = value.trim(); await this.plugin.saveSettings(); update();
 		})).addButton(button => button.setIcon("refresh-cw").setTooltip(this.t("context-refresh")).onClick(() => this.plugin.contextWindowConnection.refresh()));
 		update(); return () => { active = false; unsubscribe?.(); };
@@ -353,6 +359,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			disclosure.setText(this.plugin.noteIndexDisclosure?.() ?? "");
 			const progress = this.plugin.noteSearch?.progress;
 			if (progress) {
+				setStatusTone(status, indexStatusTone(progress));
 				status.setText(`${this.t(`search-state-${progress.state}`)}: ${progress.completed.toLocaleString(getLanguage())}/${progress.total.toLocaleString(getLanguage())}${progress.error ? ` — ${this.t(progress.error)}` : ""}`);
 				progressBar.setValue(progress.total ? Math.min(100, progress.completed / progress.total * 100) : progress.state === "complete" ? 100 : 0);
 			}
@@ -575,9 +582,12 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			});
 			button.buttonEl.setAttribute("aria-label", this.t("setting-refresh-models"));
 		});
-		setting.setDesc(this.t("setting-embedding-model-desc") + (loaded ? ` ${this.t("setting-embedding-models-hint")}`
-			: this.plugin.embeddingModelStatus === "empty" ? ` ${this.t("setting-models-empty")}`
-			: this.plugin.embeddingModelStatus === "error" ? ` ${this.t("setting-models-load-error")}` : ""));
+		setting.setDesc(this.t("setting-embedding-model-desc"));
+		if (loaded || this.plugin.embeddingModelStatus === "empty" || this.plugin.embeddingModelStatus === "error") {
+			const state = this.plugin.embeddingModelStatus;
+			const hint = setting.descEl.createDiv({ cls: "ai-helper-models-hint", text: this.t(loaded ? "setting-embedding-models-hint" : state === "empty" ? "setting-models-empty" : "setting-models-load-error") });
+			setStatusTone(hint, state === "error" ? "error" : state === "empty" ? "warning" : "muted");
+		}
 	}
 
 	private renderModels(modelSetting: Setting, onChange: () => void): void {
@@ -618,10 +628,11 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				const desc = this.t(
 					modelStatus === "empty" ? "setting-models-empty" : "setting-models-load-error"
 				);
-				modelSetting.controlEl.createDiv({
+				const hint = modelSetting.controlEl.createDiv({
 					cls: `ai-helper-models-hint ai-helper-models-hint-${modelStatus}`,
 					text: desc,
 				});
+				setStatusTone(hint, modelStatus === "error" ? "error" : "warning");
 			}
 		}
 		modelSetting.addButton((button) => {
