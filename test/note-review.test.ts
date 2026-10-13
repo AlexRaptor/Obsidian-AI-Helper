@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { type App, type PluginManifest, MarkdownView, TFile, TFolder, type WorkspaceLeaf } from "obsidian";
+import { type App, type PluginManifest, MarkdownView, TFile, TFolder, type WorkspaceLeaf, type OpenViewState } from "obsidian";
 import { AiHelperPlugin } from "../src/main";
 import { NoteReviewView, VIEW_TYPE_NOTE_REVIEW } from "../src/note-review-view";
 import { DEFAULT_SETTINGS } from "../src/settings";
@@ -34,7 +34,7 @@ async function setup() {
 	const markdown = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file, editor, getMode: (): "source" | "preview" => "source", getViewData: () => text });
 	const events = new Map<string, Array<(...args: any[]) => void>>();
 	const on = (name: string, cb: (...args: any[]) => void) => { events.set(name, [...events.get(name) ?? [], cb]); return {}; };
-	const openFile = vi.fn(async () => {}), create = vi.fn(), remove = vi.fn();
+	const openFile = vi.fn(async (_file: TFile, _state?: OpenViewState) => {}), create = vi.fn(), remove = vi.fn();
 	Object.assign(markdown, { save: async () => { texts.set(file.path, text); } });
 	const renameFile = vi.fn(async (f: TFile, path: string) => {
 		if (files.has(path) || folders.has(path)) throw new Error("Путь занят");
@@ -48,7 +48,10 @@ async function setup() {
 	let view: NoteReviewView;
 	const leaf = { get view() { return view; } };
 	const ensureSideLeaf = vi.fn(async () => leaf);
-	const app = { vault: { on, adapter: { exists: vi.fn(async (path: string) => files.has(path) || folders.has(path)) }, getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path), read, create, delete: remove }, fileManager: { renameFile }, workspace: { on, getActiveViewOfType: () => markdown, getLeavesOfType: () => [], ensureSideLeaf, getLeaf: () => ({ openFile }), trigger: vi.fn() } } as unknown as App;
+	const mainLeaf = { openFile };
+	const mainLeaves = new Set([mainLeaf]);
+	const getLeaf = vi.fn(() => mainLeaf);
+	const app = { vault: { on, adapter: { exists: vi.fn(async (path: string) => files.has(path) || folders.has(path)) }, getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path), read, create, delete: remove }, fileManager: { renameFile }, workspace: { on, getActiveViewOfType: () => markdown, getLeavesOfType: () => [], ensureSideLeaf, getLeaf, iterateAllLeaves: (callback: (leaf: typeof mainLeaf) => void) => mainLeaves.forEach(callback), trigger: vi.fn() } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, language: "ru", serverUrl: "http://model/v1", model: "диалог", contextWindow: "32768", excludedFolders: ["Личное"], systemPrompt: "НЕ ОТПРАВЛЯТЬ" });
 	vi.spyOn(plugin.serverClient, "listModels").mockResolvedValue({ ok: true, value: ["диалог"] });
@@ -62,7 +65,7 @@ async function setup() {
 	const root = view.contentEl as unknown as TestElement;
 	const start = async () => { command.callback!(); await flushPromises(); await vi.waitFor(() => expect(root.find("ai-helper-review-stop").disabled).toBe(true)); };
 	const emit = (name: string, ...args: any[]) => events.get(name)?.forEach(cb => cb(...args));
-	return { app, plugin, view, root, start, chat, ensureSideLeaf, file, files, folders, texts, editor, markdown, command, hoverSource, trigger: app.workspace.trigger as ReturnType<typeof vi.fn>, read, openFile, create, renameFile, remove, emit, edit(value: string) { text = value; emit("editor-change", editor, { file }); } };
+	return { app, plugin, view, root, start, chat, ensureSideLeaf, file, files, folders, texts, editor, markdown, command, hoverSource, trigger: app.workspace.trigger as ReturnType<typeof vi.fn>, read, openFile, getLeaf, mainLeaves, create, renameFile, remove, emit, edit(value: string) { text = value; emit("editor-change", editor, { file }); } };
 }
 
 it("команда открывает отдельную правую вкладку и передаёт редактор, свойства и все содержательные описания без индекса", async () => {
@@ -371,10 +374,10 @@ it("меню исключённой папки показывает област
 	expect(checkbox.checked).toBe(false); checkbox.checked = true; checkbox.dispatchEvent({ type: "change" } as Event);
 	expect(s.root.getText()).toContain("Заметок: 2");
 	s.root.find("ai-helper-review-start").click(); await flushPromises();
-	expect(s.openFile).toHaveBeenNthCalledWith(1, nested);
+	expect(s.openFile).toHaveBeenNthCalledWith(1, nested, { active: true, state: { mode: "preview" } });
 	expect(JSON.parse(s.chat.mock.calls[0][2][1].content).note.text).toBe("Вложенная запись");
 	s.root.find("ai-helper-review-skip").click(); await flushPromises();
-	expect(s.openFile).toHaveBeenNthCalledWith(2, s.file);
+	expect(s.openFile).toHaveBeenNthCalledWith(2, s.file, { active: true, state: { mode: "preview" } });
 	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toContain("Личный план");
 	await s.view.onClose();
 });
@@ -519,4 +522,102 @@ it("предварительный счётчик обновляется пос�
 	file.path = "Новая/Запись.md"; s.emit("rename", file, "Личное/Запись.md");
 	s.files.delete("Новая/Запись.md"); s.emit("delete", file); expect(s.root.getText()).toContain("Заметок: 0");
 	expect(s.chat).not.toHaveBeenCalled(); await s.view.onClose();
+});
+
+it("новая очередь по умолчанию открывает заметки в режиме чтения и использует одну отдельную вкладку", async () => {
+	const s = await setup(); addQueueFile(s, "Личное/Я.md");
+	await folderMenu(s, s.folders.get("Личное")!);
+	expect(s.root.find("ai-helper-review-reading").checked).toBe(true);
+	expect(s.root.find("ai-helper-review-separate-tab").checked).toBe(true);
+	s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	expect(s.getLeaf).toHaveBeenCalledWith("tab");
+	expect(s.openFile).toHaveBeenCalledWith(s.file, { active: true, state: { mode: "preview" } });
+	s.root.find("ai-helper-review-skip").click();
+	await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(2));
+	expect(s.getLeaf).toHaveBeenCalledTimes(1);
+	expect(s.openFile.mock.calls[1][1]).toEqual({ active: true, state: { mode: "preview" } });
+	await s.view.onClose();
+});
+
+it("кликабельные название и путь возвращают к текущей заметке после перехода по ссылке без нового анализа", async () => {
+	const s = await setup(); await folderMenu(s, s.folders.get("Личное")!);
+	s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	Object.assign(s.markdown, { file: s.files.get("Секрет.md") });
+	const path = s.root.find("ai-helper-review-note-path");
+	expect(path.attributes["data-href"]).toBe("Личное/План.md");
+	path.click(); await flushPromises();
+	expect(s.openFile).toHaveBeenLastCalledWith(s.file, { active: true, state: { mode: "preview" } });
+	expect(s.getLeaf).toHaveBeenCalledTimes(1); expect(s.chat).toHaveBeenCalledTimes(1);
+	s.root.find("ai-helper-review-note-title").click(); await flushPromises();
+	expect(s.openFile).toHaveBeenCalledTimes(3); expect(s.chat).toHaveBeenCalledTimes(1);
+	expect(s.root.getText()).toContain("Перенесено: 0; Пропущено: 0; Осталось: 1");
+	await s.view.onClose();
+});
+
+it.each([
+	{ reading: false, separate: false },
+	{ reading: true, separate: false },
+	{ reading: false, separate: true },
+])("флажки применяются независимо: $reading чтение, $separate отдельная вкладка", async ({ reading, separate }) => {
+	const s = await setup(); await folderMenu(s, s.folders.get("Личное")!);
+	for (const [cls, checked] of [["ai-helper-review-reading", reading], ["ai-helper-review-separate-tab", separate]] as const) {
+		const input = s.root.find(cls); input.checked = checked; input.dispatchEvent({ type: "change" });
+	}
+	s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	expect(s.getLeaf).toHaveBeenCalledWith(separate ? "tab" : false);
+	expect(s.openFile).toHaveBeenCalledWith(s.file, reading ? { active: true, state: { mode: "preview" } } : { active: true });
+	s.root.find("ai-helper-review-note-path").click(); await flushPromises();
+	expect(s.openFile.mock.calls.at(-1)![1]).toEqual(reading ? { active: true, state: { mode: "preview" } } : { active: true });
+	expect(s.chat).toHaveBeenCalledTimes(1);
+	await folderMenu(s, s.folders.get("Личное")!);
+	expect(s.root.find("ai-helper-review-reading").checked).toBe(true); expect(s.root.find("ai-helper-review-separate-tab").checked).toBe(true);
+	await s.view.onClose();
+});
+
+it("ссылка создаёт новую вкладку после закрытия вкладки разбора, но не открывает удалённую заметку", async () => {
+	const s = await setup(); await folderMenu(s, s.folders.get("Личное")!); s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	s.mainLeaves.clear();
+	const replacement = { openFile: s.openFile }; s.getLeaf.mockReturnValueOnce(replacement); s.mainLeaves.add(replacement);
+	s.root.find("ai-helper-review-note-path").click(); await flushPromises();
+	expect(s.getLeaf).toHaveBeenCalledTimes(2); expect(s.getLeaf).toHaveBeenLastCalledWith("tab");
+	expect(s.chat).toHaveBeenCalledTimes(1);
+	s.files.delete(s.file.path); s.emit("delete", s.file);
+	s.root.find("ai-helper-review-note-path").click(); await flushPromises();
+	expect(s.openFile).toHaveBeenCalledTimes(2); expect(s.root.getText()).toContain("Заметка больше недоступна");
+	await s.view.onClose();
+});
+
+it("возврат по пути отдельной заметки доступен и ошибка открытия не стирает рекомендации", async () => {
+	const s = await setup(); await s.start();
+	s.openFile.mockRejectedValueOnce(new Error("Ошибка открытия"));
+	s.root.find("ai-helper-review-note-path").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Не удалось открыть разбираемую заметку"));
+	expect(s.root.getText()).toContain("Справка о методе");
+	s.root.find("ai-helper-review-note-title").click(); await flushPromises();
+	expect(s.openFile).toHaveBeenLastCalledWith(s.file); expect(s.chat).toHaveBeenCalledTimes(1);
+	expect(s.root.getText()).not.toContain("Не удалось открыть разбираемую заметку");
+	expect(s.root.getText()).toContain("Рекомендации готовы");
+	await s.view.onClose();
+});
+
+it("отдельная вкладка чтения сохраняет несохранённый текст уже открытого редактора для анализа и переноса", async () => {
+	const s = await setup();
+	const preview = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file: s.file, getMode: () => "preview", getViewData: () => "Сохранённый текст", save: vi.fn(async () => {}) });
+	const originalLeaf = { view: s.markdown };
+	const readingLeaf = { view: preview, openFile: s.openFile };
+	s.getLeaf.mockReturnValueOnce(readingLeaf); s.mainLeaves.add(readingLeaf);
+	Object.assign(s.app.workspace, { getLeavesOfType: (type: string) => type === "markdown" ? [originalLeaf, readingLeaf] : [] });
+	await folderMenu(s, s.folders.get("Личное")!);
+	Object.assign(s.app.workspace, { getActiveViewOfType: () => preview });
+	s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	expect(JSON.parse(s.chat.mock.calls[0][2][1].content).note.text).toContain("Личный план изучения GTD");
+	s.root.find("ai-helper-review-move").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Разбор завершён."));
+	expect(s.texts.get("Знания/План.md")).toContain("Личный план изучения GTD"); expect(preview.save).not.toHaveBeenCalled();
+	await s.view.onClose();
 });

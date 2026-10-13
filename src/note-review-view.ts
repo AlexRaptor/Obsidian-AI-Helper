@@ -15,6 +15,8 @@ class ReviewError extends Error {
 
 type ReviewEditor = Pick<Editor, "getValue"> & { save?: () => Promise<void>; read?: () => Promise<void> };
 
+type ReviewOpeningOptions = { reading: boolean; separateTab: boolean };
+
 type NoteSnapshot = { path: string; title: string; text: string; properties: Record<string, unknown> };
 type Recommendation = { source: FolderSource; explanation: string };
 type ReviewResult = { outcome: "recommendations" | "stay" | "none" | "insufficient"; explanation: string; candidates: Recommendation[] };
@@ -57,25 +59,27 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	private closed = false;
 	private moving = false;
 	private conflictPath?: string;
+	private noteOpenError = false;
 	private descriptionRevision = 0;
-	private preview?: { folder: TFolder; recursive: boolean };
-	private queue?: { files: TFile[]; index: number; moved: number; skipped: number; deleted: string[]; done: boolean };
+	private preview?: { folder: TFolder; recursive: boolean; opening: ReviewOpeningOptions };
+	private queue?: { files: TFile[]; index: number; moved: number; skipped: number; deleted: string[]; done: boolean; opening: ReviewOpeningOptions };
 	private opening = false;
 	private navigationRevision = 0;
+	private reviewLeaf?: WorkspaceLeaf;
 
 	prepareFolder(folder: TFolder): void {
 		if (this.moving) return;
 		this.resetRun();
-		this.preview = { folder, recursive: false };
+		this.preview = { folder, recursive: false, opening: { reading: true, separateTab: true } };
 		this.render();
 	}
 
 	private resetRun(): void {
 		this.navigationRevision++;
 		this.request?.abort(); this.request = undefined;
-		this.preview = undefined; this.queue = undefined; this.target = undefined;
+		this.preview = undefined; this.queue = undefined; this.target = undefined; this.reviewLeaf = undefined;
 		this.result = undefined; this.analyzed = undefined; this.stale = false; this.opening = false;
-		this.conflictPath = undefined; this.status = "review-empty";
+		this.conflictPath = undefined; this.noteOpenError = false; this.status = "review-empty";
 	}
 
 	private folderFiles(): TFile[] {
@@ -89,7 +93,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 
 	private async startQueue(): Promise<void> {
 		if (!this.preview || this.closed) return;
-		this.queue = { files: this.folderFiles(), index: 0, moved: 0, skipped: 0, deleted: [], done: false };
+		this.queue = { files: this.folderFiles(), index: 0, moved: 0, skipped: 0, deleted: [], done: false, opening: { ...this.preview.opening } };
 		this.preview = undefined;
 		await this.openNext();
 	}
@@ -102,11 +106,27 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		this.conflictPath = undefined; this.render();
 	}
 
+	private async openNote(file: TFile): Promise<WorkspaceLeaf> {
+		const workspace = this.app.workspace;
+		const options = this.queue?.opening;
+		let leaf: WorkspaceLeaf | undefined;
+		if (options?.separateTab) {
+			workspace.iterateAllLeaves(candidate => { if (candidate === this.reviewLeaf) leaf = candidate; });
+			if (!leaf) this.reviewLeaf = leaf = workspace.getLeaf("tab");
+		} else {
+			leaf = workspace.getLeavesOfType("markdown").find(leaf => leaf.view instanceof MarkdownView && leaf.view.file === file)
+				?? workspace.getLeaf(false);
+		}
+		if (options) await leaf.openFile(file, { active: true, ...(options.reading ? { state: { mode: "preview" } } : {}) });
+		else await leaf.openFile(file);
+		return leaf;
+	}
+
 	private async openNext(): Promise<void> {
 		const queue = this.queue;
 		if (!queue || queue.done || this.closed) return;
 		this.request?.abort(); this.request = undefined;
-		this.target = undefined; this.result = undefined; this.analyzed = undefined; this.stale = false; this.conflictPath = undefined;
+		this.target = undefined; this.result = undefined; this.analyzed = undefined; this.stale = false; this.conflictPath = undefined; this.noteOpenError = false;
 		const revision = ++this.navigationRevision;
 		const current = () => !this.closed && this.queue === queue && !queue.done && revision === this.navigationRevision;
 		while (queue.index < queue.files.length) {
@@ -116,9 +136,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			}
 			this.opening = true; this.status = "review-opening"; this.render();
 			try {
-				const leaf = this.app.workspace.getLeavesOfType("markdown").find(leaf => leaf.view instanceof MarkdownView && leaf.view.file === file)
-					?? this.app.workspace.getLeaf(false);
-				await leaf.openFile(file);
+				const leaf = await this.openNote(file);
 				if (!current()) return;
 				if (this.app.vault.getAbstractFileByPath(file.path) !== file) {
 					queue.deleted.push(file.path); queue.skipped++; queue.index++; continue;
@@ -126,9 +144,10 @@ export class NoteReviewView extends ItemView implements HoverParent {
 				let diskText = "";
 				const markdown = () => {
 					const active = this.app.workspace.getActiveViewOfType(MarkdownView);
-					if (active?.file === file) return active;
-					return [leaf, ...this.app.workspace.getLeavesOfType("markdown")].map(item => item.view)
-						.find((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
+					const views = [active, leaf.view, ...this.app.workspace.getLeavesOfType("markdown").map(item => item.view)]
+						.filter((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
+					// A reading tab must not hide pending edits in another tab of the same note.
+					return views.find(view => view.getMode() === "source") ?? views[0];
 				};
 				this.target = { file, editor: {
 					read: async () => { if (!markdown()) diskText = await this.app.vault.read(file); },
@@ -196,7 +215,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		if (!this.target || this.closed) return;
 		this.request?.abort();
 		const active = new AbortController(); this.request = active;
-		this.conflictPath = undefined; this.result = undefined; this.sources = []; this.stale = false; this.status = "review-loading";
+		this.conflictPath = undefined; this.noteOpenError = false; this.result = undefined; this.sources = []; this.stale = false; this.status = "review-loading";
 		this.render();
 		try {
 			const { file, editor } = this.target;
@@ -308,14 +327,24 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		root.createEl("h2", { text: this.plugin.t("review-title") });
 		if (this.preview) {
 			root.createDiv({ cls: "ai-helper-review-path", text: this.preview.folder.path || "/" });
-			const label = root.createEl("label");
-			const checkbox = label.createEl("input", { cls: "ai-helper-review-recursive", attr: { type: "checkbox" } });
-			checkbox.checked = this.preview.recursive;
-			label.createSpan({ text: this.plugin.t("review-recursive") });
-			checkbox.addEventListener("change", () => { if (this.preview) { this.preview.recursive = checkbox.checked; this.render(); } });
-			root.createDiv({ text: `${this.plugin.t("review-count")} ${this.folderFiles().length}` });
+			const preview = this.preview;
+			const checkbox = (key: LocaleKey, cls: string, checked: boolean, change: (value: boolean) => void) => {
+				const label = root.createDiv().createEl("label");
+				const input = label.createEl("input", { cls, attr: { type: "checkbox" } });
+				input.checked = checked;
+				label.createSpan({ text: this.plugin.t(key) });
+				input.addEventListener("change", () => { if (this.preview === preview) change(input.checked); });
+			};
+			checkbox("review-recursive", "ai-helper-review-recursive", preview.recursive, value => { preview.recursive = value; updateCount(); });
+			checkbox("review-reading", "ai-helper-review-reading", preview.opening.reading, value => { preview.opening.reading = value; });
+			checkbox("review-separate-tab", "ai-helper-review-separate-tab", preview.opening.separateTab, value => { preview.opening.separateTab = value; });
+			const count = root.createDiv();
 			const start = root.createEl("button", { cls: "mod-cta ai-helper-review-start", text: this.plugin.t("review-start") });
-			start.disabled = this.folderFiles().length === 0;
+			const updateCount = () => {
+				const total = this.folderFiles().length;
+				count.setText(`${this.plugin.t("review-count")} ${total}`); start.disabled = total === 0;
+			};
+			updateCount();
 			start.addEventListener("click", () => { void this.startQueue(); });
 			return;
 		}
@@ -332,8 +361,27 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		}
 		const displayedFile = this.target?.file ?? (this.queue && !this.queue.done ? this.queue.files[this.queue.index] : undefined);
 		if (displayedFile) {
-			root.createEl("h3", { text: displayedFile.basename });
-			root.createDiv({ cls: "ai-helper-review-path", text: displayedFile.path });
+			const title = root.createEl("h3");
+			const path = root.createDiv({ cls: "ai-helper-review-path" });
+			for (const [parent, text, cls] of [
+				[title, displayedFile.basename, "ai-helper-review-note-title"],
+				[path, displayedFile.path, "ai-helper-review-note-path"],
+			] as const) {
+				const link = parent.createEl("a", { cls: `internal-link ${cls}`, text, attr: { href: "#", "data-href": displayedFile.path } });
+				link.addEventListener("click", event => {
+					event.preventDefault();
+					if (this.closed || this.renderRevision !== revision || this.opening) return;
+					if (this.app.vault.getAbstractFileByPath(displayedFile.path) !== displayedFile) {
+						this.status = "review-missing"; this.render(); return;
+					}
+					const navigation = this.navigationRevision;
+					void this.openNote(displayedFile).then(() => {
+						if (!this.closed && this.navigationRevision === navigation && this.noteOpenError) { this.noteOpenError = false; this.render(); }
+					}).catch(() => {
+						if (!this.closed && this.navigationRevision === navigation) { this.noteOpenError = true; this.render(); }
+					});
+				});
+			}
 		}
 		const actions = root.createDiv({ cls: "ai-helper-review-actions" });
 		const refresh = actions.createEl("button", { cls: "ai-helper-review-refresh", text: this.plugin.t(this.queue && !this.result ? "review-retry" : "review-refresh") });
@@ -348,6 +396,10 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: this.plugin.t(this.status),
 			attr: { role: "status", "aria-live": "polite" } });
 		setStatusTone(status, tone);
+		if (this.noteOpenError) {
+			const error = root.createDiv({ text: this.plugin.t("review-note-open-error"), attr: { role: "status", "aria-live": "polite" } });
+			setStatusTone(error, "error");
+		}
 		if (this.conflictPath) {
 			const path = this.conflictPath;
 			root.createDiv({ cls: "ai-helper-review-path", text: path });
