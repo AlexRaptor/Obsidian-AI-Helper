@@ -5,6 +5,7 @@ import { AiHelperPlugin } from "../src/main";
 import { createNoteSearch } from "../src/note-index";
 import { createServerClient } from "../src/server-client";
 import { AiHelperSettingsTab, DEFAULT_SETTINGS } from "../src/settings";
+import { FolderDescriptions, folderSourceData } from "../src/folder-descriptions";
 import { en, ru, setLanguage, t } from "../src/i18n";
 import { deferred, TestElement } from "./helpers/obsidian";
 
@@ -387,20 +388,21 @@ it.each([undefined, null, -1, "5", Infinity, 2147484])("defaults invalid or miss
 it("shows the renamed exclusion immediately in open settings and persists it before index cleanup", async () => {
 	vi.stubGlobal("indexedDB", new IDBFactory());
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/rename-settings";
-	const handlers = new Map<string, (...args: any[]) => void>();
-	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, callback); return {}; };
-	const app = { vault: { adapter, on, getMarkdownFiles: () => [], getAbstractFileByPath: () => ({ path: "Secrets" }) }, workspace: { on, onLayoutReady: () => {}, detachLeavesOfType: () => {} } } as unknown as App;
+	const handlers = new Map<string, Array<(...args: any[]) => void>>();
+	const on = (event: string, callback: (...args: any[]) => void) => { handlers.set(event, [...handlers.get(event) ?? [], callback]); return { event, callback }; };
+	const offref = ({ event, callback }: { event: string; callback: (...args: any[]) => void }) => { handlers.set(event, handlers.get(event)!.filter(handler => handler !== callback)); };
+	const app = { vault: { adapter, on, offref, getMarkdownFiles: () => [], getAbstractFileByPath: () => ({ path: "Secrets" }) }, workspace: { on, onLayoutReady: () => {}, detachLeavesOfType: () => {} } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, excludedFolders: ["Private", "Private/Nested", "Private-public"] });
 	const saving = vi.fn(async () => {}); Object.assign(plugin, { saveData: saving });
 	const tabs = vi.spyOn(plugin, "addSettingTab"); await plugin.onload();
 	const tab = tabs.mock.calls[0][0] as AiHelperSettingsTab; tab.display();
-	handlers.get("rename")!({ path: "Secrets" }, "Private");
+	for (const handler of [...handlers.get("rename")!]) handler({ path: "Secrets" }, "Private");
 	try {
 		expect(controls.filter(value => value.name === "" && value.input).slice(-3).map(value => value.input!.value)).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		expect(plugin.settings.excludedFolders).toEqual(["Secrets", "Secrets/Nested", "Private-public"]);
 		await vi.waitFor(() => expect(saving).toHaveBeenCalledWith(expect.objectContaining({ excludedFolders: ["Secrets", "Secrets/Nested", "Private-public"] })));
-	} finally { plugin.onunload(); }
+	} finally { tab.hide(); plugin.onunload(); }
 });
 
 
@@ -645,6 +647,36 @@ it("shows the confirmed mode while rebuilding and ignores a repeated selection",
 		await vi.waitFor(() => expect(dropdown.selectEl.disabled).toBe(false)); expect(clear.buttonEl.disabled).toBe(false);
 		tab.hide(); search.dispose();
 	}
+});
+
+it.each(["en", "ru"] as const)("показывает объём блока описаний и обновляет его после изменений (%s)", async locale => {
+	const { TFile, TFolder } = await import("./helpers/obsidian");
+	setLanguage(locale);
+	const texts = new Map([["_folder.md", "Общие правила."], ["Знания/_folder.md", "Справка."], ["Пустая/_folder.md", "# Заголовок"]]);
+	const files = [...texts.keys()].map(path => Object.assign(new TFile(), { path, name: "_folder.md", parent: Object.assign(new TFolder(), { path: path.split("/").slice(0, -1).join("/") }) }));
+	const events = new Map<string, () => void>();
+	const offref = vi.fn();
+	const app = { vault: {
+		getMarkdownFiles: () => files, read: vi.fn(async (file: { path: string }) => texts.get(file.path)!),
+		on: (event: string, callback: () => void) => { events.set(event, callback); return { event }; }, offref,
+	} } as unknown as App;
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: "idle", t, saveSettings: vi.fn() } as unknown as AiHelperPlugin;
+	plugin.folderDescriptions = new FolderDescriptions(app, () => plugin.settings.folderDescriptionName, t);
+	const tab = new AiHelperSettingsTab(app, plugin); tab.display();
+	const row = controls.find(control => control.name === t("folder-description-name"))!;
+	const expected = async () => t("folder-description-context-size").replace("{tokens}",
+		(new TextEncoder().encode(JSON.stringify(JSON.stringify(folderSourceData(await plugin.folderDescriptions.sources())))).length - 2).toLocaleString(locale));
+	expect(row.description).toContain(t("folder-description-context-loading"));
+	const initial = await expected();
+	await vi.waitFor(() => expect(row.description).toContain(initial));
+	await row.input!.change("Новое.md");
+	expect(row.description).toContain(initial);
+	texts.set("_folder.md", "Общие правила хранения заметок и справочных материалов."); events.get("modify")!();
+	const updated = await expected(); expect(updated).not.toBe(initial);
+	await vi.waitFor(() => expect(row.description).toContain(updated));
+	vi.mocked(app.vault.read).mockRejectedValue(new Error("Нет доступа")); events.get("modify")!();
+	await vi.waitFor(() => expect(row.description).toContain(t("folder-description-context-error")));
+	tab.hide(); expect(offref).toHaveBeenCalledTimes(4);
 });
 
 it.each(["en", "ru"] as const)("validates and confirms description name changes with all old files counted (%s)", async locale => {

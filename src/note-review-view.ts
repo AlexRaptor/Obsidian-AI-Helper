@@ -1,7 +1,7 @@
 import { ItemView, MarkdownView, TFile, TFolder, parseYaml, type Editor, type HoverParent, type HoverPopover, type WorkspaceLeaf } from "obsidian";
 import { setStatusTone, type StatusTone } from "./ui-status";
 import type { AiHelperPlugin } from "./main";
-import { folderSourceData, type FolderSource } from "./folder-descriptions";
+import { FOLDER_DATA_INSTRUCTION, folderSourceData, type FolderSource } from "./folder-descriptions";
 import { effectiveContextWindow } from "./context-window";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { NoteSearchError } from "./note-index";
@@ -230,7 +230,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			const sources = await this.plugin.folderDescriptions.sources(active.signal);
 			if (this.request !== active) return;
 			this.sources = sources;
-			const messages = [{ role: "system" as const, content: `${INSTRUCTION} Use ${getLanguage() === "ru" ? "Russian" : "English"} for explanations.` },
+			const messages = [{ role: "system" as const, content: `${INSTRUCTION} ${FOLDER_DATA_INSTRUCTION} Use ${getLanguage() === "ru" ? "Russian" : "English"} for explanations.` },
 				{ role: "user" as const, content: JSON.stringify({ note, folders: folderSourceData(sources) }) }];
 			const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection.value) ?? (settings.contextWindow ? NaN : 8192);
 			const reserve = settings.maxTokens ? Number(settings.maxTokens) : 1024;

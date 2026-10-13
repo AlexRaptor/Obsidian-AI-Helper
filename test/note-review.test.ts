@@ -78,7 +78,10 @@ it("команда открывает отдельную правую вклад
 	expect(data.note).toMatchObject({ title: "План", path: "Личное/План.md", properties: { статус: "активный" } });
 	expect(data.note.text).toContain("Личный план");
 	expect(data.folders.map((f: { folder: string }) => f.folder)).toEqual(["/", "Знания", "Знания/Проекты", "Личное"]);
-	expect(data.folders[2].descriptions.map((d: { path: string }) => d.path)).toEqual(["_folder.md", "Знания/_folder.md", "Знания/Проекты/_folder.md"]);
+	expect(data.folders[2].ancestors).toEqual(["[1]", "[2]"]);
+	expect(data.folders[2].text).toBe("Исключение: активные проекты.");
+	expect(data.folders[0].text).toBe("Общие правила: хранить справку.");
+	expect(JSON.stringify(data.folders).split("Общие правила: хранить справку.")).toHaveLength(2);
 	expect(JSON.stringify(messages)).not.toContain("НЕ ОТПРАВЛЯТЬ"); expect(params?.systemPrompt).toBeUndefined();
 	expect(s.read.mock.calls.every(([f]) => f.name === "_folder.md")).toBe(true);
 	expect(s.root.getText()).toContain("Личное/План.md"); expect(s.root.getText()).not.toContain("Личный план изучения");

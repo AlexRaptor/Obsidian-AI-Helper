@@ -1,7 +1,7 @@
 import { isEmbeddingConfigured } from "./note-search";
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
 import { setStatusTone, indexStatusTone } from "./ui-status";
-import { isValidFolderDescriptionName, DEFAULT_FOLDER_DESCRIPTION_NAME } from "./folder-descriptions";
+import { isValidFolderDescriptionName, DEFAULT_FOLDER_DESCRIPTION_NAME, folderSourceData } from "./folder-descriptions";
 import { FolderDescriptionNameModal } from "./folder-description-name-modal";
 import { IndexStorageModal } from "./index-storage-modal";
 import type { IndexStorageMode } from "./note-index";
@@ -166,12 +166,16 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				{ name: this.t("settings-group-connection"), desc: this.t("settings-review-model-desc") },
 				this.row("folder-description-name", "folder-description-name-desc", setting => {
 					setting.setClass("ai-helper-description-name");
+					setting.descEl.empty();
+					const description = setting.descEl.createDiv({ text: this.t("folder-description-name-desc") });
 					let draft = this.plugin.settings.folderDescriptionName;
 					setting.addText(text => text.setValue(draft).onChange(value => { draft = value; }));
 					setting.addButton(button => button.setButtonText(this.t("folder-description-apply")).onClick(() => {
-						if (!isValidFolderDescriptionName(draft)) { setting.setDesc(this.t("folder-description-name-invalid")); return; }
+						if (!isValidFolderDescriptionName(draft)) { description.setText(this.t("folder-description-name-invalid")); return; }
+						description.setText(this.t("folder-description-name-desc"));
 						void this.setControlValue("folderDescriptionName", draft);
 					}));
+					return this.renderFolderContextSize(setting);
 				}),
 			] },
 		];
@@ -181,6 +185,44 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		if (key === "excluded-folder:new") return this.folderDraft ?? "";
 		if (key.startsWith("excluded-folder:")) return this.plugin.settings.excludedFolders[Number(key.split(":")[1])];
 		return super.getControlValue(key);
+	}
+
+	private renderFolderContextSize(setting: Setting): () => void {
+		if (!this.plugin.folderDescriptions) return () => {};
+		const status = setting.descEl.createDiv({ cls: "ai-helper-folder-context-size", attr: { "aria-live": "polite" } });
+		let active = true;
+		let request: AbortController | undefined;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const update = async () => {
+			request?.abort();
+			const current = new AbortController(); request = current;
+			status.setText(this.t("folder-description-context-loading")); setStatusTone(status, "muted");
+			try {
+				const sources = await this.plugin.folderDescriptions.sources(current.signal);
+				if (!active || current.signal.aborted) return;
+				// The folder array is embedded in the user message's JSON string. Count escaped bytes,
+				// excluding the outer string quotes, just as the review's context check does.
+				const bytes = new TextEncoder().encode(JSON.stringify(JSON.stringify(folderSourceData(sources)))).length - 2;
+				status.setText(this.t("folder-description-context-size").replace("{tokens}", bytes.toLocaleString(getLanguage())));
+			} catch {
+				if (!active || current.signal.aborted) return;
+				status.setText(this.t("folder-description-context-error")); setStatusTone(status, "warning");
+			}
+		};
+		const schedule = () => {
+			request?.abort();
+			if (timer !== undefined) clearTimeout(timer);
+			timer = setTimeout(() => { void update(); }, 300);
+		};
+		const vault = this.app.vault;
+		const refs = [vault?.on?.("create", schedule), vault?.on?.("modify", schedule),
+			vault?.on?.("delete", schedule), vault?.on?.("rename", schedule)].filter(ref => ref !== undefined);
+		void update();
+		return () => {
+			active = false; request?.abort();
+			if (timer !== undefined) clearTimeout(timer);
+			for (const ref of refs) vault.offref(ref);
+		};
 	}
 
 	async setControlValue(key: string, value: unknown): Promise<void> {

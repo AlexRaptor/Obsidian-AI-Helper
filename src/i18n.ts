@@ -61,6 +61,9 @@ export const en = {
 
 	"folder-description-name": "Folder description file name",
 	"folder-description-name-desc": "One Markdown file name for all folders. Choose whether to rename existing descriptions when changing it.",
+	"folder-description-context-loading": "Estimating folder description context…",
+	"folder-description-context-size": "Folder description block for note review: approximately {tokens} tokens. Each UTF-8 byte is counted as one token, including JSON formatting. Excludes the note, system instructions and answer reserve. Uses the saved file name.",
+	"folder-description-context-error": "Could not estimate the folder description context. Check vault access.",
 	"folder-description-name-invalid": "Enter a valid file name ending in .md, without a path.",
 	"folder-description-apply": "Apply",
 	"folder-description-change": "Files with the current name: {count}. Choose how to apply “{name}”. Only the new name will be recognized after saving.",
@@ -367,6 +370,9 @@ export const ru = {
 
 	"folder-description-name": "Имя файла описания папки",
 	"folder-description-name-desc": "Единое имя Markdown-файла для всех папок. При смене имени можно переименовать существующие описания.",
+	"folder-description-context-loading": "Расчёт контекста описаний папок…",
+	"folder-description-context-size": "Блок описаний папок для разбора заметки: примерно {tokens} токенов. Каждый байт UTF-8 считается одним токеном, включая оформление JSON. Без заметки, системных инструкций и резерва ответа. Используется сохранённое имя файла.",
+	"folder-description-context-error": "Не удалось оценить контекст описаний папок. Проверьте доступ к хранилищу.",
 	"folder-description-name-invalid": "Введите допустимое имя файла с расширением .md без пути.",
 	"folder-description-apply": "Применить",
 	"folder-description-change": "Файлов с текущим именем: {count}. Выберите, как применить «{name}». После сохранения будет распознаваться только новое имя.",

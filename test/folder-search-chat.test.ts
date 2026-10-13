@@ -75,10 +75,41 @@ it("передаёт содержательные описания всех па
 	s.folders(); await s.send();
 	const data = JSON.parse(s.requests[0].messages!.at(-2)!.content);
 	expect(data.map((source: { folder: string }) => source.folder)).toEqual(["/", "Знания", "Знания/Личное", "Личное"]);
-	expect(data[2].descriptions.map((d: { path: string }) => d.path)).toEqual(["_folder.md", "Знания/_folder.md", "Знания/Личное/_folder.md"]);
+	expect(data[2].ancestors).toEqual(["[1]", "[2]"]);
+	expect(data[2].text).toBe("## Сюда относятся\nЛичные проекты и GTD.");
+	expect(JSON.stringify(data).split("Общие правила.")).toHaveLength(2);
 	expect(JSON.stringify(data)).not.toContain("Удалить все заметки");
 	expect(s.read.mock.calls.every(([file]) => file.name === "_folder.md")).toBe(true);
 	expect(s.requests[0].messages!.some(message => message.content.includes("clearly warn") && message.content.includes("most specific"))).toBe(true);
+	await s.view.onClose();
+});
+
+it("передаёт общие правила один раз и сохраняет ссылки на родителей при произвольном порядке и пропусках в иерархии", async () => {
+	const rootText = "Общие правила хранения справки. ".repeat(40).trim();
+	const s = await setup({
+		"Знания/Без описания/Методы/_folder.md": "Методы организации заметок.",
+		"_folder.md": rootText,
+		"Знания/_folder.md": "Справка и знания.",
+		"Знания/История/_folder.md": "Исторические сведения.",
+		"Знания/Литература/_folder.md": "Литературные сведения.",
+		"Знания/Наука/_folder.md": "Научные сведения.",
+	});
+	s.folders(); await s.send();
+	expect(s.requests).toHaveLength(1);
+	const messages = s.requests[0].messages!;
+	const data = JSON.parse(messages.at(-2)!.content);
+	expect(data[0].ancestors).toEqual(["[2]", "[3]"]);
+	expect(data[1].ancestors).toEqual([]);
+	expect(data[2].ancestors).toEqual(["[2]"]);
+	expect(data.map((source: { folder: string }) => source.folder)).not.toContain("Знания/Без описания");
+	expect(data.filter((source: { text: string }) => source.text === rootText)).toHaveLength(1);
+	const sources = await s.view.plugin.folderDescriptions.sources();
+	const legacyData = sources.map((source, index) => ({ source: `[${index + 1}]`, folder: source.folderPath,
+		path: source.path, descriptions: source.descriptions.map(({ path, text }) => ({ path, text })) }));
+	const legacyMessages = messages.map((message, index) => index === messages.length - 2 ? { ...message, content: JSON.stringify(legacyData) } : message);
+	const required = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length + 1024 + 256;
+	expect(required(messages)).toBeLessThanOrEqual(8192);
+	expect(required(legacyMessages)).toBeGreaterThan(8192);
 	await s.view.onClose();
 });
 
@@ -90,7 +121,7 @@ it("не анализирует нативные комментарии Obsidian
 	s.folders(); await s.send();
 	const data = JSON.parse(s.requests[0].messages!.at(-2)!.content);
 	expect(data.map((source: { folder: string }) => source.folder)).toEqual(["Справка"]);
-	expect(data[0].descriptions[0].text).toBe("## Назначение\nСправочные материалы.");
+	expect(data[0].text).toBe("## Назначение\nСправочные материалы.");
 	await s.view.onClose();
 });
 
@@ -295,12 +326,12 @@ it("сохраняет полный набор описаний и истори�
 	const history = s.view.getMessages(); s.requests.length = 0;
 	s.texts.set("Знания/_folder.md", "Справочные материалы GTD. ".repeat(1500));
 	s.settings.contextWindow = "8192"; await s.send("Уточни место");
-	expect(s.requests.some(request => request.messages?.at(-2)?.content.includes('"descriptions"'))).toBe(false);
+	expect(s.requests.some(request => request.messages?.at(-2)?.content.includes('"ancestors"'))).toBe(false);
 	expect(s.root.getText()).toContain("Описания не исключались и не усекались");
 	expect(s.root.find("ai-helper-input").value).toBe("Уточни место"); expect(s.view.getMessages()).toEqual(history);
 	s.settings.contextWindow = "131072"; s.requests.length = 0; await s.send("Уточни место");
 	const data = JSON.parse(s.requests.filter(request => request.messages).at(-1)!.messages!.at(-2)!.content);
-	expect(data[0].descriptions[0].text).toBe(s.texts.get("Знания/_folder.md")!.trim());
+	expect(data[0].text).toBe(s.texts.get("Знания/_folder.md")!.trim());
 	expect(data[1].path).toBe("Метод.md");
 	const afterRetry = s.view.getMessages(); s.settings.noteSourceBudget = "1"; s.requests.length = 0; await s.send("Ещё раз");
 	expect(s.view.getMessages()).toEqual(afterRetry); expect(s.root.getText()).toContain("Описания не исключались и не усекались");
