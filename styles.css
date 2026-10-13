@@ -147,7 +147,7 @@
 }
 
 .ai-helper-message-kind-error .ai-helper-message-body {
-	background: color-mix(in srgb, var(--background-modifier-error) 8%, var(--background-primary));
+	background: color-mix(in oklch, var(--background-modifier-error) 8%, var(--background-primary));
 }
 
 .ai-helper-error-prefix {
@@ -334,14 +334,6 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
-}
-
-.ai-helper-input-row .ai-helper-stop {
-	background: var(--interactive-normal);
-	color: var(--text-normal);
-	border: 1px solid var(--background-modifier-border);
 }
 
 .ai-helper-stopped {
@@ -352,6 +344,10 @@
 .ai-helper-search-toggle[aria-pressed="true"] {
 	background: var(--interactive-accent);
 	color: var(--text-on-accent);
+}
+
+.ai-helper-search-toggle[aria-pressed="true"]:hover:not(:disabled) {
+	background: var(--interactive-accent-hover);
 }
 
 .ai-helper-source {
@@ -422,14 +418,6 @@
 
 .ai-helper-index-reason {
 	flex: 1 0 100%;
-}
-
-.ai-helper-input-row .ai-helper-send:hover {
-	background: var(--interactive-accent-hover);
-}
-
-.ai-helper-input-row .ai-helper-stop:hover {
-	background: var(--interactive-hover);
 }
 
 .ai-helper-send:focus-visible,

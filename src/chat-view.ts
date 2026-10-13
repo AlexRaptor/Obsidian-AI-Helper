@@ -276,7 +276,7 @@ export class ChatView extends ItemView implements HoverParent {
 		});
 		this.inputEl.value = this.draft;
 		this.sendBtn = inputRow.createEl("button", {
-			cls: "ai-helper-send",
+			cls: "ai-helper-send mod-cta",
 			attr: { type: "button" },
 		});
 	}
@@ -585,7 +585,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.thinking = thinking;
 		if (this.sendBtn) {
 			this.sendBtn.disabled = false;
-			this.sendBtn.className = `ai-helper-send${thinking ? " ai-helper-stop" : ""}`;
+			this.sendBtn.className = `ai-helper-send${thinking ? " ai-helper-stop" : " mod-cta"}`;
 			const label = this.t(thinking ? "stop" : "send");
 			this.sendBtn.setAttribute("aria-label", label);
 			setTooltip(this.sendBtn, label);
