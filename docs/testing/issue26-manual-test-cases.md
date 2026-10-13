@@ -18,7 +18,7 @@ node docs/fixtures/issue26-folder-descriptions/create-vault.mjs docs/fixtures/is
 1. Меню папки `New` → «Создать описание». Открывается `New/_folder.md`, содержащий три русских заголовка и комментарии «Для чего нужна папка», «Какие заметки хранить здесь», «Что хранить в других папках». `New/Note.md` не изменяется.
 2. То же действие для `Existing` и `Private`. Открываются существующие `_folder.md`; их содержимое точно совпадает с генератором. Исключение `Private` не мешает открытию.
 3. Контекстное меню `Private/Note.md`: действия «Создать описание» нет.
-4. Настройки AI Helper → Поиск по заметкам → имя файла. Введите `../bad.md`, нажмите «Применить»: видна ошибка, сохранено `_folder.md`.
+4. Настройки AI Helper → Разбор заметок → имя файла. Введите `../bad.md`, нажмите «Применить»: видна ошибка, сохранено `_folder.md`.
 5. До создания новых шаблонов смена имени на `about.md` показывает 3 старых файла (`Existing`, `Private`, `Empty`). После шага 1 — 4. «Отмена» оставляет `_folder.md`, файлы не меняются.
 6. Переключите язык плагина на English. Меню `English` → Create description создаёт `English/_folder.md`: `Purpose`, `Belongs here`, `Does not belong here`, комментарии `What this folder is for`, `Which notes to keep here`, `What to keep in other folders`. Русский шаблон и настроенное имя не меняются.
 7. После создания обоих шаблонов смена имени на `about.md` показывает 5 старых файлов. Save without renaming сохраняет только имя; все пять `_folder.md` остаются на месте. Меню `Existing` теперь создаёт `Existing/about.md`, не открывая и не изменяя прежний `_folder.md`.

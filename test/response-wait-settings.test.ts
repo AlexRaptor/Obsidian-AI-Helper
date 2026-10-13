@@ -57,6 +57,12 @@ vi.mock("obsidian", async () => {
 				(this as unknown as { button: typeof button }).button = button;
 				callback(button); return this;
 			}
+			addExtraButton(callback: (button: unknown) => void) {
+				return this.addButton((button: any) => {
+					button.extraSettingsEl = button.buttonEl;
+					callback(button);
+				});
+			}
 		};
 	return { ...helper, Setting: MockSetting, PluginSettingTab: class extends helper.PluginSettingTab { createSetting(parent: TestElement) { return new MockSetting(); } } };
 });
@@ -427,14 +433,21 @@ it("adds absent folders and root, rejects duplicate edits and removes rows", asy
 	const plugin = { settings: { ...DEFAULT_SETTINGS, excludedFolders: ["Private"] }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
 	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
 	const list = () => (tab.getSettingDefinitions().find(def => "type" in def && def.type === "page" && def.name === en["settings-page-search"]) as any).items.find((def: any) => def.type === "list");
-	list().addItem.action(); await tab.setControlValue("excluded-folder:new", "Missing");
-	list().addItem.action(); await tab.setControlValue("excluded-folder:new", "/");
-	list().addItem.action(); await tab.setControlValue("excluded-folder:new", "Missing");
+	const add = () => controls.filter(row => row.name === en["setting-excluded-folders"]).slice(-1)[0].button!.click();
+	await add(); await tab.setControlValue("excluded-folder:new", "Missing");
+	await add(); await tab.setControlValue("excluded-folder:new", "/");
+	await add(); await tab.setControlValue("excluded-folder:new", "Missing");
 	expect(plugin.settings.excludedFolders).toEqual(["Private", "Missing", "/"]);
 	await tab.setControlValue("excluded-folder:0", "Missing");
 	expect(plugin.settings.excludedFolders[0]).toBe("Private");
-	list().onDelete(1); await Promise.resolve();
+	list().onDelete(0);
+	list().onDelete(list().items.length - 1);
+	expect(plugin.settings.excludedFolders).toEqual(["Private", "Missing", "/"]);
+	list().onDelete(2); await Promise.resolve();
 	expect(plugin.settings.excludedFolders).toEqual(["Private", "/"]);
+	list().onDelete(3);
+	expect(plugin.settings.excludedFolders).toEqual(["Private", "/"]);
+	expect(tab.getControlValue("excluded-folder:new")).toBe("");
 	tab.hide();
 });
 
@@ -469,9 +482,17 @@ it("indexes all pages without rendering, requesting models or subscribing", () =
 	const subscribe = vi.spyOn(plugin.contextWindowConnection, "subscribe");
 	const walk = (items: any[]): any[] => items.flatMap(item => [item, ...walk(item.items ?? [])]);
 	const definitions = tab.getSettingDefinitions();
-	expect(definitions.filter(def => "type" in def && def.type === "page").map(def => (def as any).name)).toEqual([en["settings-page-conversation"], en["settings-page-search"], en["settings-page-advanced"]]);
+	expect(definitions.filter(def => "type" in def && def.type === "page").map(def => (def as any).name)).toEqual([en["settings-page-conversation"], en["settings-page-search"], en["settings-page-review"]]);
 	const names = walk(definitions).map(def => def.name);
 	for (const key of ["setting-response-wait", "setting-model", "setting-embedding-model", "setting-fragment-size", "setting-top-p"]) expect(names).toContain(en[key as keyof typeof en]);
+	const pages = definitions.filter(def => "type" in def && def.type === "page") as any[];
+	expect(pages[0].items.filter((group: any) => group.type === "group").map((group: any) => group.heading)).toEqual([en["settings-group-connection"], en["settings-group-generation"]]);
+	expect(pages[1].items.filter((group: any) => group.type === "group" || group.type === "list").map((group: any) => group.heading)).toEqual([en["settings-group-embedding"], en["settings-group-search-scope"], en["settings-group-index"], en["settings-group-search-results"], en["settings-group-fragments"]]);
+	expect(walk(pages[1].items).map(def => def.name)).toContain(en["setting-source-budget"]);
+	expect(walk(pages[1].items).map(def => def.name)).not.toContain(en["folder-description-name"]);
+	expect(walk(pages[2].items).map(def => def.name)).toContain(en["folder-description-name"]);
+	expect(pages[2].items[1].desc).toBe(en["settings-review-model-desc"]);
+	expect(walk(definitions).filter(def => def.desc === en["setting-excluded-folders-desc"])).toHaveLength(1);
 	expect(network).not.toHaveBeenCalled(); expect(subscribe).not.toHaveBeenCalled(); expect(controls).toHaveLength(0);
 });
 
@@ -489,8 +510,7 @@ it("cleans subscriptions on redisplay and hide while status updates retain contr
 it("renders a draft folder without persisting an empty exclusion", () => {
 	const plugin = { settings: { ...DEFAULT_SETTINGS, excludedFolders: [] }, modelStatus: "idle", t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
 	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
-	const page = tab.getSettingDefinitions().find(def => "type" in def && def.type === "page" && def.name === en["settings-page-search"]) as any;
-	page.items.find((def: any) => def.type === "list").addItem.action();
+	controls.find(row => row.name === en["setting-excluded-folders"])!.button!.click();
 	expect(controls.filter(row => row.name === "" && row.input).slice(-1)[0].input!.value).toBe("");
 	expect(plugin.settings.excludedFolders).toEqual([]); expect(plugin.saveSettings).not.toHaveBeenCalled();
 });
@@ -500,7 +520,7 @@ it("validates the advanced source budget and preserves the last valid setting", 
 	const plugin = { settings: { ...DEFAULT_SETTINGS }, t, saveSettings: vi.fn(async () => {}) } as unknown as AiHelperPlugin;
 	const tab = new AiHelperSettingsTab({} as App, plugin);
 	const walk = (items: any[]): any[] => items.flatMap(item => [item, ...walk(item.items ?? [])]);
-	const page = tab.getSettingDefinitions().find((item: any) => item.name === en["settings-page-advanced"]) as any;
+	const page = tab.getSettingDefinitions().find((item: any) => item.name === en["settings-page-search"]) as any;
 	const control = walk(page.items).find(item => item.control?.key === "noteSourceBudget").control;
 	await tab.setControlValue("noteSourceBudget", "24000");
 	expect(plugin.settings.noteSourceBudget).toBe("24000");

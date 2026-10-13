@@ -226,21 +226,58 @@
 	width: 100%;
 }
 
-.ai-helper-settings-group .setting-item:has(textarea),
-.ai-helper-excluded-folders .setting-item:has(input) {
+.ai-helper-settings-group .setting-item:has(textarea) {
 	flex-wrap: wrap;
 }
 
-.ai-helper-settings-group .setting-item:has(textarea) .setting-item-control,
-.ai-helper-excluded-folders .setting-item:has(input) .setting-item-control {
+.ai-helper-settings-group .setting-item:has(textarea) .setting-item-control {
 	flex: 1 1 50%;
 	min-width: 50%;
 }
 
-.ai-helper-excluded-folders .setting-item-control .search-input-container,
+.ai-helper-excluded-folders-heading {
+	flex-wrap: wrap;
+}
+
+.ai-helper-excluded-folders-heading .setting-item-info {
+	flex: 1 1 15em;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ai-helper-excluded-folders-heading .setting-item-control {
+	flex: 0 0 auto;
+	align-self: center;
+}
+
+/* The list also creates a delete control for its description and warning rows. */
+.ai-helper-excluded-folders-heading .clickable-icon:not(.ai-helper-folder-add),
+.ai-helper-excluded-folders-warning .clickable-icon,
+.ai-helper-excluded-folders .setting-item:has(input) .setting-item-info {
+	display: none;
+}
+
+.ai-helper-excluded-folders .setting-item:has(input) .setting-item-control {
+	flex: 1 1 100%;
+	min-width: 0;
+	width: 100%;
+	flex-wrap: nowrap;
+	gap: var(--size-4-2);
+}
+
+.ai-helper-excluded-folders .setting-item-control .search-input-container {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
 .ai-helper-excluded-folders .setting-item-control input {
+	flex: 1 1 0;
 	width: 100%;
 	min-width: 0;
+}
+
+.ai-helper-excluded-folders .setting-item-control .clickable-icon {
+	flex: 0 0 auto;
 }
 
 .ai-helper-top-p-server {

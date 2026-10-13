@@ -102,8 +102,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			{ name: this.t("setting-language"), desc: this.t("setting-language-desc"), control: {
 				type: "dropdown", key: "language", options: { auto: this.t("language-auto"), ...LOCALE_NAMES },
 			} },
-			{ type: "page", name: this.t("settings-page-conversation"), items: [
-				this.group("settings-group-model", [
+			{ type: "page", name: this.t("settings-page-conversation"), desc: this.t("settings-page-conversation-desc"), items: [
+				{ name: "", desc: this.t("settings-page-conversation-desc") },
+				this.group("settings-group-connection", [
 					this.text("serverUrl", "setting-server-url", "setting-server-url-desc", "setting-server-url-placeholder"),
 					this.text("apiKey", "setting-api-key", "setting-api-key-desc", "setting-api-key-placeholder"),
 					this.row("setting-model", "setting-model-desc", setting => {
@@ -112,9 +113,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						return () => { if (this.modelSetting === setting) this.modelSetting = undefined; };
 					}),
 					this.row("model-check", "model-check-desc", setting => this.renderCheck(setting, false)),
-					this.row("setting-context-window", "setting-context-window-desc", setting => this.renderContext(setting)),
 				]),
 				this.group("settings-group-generation", [
+					this.row("setting-context-window", "setting-context-window-desc", setting => this.renderContext(setting)),
 					this.text("systemPrompt", "setting-system-prompt", "setting-system-prompt-desc", "setting-system-prompt-placeholder", true),
 					this.text("temperature", "setting-temperature", "setting-temperature-desc", "setting-temperature-placeholder"),
 					{ ...this.row("setting-top-p", "setting-top-p-desc", setting => this.renderTopP(setting)), aliases: [this.t("use-server-top-p")] },
@@ -124,16 +125,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					} },
 				]),
 			] },
-			{ type: "page", name: this.t("settings-page-search"), items: [
-				this.row("folder-description-name", "folder-description-name-desc", setting => {
-					setting.setClass("ai-helper-description-name");
-					let draft = this.plugin.settings.folderDescriptionName;
-					setting.addText(text => text.setValue(draft).onChange(value => { draft = value; }));
-					setting.addButton(button => button.setButtonText(this.t("folder-description-apply")).onClick(() => {
-						if (!isValidFolderDescriptionName(draft)) { setting.setDesc(this.t("folder-description-name-invalid")); return; }
-						void this.setControlValue("folderDescriptionName", draft);
-					}));
-				}),
+			{ type: "page", name: this.t("settings-page-search"), desc: this.t("settings-page-search-desc"), items: [
+				{ name: "", desc: this.t("settings-page-search-desc") },
 				this.group("settings-group-embedding", [
 					this.text("embeddingServerUrl", "setting-embedding-server-url", "setting-embedding-server-url-desc"),
 					this.row("setting-embedding-api-key", "setting-api-key-desc", setting => { setting.addText(text => {
@@ -146,29 +139,40 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						return () => { if (this.embeddingModelSetting === setting) this.embeddingModelSetting = undefined; };
 					}),
 					this.row("embedding-check", "embedding-check-desc", setting => this.renderCheck(setting, true)),
+				]),
+				this.folderDefinitions(),
+				this.group("settings-group-index", [
 					this.row("index-storage-mode", "index-storage-desc", setting => this.renderStorage(setting)),
 					this.row("search-vault-index", undefined, setting => this.renderIndex(setting)),
 					this.row("search-vault-clear", "search-clear-desc", setting => this.renderClearIndex(setting)),
-					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
-				]),
-				{ name: this.t("setting-excluded-folders"), desc: this.t("setting-excluded-folders-desc") },
-				this.folderDefinitions(),
-				{ ...this.row("search-missing-folder", undefined, setting => this.renderFolderWarnings(setting)), searchable: false, visible: () => this.missingFolders().length > 0 },
-				this.group("settings-group-index-updates", [
 					{ name: this.t("search-auto-update"), desc: this.t("search-auto-update-desc"), control: { type: "toggle", key: "autoUpdateNotes" } },
 					this.row("search-update-delay", "search-update-delay-desc", setting => this.renderDelay(setting)),
 					this.row("search-retry", undefined, setting => { setting.addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => { try { await this.plugin.noteSearch.resume(true); } catch { /* Status displays the error. */ } })); }),
 				]),
-			] },
-			{ type: "page", name: this.t("settings-page-advanced"), items: [
-				{ name: this.t("setting-source-budget"), desc: this.t("setting-source-budget-desc"), control: {
-					type: "text", key: "noteSourceBudget", validate: value => { if (sourceBudgetBytes(value) === undefined) return this.t("setting-source-budget-invalid"); },
-				} },
+				this.group("settings-group-search-results", [
+					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
+					{ name: this.t("setting-source-budget"), desc: this.t("setting-source-budget-desc"), control: {
+						type: "text", key: "noteSourceBudget", validate: value => { if (sourceBudgetBytes(value) === undefined) return this.t("setting-source-budget-invalid"); },
+					} },
+					...(["weak", "medium", "strong"] as const).map(level => this.row(`setting-similarity-${level}`, "setting-similarity-desc", setting => this.renderAppearance(setting, level))),
+				]),
 				this.group("settings-group-fragments", [
 					this.row("setting-fragment-size", "setting-fragment-options-desc", setting => this.renderFragment(setting, "noteFragmentSize")),
 					this.row("setting-fragment-overlap", "setting-fragment-options-desc", setting => this.renderFragment(setting, "noteFragmentOverlap")),
 				]),
-				this.group("settings-group-similarity", (["weak", "medium", "strong"] as const).map(level => this.row(`setting-similarity-${level}`, "setting-similarity-desc", setting => this.renderAppearance(setting, level)))),
+			] },
+			{ type: "page", name: this.t("settings-page-review"), desc: this.t("settings-page-review-desc"), items: [
+				{ name: "", desc: this.t("settings-page-review-desc") },
+				{ name: this.t("settings-group-connection"), desc: this.t("settings-review-model-desc") },
+				this.row("folder-description-name", "folder-description-name-desc", setting => {
+					setting.setClass("ai-helper-description-name");
+					let draft = this.plugin.settings.folderDescriptionName;
+					setting.addText(text => text.setValue(draft).onChange(value => { draft = value; }));
+					setting.addButton(button => button.setButtonText(this.t("folder-description-apply")).onClick(() => {
+						if (!isValidFolderDescriptionName(draft)) { setting.setDesc(this.t("folder-description-name-invalid")); return; }
+						void this.setControlValue("folderDescriptionName", draft);
+					}));
+				}),
 			] },
 		];
 	}
@@ -230,19 +234,33 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		const paths = [...this.plugin.settings.excludedFolders];
 		if (this.folderDraft !== undefined) paths.push(this.folderDraft);
 		return {
-			type: "list", cls: "ai-helper-settings-group ai-helper-excluded-folders",
-			addItem: { name: this.t("folder-add"), action: () => { this.folderDraft = ""; this.update(); } },
-			onDelete: index => {
+			type: "list", heading: this.t("settings-group-search-scope"), cls: "ai-helper-settings-group ai-helper-excluded-folders",
+			onDelete: rowIndex => {
+				// The first row is the shared description, followed by the folder rows.
+				const index = rowIndex - 1;
+				if (index < 0 || index >= paths.length) return;
 				if (index === this.plugin.settings.excludedFolders.length) { this.folderDraft = undefined; this.update(); return; }
 				this.plugin.settings.excludedFolders.splice(index, 1);
 				void this.plugin.saveSettings().then(() => this.update());
 			},
-			items: paths.map((path, index) => ({
-				name: "",
-				control: { type: "folder", key: index === this.plugin.settings.excludedFolders.length ? "excluded-folder:new" : `excluded-folder:${index}`, includeRoot: true,
-					validate: value => { if (!value.trim() || this.plugin.settings.excludedFolders.some((folder, other) => other !== index && folder === value.trim())) return this.t("folder-invalid"); },
-				},
-			})),
+			items: [
+				this.row("setting-excluded-folders", "setting-excluded-folders-desc", setting => {
+					setting.setClass("ai-helper-excluded-folders-heading");
+					setting.addExtraButton(button => button.setIcon("plus").setTooltip(this.t("folder-add")).onClick(() => {
+						this.folderDraft = ""; this.update();
+					}).extraSettingsEl.addClass("ai-helper-folder-add"));
+				}),
+				...paths.map((path, index): SettingDefinition => ({
+					name: "",
+					control: { type: "folder", key: index === this.plugin.settings.excludedFolders.length ? "excluded-folder:new" : `excluded-folder:${index}`, includeRoot: true,
+						validate: value => { if (!value.trim() || this.plugin.settings.excludedFolders.some((folder, other) => other !== index && folder === value.trim())) return this.t("folder-invalid"); },
+					},
+				})),
+				{ ...this.row("search-missing-folder", undefined, setting => {
+					setting.setClass("ai-helper-excluded-folders-warning");
+					return this.renderFolderWarnings(setting);
+				}), searchable: false, visible: () => this.missingFolders().length > 0 },
+			],
 		};
 	}
 
