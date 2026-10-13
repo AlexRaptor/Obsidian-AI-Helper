@@ -84,7 +84,7 @@ export interface ServerClient {
 	): Promise<ServerClientResult<ChatCompletionResult>>;
 }
 
-function connectionUrl(raw: string): string | undefined {
+export function connectionUrl(raw: string): string | undefined {
 	try {
 		const url = new URL(raw.trim());
 		if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;

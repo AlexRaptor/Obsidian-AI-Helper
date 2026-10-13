@@ -1,5 +1,6 @@
 import { ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
+import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
@@ -84,12 +85,26 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	toggleSearch(): void {
+		if (!this.searchEnabled) this.searchType = isEmbeddingConfigured(this.plugin.settings) ? "notes" : "folders";
 		this.searchEnabled = !this.searchEnabled;
 		if (this.searchEnabled && this.searchType !== "folders") void this.plugin.noteSearch.resume?.().catch(() => {});
 		this.searchBtn?.setAttribute("aria-pressed", String(this.searchEnabled));
 		this.updateSearchType();
 		this.updateIndexStatus();
 		this.setThinking(this.thinking);
+	}
+
+	private requireEmbeddingConfiguration(): boolean {
+		return isEmbeddingConfigured(this.plugin.settings) || this.plugin.requireEmbeddingConfiguration();
+	}
+
+	refreshSearchConfiguration(): void {
+		if (this.searchEnabled && this.searchType !== "folders" && !isEmbeddingConfigured(this.plugin.settings)) {
+			this.toggleSearch();
+			this.requireEmbeddingConfiguration();
+		}
+		this.updateSearchType();
+		this.updateIndexStatus();
 	}
 
 	getDisplayText(): string {
@@ -240,6 +255,10 @@ export class ChatView extends ItemView implements HoverParent {
 		this.searchBtn.setAttribute("aria-pressed", String(this.searchEnabled));
 		this.searchTypeSelect = new DropdownComponent(actions).setValue(this.searchType).onChange(value => {
 			if (value !== "notes" && value !== "folders" && value !== "mixed") return;
+			if (value !== "folders" && !this.requireEmbeddingConfiguration()) {
+				this.searchTypeSelect?.setValue(this.searchType);
+				return;
+			}
 			this.searchType = value;
 			if (this.searchEnabled && value !== "folders") void this.plugin.noteSearch.resume?.().catch(() => {});
 			this.updateIndexStatus();
@@ -253,7 +272,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.indexCoverageLabel = this.indexStatusEl.createSpan({ cls: "ai-helper-index-coverage-label" });
 		this.indexAction = this.indexStatusEl.createEl("button", { cls: "ai-helper-index-action", attr: { type: "button" } });
 		this.indexAction.addEventListener("click", () => {
-			if (this.indexActionPending) return;
+			if (this.indexActionPending || !this.requireEmbeddingConfiguration()) return;
 			this.indexActionPending = true;
 			const first = this.plugin.noteSearch.progress.state === "idle";
 			this.updateIndexStatus();
@@ -622,6 +641,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.thinking) return;
 		const text = this.inputEl?.value.trim() ?? "";
 		if (!text) return;
+		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
 
 		this.inputEl!.value = "";
 		this.messages.push({ role: "user", content: text, kind: "text" });

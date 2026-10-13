@@ -123,6 +123,7 @@ export function setIcon(el: TestElement, icon: string): void {
 
 export class Notice {
 	static messages: string[] = [];
+	messageEl = new TestElement();
 	constructor(message: string) { Notice.messages.push(message); }
 }
 

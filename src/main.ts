@@ -12,7 +12,7 @@ import { createServerClient, type ServerClient } from "./server-client";
 import { setLanguage, resolveLanguage, t, type LocaleKey } from "./i18n";
 import { createModelConnection } from "./model-connection";
 import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragments";
-import { createNoteSearchConnection } from "./note-search";
+import { createNoteSearchConnection, isEmbeddingConfigured } from "./note-search";
 import { createNoteSearch, sourceBudgetBytes, NoteSearchError, isValidMinimumSimilarity, isValidNoteUpdateDelay, type NoteSearch, type IndexStorageMode } from "./note-index";
 import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { StorageProbeModal } from "./storage-probe-modal";
@@ -129,7 +129,7 @@ export class AiHelperPlugin extends Plugin {
 			const restoring = this.noteSearch.restore();
 			this.indexRestore = restoring.catch(() => {});
 			void restoring.then(() => {
-				if (!this.unloading && !this.indexingNote) return this.noteSearch.resume();
+				if (!this.unloading && !this.indexingNote && isEmbeddingConfigured(this.settings)) return this.noteSearch.resume();
 			}).catch(error => { if (!this.unloading) updateError(error); });
 		};
 		if (this.app.workspace.onLayoutReady) this.app.workspace.onLayoutReady(restoreIndex);
@@ -176,7 +176,7 @@ export class AiHelperPlugin extends Plugin {
 		} });
 		this.settingsTab = new AiHelperSettingsTab(this.app, this);
 		this.addSettingTab(this.settingsTab);
-		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.indexRestore.then(() => this.noteSearch.resume(true)).catch(updateError); } });
+		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.resumeNoteIndex(); } });
 		this.addCommand({
 			id: "local-storage-probe",
 			name: this.t("probe-title"),
@@ -236,6 +236,7 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async indexNote(path: string): Promise<void> {
+		if (!this.requireEmbeddingConfiguration()) return;
 		if (this.indexingNote || this.changingIndexStorage) return;
 		this.indexingNote = true;
 		showStatusNotice(`${this.t("search-indexing")}\n${this.noteIndexDisclosure()}`, "info");
@@ -244,6 +245,19 @@ export class AiHelperPlugin extends Plugin {
 			if (!(error instanceof NoteSearchError && error.code === "search-rebuild")) showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "error");
 		}
 		finally { this.indexingNote = false; }
+	}
+
+	/** Keep unavailable actions discoverable and explain the required configuration. */
+	requireEmbeddingConfiguration(): boolean {
+		if (isEmbeddingConfigured(this.settings)) return true;
+		showStatusNotice(this.t("search-setup-required"), "warning");
+		return false;
+	}
+
+	async resumeNoteIndex(): Promise<void> {
+		if (!this.requireEmbeddingConfiguration()) return;
+		try { await this.indexRestore; if (!this.unloading) await this.noteSearch.resume(true); }
+		catch (error) { showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "error"); }
 	}
 
 	noteIndexDirectory(): string {
@@ -257,6 +271,7 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async changeIndexStorage(mode: IndexStorageMode): Promise<void> {
+		if (!this.requireEmbeddingConfiguration()) return;
 		if (this.changingIndexStorage || mode === this.settings.indexStorageMode || this.unloading) return;
 		this.changingIndexStorage = true;
 		try {
@@ -293,6 +308,7 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async manageNoteIndex(action: "index" | "clear"): Promise<void> {
+		if (action !== "clear" && !this.requireEmbeddingConfiguration()) return;
 		if (this.changingIndexStorage || (action !== "clear" && this.indexingNote)) return;
 		if (action !== "clear") { this.indexingNote = true; showStatusNotice(this.noteIndexDisclosure(), "info"); }
 		try {
@@ -312,7 +328,7 @@ export class AiHelperPlugin extends Plugin {
 		if (this.contextWindowConnection.configure(this.settings)) void this.contextWindowConnection.refresh();
 		this.updateContextIndicators();
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
-			if (leaf.view instanceof ChatView) await leaf.view.refreshSimilarityAppearance();
+			if (leaf.view instanceof ChatView) { leaf.view.refreshSearchConfiguration(); await leaf.view.refreshSimilarityAppearance(); }
 		}
 		if (this.embeddingListUrl !== this.settings.embeddingServerUrl.trim() || this.embeddingListKey !== this.settings.embeddingApiKey) {
 			this.embeddingModelRequest?.abort();

@@ -1,3 +1,4 @@
+import { isEmbeddingConfigured } from "./note-search";
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
 import { setStatusTone, indexStatusTone } from "./ui-status";
 import { isValidFolderDescriptionName, DEFAULT_FOLDER_DESCRIPTION_NAME } from "./folder-descriptions";
@@ -340,6 +341,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					update();
 					if (this.plugin.isChangingIndexStorage) return;
 					if ((value !== "local" && value !== "file") || value === this.plugin.settings.indexStorageMode) return;
+					if (!isEmbeddingConfigured(this.plugin.settings) && !this.plugin.requireEmbeddingConfiguration()) return;
 					new IndexStorageModal(this.plugin, value, update).open();
 				});
 		});
@@ -356,7 +358,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		let active = true;
 		const update = () => {
 			if (!active) return;
-			disclosure.setText(this.plugin.noteIndexDisclosure?.() ?? "");
+			disclosure.setText(isEmbeddingConfigured(this.plugin.settings) ? this.plugin.noteIndexDisclosure?.() ?? "" : this.t("search-setup-required"));
+			setStatusTone(disclosure, isEmbeddingConfigured(this.plugin.settings) ? "muted" : "warning");
 			const progress = this.plugin.noteSearch?.progress;
 			if (progress) {
 				setStatusTone(status, indexStatusTone(progress));

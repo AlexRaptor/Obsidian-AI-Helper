@@ -39,17 +39,19 @@ async function setup(initial: Record<string, string> = { "Знания/_folder.m
 	const view = new ChatView({} as WorkspaceLeaf, plugin);
 	Object.assign(view, { app }); await view.onOpen();
 	const root = view.contentEl as unknown as TestElement;
-	return { view, root, requests, fetcher, read, openFile, openNote, texts, files, create, rename, remove, settings, setAnswer: (value: string) => { answer = value; },
+	return { view, root, requests, fetcher, noteSearch, read, openFile, openNote, texts, files, create, rename, remove, settings, setAnswer: (value: string) => { answer = value; },
 		mode(value: string) { const select = root.find("ai-helper-search-type"); select.value = value; select.dispatchEvent({ type: "change" }); },
 		folders() { root.find("ai-helper-search-toggle").click(); const select = root.find("ai-helper-search-type"); select.value = "folders"; select.dispatchEvent({ type: "change" }); },
 		async send(text = "Где создать заметку о GTD?") { root.find("ai-helper-input").value = text; root.find("ai-helper-send").click(); await vi.waitFor(() => expect(root.find("ai-helper-send").attributes["aria-label"]).toBe(t("send"))); await flushPromises(); },
 	};
 }
 
-it("выбирает заметки по умолчанию и ищет папки без embedding-модели и обычного индекса", async () => {
+it("автоматически выбирает папки без embedding-модели и обычного индекса", async () => {
 	const s = await setup();
-	expect(s.root.find("ai-helper-search-type").value).toBe("notes");
-	s.folders(); await s.send();
+	expect(s.root.find("ai-helper-search-type").style.display).toBe("none");
+	s.root.find("ai-helper-search-toggle").click();
+	expect(s.root.find("ai-helper-search-type").value).toBe("folders");
+	await s.send();
 	expect(s.requests).toHaveLength(1);
 	expect(s.requests[0].url).toBe("http://model/v1/chat/completions");
 	expect(s.requests[0].messages?.at(-2)?.content).toContain("Справочные материалы о GTD");
@@ -211,7 +213,7 @@ it("показывает ошибку модель-сервера и сохра�
 	await s.send("Уточни"); expect(s.view.getMessages()).toHaveLength(4); await s.view.onClose();
 });
 
-it("обновляет язык нативного выбора, сохраняет режим при выключении поиска и допускает несколько вариантов с предупреждением", async () => {
+it("обновляет язык нативного выбора, скрывает выбор при выключении поиска и допускает несколько вариантов с предупреждением", async () => {
 	const s = await setup({ "Справка/_folder.md": "Только справочные материалы.", "Справка/Проект/_folder.md": "Материалы текущего проекта, включая GTD." });
 	s.folders(); s.setAnswer("Есть противоречие: конкретное описание важнее. Варианты: Справка [1] или Справка/Проект [2], в зависимости от цели."); await s.send();
 	expect(s.root.getText()).toContain("Есть противоречие"); expect(s.root.getText()).toContain("Справка/Проект → Справка/Проект/_folder.md");
@@ -306,7 +308,10 @@ it("сохраняет полный набор описаний и истори�
 });
 
 it("требует обычный индекс для смешанного режима, но позволяет переключиться на независимый поиск папок", async () => {
-	const s = await setup(); s.root.find("ai-helper-search-toggle").click(); s.mode("mixed"); await s.send();
+	const s = await setup();
+	Object.assign(s.settings, { embeddingServerUrl: "http://model/v1", embeddingModel: "embedding" });
+	s.noteSearch.configure(s.settings);
+	s.root.find("ai-helper-search-toggle").click(); s.mode("mixed"); await s.send();
 	expect(s.view.getMessages()).toEqual([]); expect(s.requests).toHaveLength(0);
 	expect(s.root.getText()).toContain(t("search-rebuild"));
 	s.mode("folders"); await s.send();

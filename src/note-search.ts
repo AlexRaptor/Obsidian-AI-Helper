@@ -1,9 +1,14 @@
-import type { ServerClient, EmbeddingErrorCode } from "./server-client";
+import { connectionUrl, type ServerClient, type EmbeddingErrorCode } from "./server-client";
 
 export interface EmbeddingConnection {
 	embeddingServerUrl: string;
 	embeddingApiKey: string;
 	embeddingModel: string;
+}
+
+/** Configuration only: availability and successful verification are not prerequisites. */
+export function isEmbeddingConfigured(connection: EmbeddingConnection | undefined): boolean {
+	return !!connection && !!connection.embeddingModel.trim() && connectionUrl(connection.embeddingServerUrl) !== undefined;
 }
 
 export type EmbeddingStatus =

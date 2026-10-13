@@ -1,6 +1,6 @@
 import type { DataAdapter, PaneType } from "obsidian";
 import type { ServerClient } from "./server-client";
-import type { EmbeddingConnection } from "./note-search";
+import { isEmbeddingConfigured, type EmbeddingConnection } from "./note-search";
 import { lexicalRelevance, repeatedFragment } from "./note-ranking";
 
 import { noteFragments, DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions, type NoteFragment } from "./note-fragments";
@@ -20,7 +20,7 @@ export function serializeNoteSources(sources: NoteSource[]): string {
 	const data = noteSourceData(sources);
 	return JSON.stringify(data.length === 1 ? data[0] : data);
 }
-export type NoteSearchErrorCode = "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed" | "search-excluded" | "search-query-failed" | "search-folder-failed";
+export type NoteSearchErrorCode = "search-setup-required" | "search-fragment-settings" | "search-storage" | "search-rebuild" | "search-note" | "search-empty" | "search-budget" | "search-failed" | "search-excluded" | "search-query-failed" | "search-folder-failed";
 export class NoteSearchError extends Error {
 	constructor(public readonly code: NoteSearchErrorCode) { super(code); }
 }
@@ -423,10 +423,11 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 
 	function schedule() {
 		clearTimeout(timer); timer = undefined;
-		if (!initialized || !automatic || paused || failed || disposed || chatPriorities.size) return;
+		if (!isEmbeddingConfigured(connection) || !initialized || !automatic || paused || failed || disposed || chatPriorities.size) return;
 		timer = setTimeout(() => { timer = undefined; void drain().catch(() => {}); }, updateDelaySeconds * 1000);
 	}
 	async function drain(manual = false): Promise<void> {
+		if (!isEmbeddingConfigured(connection)) return;
 		if (draining) { await draining; if (pending.size && !paused && !failed && (automatic || manual)) return drain(manual); return; }
 		draining = (async () => {
 			while (pending.size && !paused && !failed && !disposed && (automatic || manual)) {
@@ -528,6 +529,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		return { path, contentHash, fingerprint: identity, fragments };
 	}
 	async function run(paths: string[], full: boolean): Promise<void> {
+		if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 		const waitingVersion = revision;
 		while (chatPriorities.size) await waitForChat(waitingVersion);
 		check(waitingVersion);
@@ -695,6 +697,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			await saveUpdates(); await coverage();
 		},
 		async resume(manual = false): Promise<void> {
+			if (!isEmbeddingConfigured(connection)) { if (manual) throw new NoteSearchError("search-setup-required"); return; }
 			if (!initialized || disposed || (!manual && (!automatic || paused))) return;
 			return operate(async () => {
 				clearTimeout(timer); timer = undefined;
@@ -706,6 +709,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			});
 		},
 		async index(path: string): Promise<void> {
+			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			if (!/\.md$/i.test(path)) throw new NoteSearchError("search-note");
 			if (!allowed(path)) throw new NoteSearchError("search-excluded");
 			clearTimeout(timer); timer = undefined;
@@ -721,6 +725,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			schedule();
 		},
 		async indexVault(): Promise<void> {
+			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			if (!environment.list) throw new NoteSearchError("search-note");
 			if (disposed) return;
 			return operate(async () => {
@@ -738,11 +743,12 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			cancel(); progress = { state: "idle", completed: 0, total: environment.list?.().filter(allowed).length ?? 0 }; notify();
 			await write((store) => store.clear());
 		},
-		async rebuild(): Promise<void> { await this.clear(); await this.indexVault(); },
+		async rebuild(): Promise<void> { if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required"); await this.clear(); await this.indexVault(); },
 		async search(question: string, signal?: AbortSignal): Promise<NoteSource | null> {
 			return (await this.searchSources(question, signal))[0] ?? null;
 		},
 		async searchSources(question: string, signal?: AbortSignal, budgetBytes = DEFAULT_SOURCE_BUDGET_BYTES): Promise<NoteSource[]> {
+			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			const version = revision;
 			const threshold = minimumSimilarity;
 			let lastYield = performance.now();

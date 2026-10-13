@@ -526,6 +526,7 @@ it("defaults legacy settings to local storage and requires a localized confirmat
 	const plugin = new AiHelperPlugin({} as App, { id: "obsidian-ai-helper" } as PluginManifest);
 	await plugin.loadSettings();
 	expect(plugin.settings.indexStorageMode).toBe("local");
+	Object.assign(plugin.settings, { embeddingServerUrl: "https://server/v1", embeddingModel: "модель" });
 	const switchMode = vi.fn(async () => {});
 	Object.assign(plugin, { changeIndexStorage: switchMode });
 	for (const locale of ["en", "ru"] as const) {
@@ -893,4 +894,20 @@ it("does not overwrite a distinct case-only destination on a case-sensitive vaul
 		expect(env.entries.get("Private/_Folder.md")!.text).toBe("Different description");
 		expect(env.modal.contentEl.getText()).toContain("Private/_Folder.md");
 	} finally { env.modal.close(); env.tab.hide(); }
+});
+
+
+it("объясняет отсутствие embeddings в настройках и блокирует перестроение и смену хранения", async () => {
+	const { Modal, Notice } = await import("./helpers/obsidian");
+	setLanguage("ru"); controls.length = 0; Notice.messages.length = 0;
+	const plugin = new AiHelperPlugin({} as App, { id: "obsidian-ai-helper" } as PluginManifest);
+	plugin.settings = { ...DEFAULT_SETTINGS };
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const previousModals = Modal.opened.length;
+	await controls.find(control => control.name === t("index-storage-mode"))!.dropdown!.change("file");
+	await controls.find(control => control.name === t("search-vault-index"))!.button!.click();
+	expect(Modal.opened).toHaveLength(previousModals);
+	expect(plugin.settings.indexStorageMode).toBe("local");
+	expect(Notice.messages).toEqual(Array(2).fill(t("search-setup-required")));
+	tab.hide();
 });
