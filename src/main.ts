@@ -138,7 +138,10 @@ export class AiHelperPlugin extends Plugin {
 			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (!view?.file || view.file.extension !== "md") { new Notice(this.t("search-note")); return; }
 			const file = view.file;
-			const text = { getValue: () => {
+			const text = { save: async () => {
+				if (view.file !== file) throw new Error("The editor is showing another note");
+				await view.save();
+			}, getValue: () => {
 				if (view.file !== file) throw new Error("The editor is showing another note");
 				return view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
 			} };
@@ -402,7 +405,7 @@ export class AiHelperPlugin extends Plugin {
 		view?.clearConversation();
 	}
 
-	async suggestNoteFolder(file: TFile, editor: Pick<Editor, "getValue">): Promise<void> {
+	async suggestNoteFolder(file: TFile, editor: Pick<Editor, "getValue"> & { save?: () => Promise<void> }): Promise<void> {
 		const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_NOTE_REVIEW, "right", { active: true, reveal: true });
 		if (!this.unloading && leaf.view instanceof NoteReviewView) await leaf.view.analyze(file, editor);
 	}

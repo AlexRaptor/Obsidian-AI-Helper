@@ -34,12 +34,21 @@ async function setup() {
 	const markdown = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file, editor, getMode: (): "source" | "preview" => "source", getViewData: () => text });
 	const events = new Map<string, Array<(...args: any[]) => void>>();
 	const on = (name: string, cb: (...args: any[]) => void) => { events.set(name, [...events.get(name) ?? [], cb]); return {}; };
-	const openFile = vi.fn(async () => {}), create = vi.fn(), renameFile = vi.fn(), remove = vi.fn();
+	const openFile = vi.fn(async () => {}), create = vi.fn(), remove = vi.fn();
+	Object.assign(markdown, { save: async () => { texts.set(file.path, text); } });
+	const renameFile = vi.fn(async (f: TFile, path: string) => {
+		if (files.has(path) || folders.has(path)) throw new Error("Путь занят");
+		const oldPath = f.path, content = texts.get(oldPath)!;
+		files.delete(oldPath); texts.delete(oldPath);
+		Object.assign(f, { path, parent: folders.get(path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "") });
+		files.set(path, f); texts.set(path, content);
+		events.get("rename")?.forEach(cb => cb(f, oldPath));
+	});
 	const read = vi.fn(async (f: TFile) => texts.get(f.path)!);
 	let view: NoteReviewView;
 	const leaf = { get view() { return view; } };
 	const ensureSideLeaf = vi.fn(async () => leaf);
-	const app = { vault: { on, getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path), read, create, delete: remove }, fileManager: { renameFile }, workspace: { on, getActiveViewOfType: () => markdown, getLeavesOfType: () => [], ensureSideLeaf, getLeaf: () => ({ openFile }), trigger: vi.fn() } } as unknown as App;
+	const app = { vault: { on, adapter: { exists: vi.fn(async (path: string) => files.has(path) || folders.has(path)) }, getMarkdownFiles: () => [...files.values()], getAbstractFileByPath: (path: string) => files.get(path) ?? folders.get(path), read, create, delete: remove }, fileManager: { renameFile }, workspace: { on, getActiveViewOfType: () => markdown, getLeavesOfType: () => [], ensureSideLeaf, getLeaf: () => ({ openFile }), trigger: vi.fn() } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, {} as PluginManifest);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, language: "ru", serverUrl: "http://model/v1", model: "диалог", contextWindow: "32768", excludedFolders: ["Личное"], systemPrompt: "НЕ ОТПРАВЛЯТЬ" });
 	vi.spyOn(plugin.serverClient, "listModels").mockResolvedValue({ ok: true, value: ["диалог"] });
@@ -53,7 +62,7 @@ async function setup() {
 	const root = view.contentEl as unknown as TestElement;
 	const start = async () => { command.callback!(); await flushPromises(); await vi.waitFor(() => expect(root.find("ai-helper-review-stop").disabled).toBe(true)); };
 	const emit = (name: string, ...args: any[]) => events.get(name)?.forEach(cb => cb(...args));
-	return { plugin, view, root, start, chat, ensureSideLeaf, file, files, folders, texts, editor, markdown, command, hoverSource, trigger: app.workspace.trigger as ReturnType<typeof vi.fn>, read, openFile, create, renameFile, remove, emit, edit(value: string) { text = value; emit("editor-change", editor, { file }); } };
+	return { app, plugin, view, root, start, chat, ensureSideLeaf, file, files, folders, texts, editor, markdown, command, hoverSource, trigger: app.workspace.trigger as ReturnType<typeof vi.fn>, read, openFile, create, renameFile, remove, emit, edit(value: string) { text = value; emit("editor-change", editor, { file }); } };
 }
 
 it("команда открывает отдельную правую вкладку и передаёт редактор, свойства и все содержательные описания без индекса", async () => {
@@ -113,6 +122,7 @@ it.each([
 	const s = await setup(); s.chat.mockResolvedValueOnce({ ok: true, value: { content } }); await s.start();
 	expect(s.root.getText()).toContain("некорректную рекомендацию");
 	expect(() => s.root.find("ai-helper-review-source")).toThrow();
+	expect(() => s.root.find("ai-helper-review-move")).toThrow();
 	expect(s.create).not.toHaveBeenCalled(); expect(s.renameFile).not.toHaveBeenCalled(); expect(s.openFile).not.toHaveBeenCalled();
 	await s.view.onClose();
 });
@@ -120,6 +130,7 @@ it.each([
 it.each(["stay", "none", "insufficient"] as const)("показывает допустимый исход %s без кандидатов", async outcome => {
 	const s = await setup(); s.chat.mockResolvedValueOnce({ ok: true, value: { content: JSON.stringify({ outcome, explanation: "Обоснование результата", candidates: [] }) } }); await s.start();
 	expect(s.root.getText()).toContain("Обоснование результата"); expect(() => s.root.find("ai-helper-review-source")).toThrow();
+	expect(() => s.root.find("ai-helper-review-move")).toThrow();
 	await s.view.onClose();
 });
 
@@ -227,4 +238,118 @@ it("не показывает превью описания, которое из
 	const s = await setup(); await s.start(); s.texts.set("Знания/_folder.md", "Другие критерии");
 	s.root.find("ai-helper-review-source").dispatchEvent({ type: "mouseover", stopPropagation() {} } as any); await flushPromises();
 	expect(s.trigger).not.toHaveBeenCalledWith("hover-link", expect.anything()); await s.view.onClose();
+});
+
+
+it("переносит только после явного действия, сохраняет текст и свойства редактора", async () => {
+	const s = await setup(); await s.start();
+	expect(s.files.has("Личное/План.md")).toBe(true);
+	s.root.find("ai-helper-review-move").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Заметка перенесена"));
+	expect(s.files.has("Личное/План.md")).toBe(false);
+	expect(s.files.get("Знания/План.md")).toBe(s.file);
+	expect(s.texts.get("Знания/План.md")).toBe("---\nстатус: активный\n---\nЛичный план изучения GTD [[Секрет]]");
+	expect(s.renameFile).toHaveBeenCalledTimes(1);
+	await s.view.onClose();
+});
+
+it("требует отдельного выбора прежних рекомендаций и переносит последнюю редакцию без нового анализа", async () => {
+	const s = await setup(); await s.start();
+	s.edit("---\nстатус: завершён\n---\nИзменённый пользователем текст [[Секрет]]");
+	expect(() => s.root.find("ai-helper-review-move")).toThrow();
+	s.root.find("ai-helper-review-move-old").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Заметка перенесена"));
+	expect(s.texts.get("Знания/План.md")).toBe("---\nстатус: завершён\n---\nИзменённый пользователем текст [[Секрет]]");
+	expect(s.chat).toHaveBeenCalledTimes(1); await s.view.onClose();
+});
+
+it.each(["описание", "родитель", "невыбранное описание", "пустое описание", "настройка", "файл", "папка"])("останавливает перенос при изменении: %s", async change => {
+	const s = await setup(); await s.start();
+	if (change === "описание") s.texts.set("Знания/_folder.md", "Новые критерии");
+	if (change === "родитель") s.texts.set("_folder.md", "Новые общие правила");
+	if (change === "невыбранное описание") s.texts.set("Личное/_folder.md", "Справка тоже подходит");
+	if (change === "пустое описание") s.texts.set("Пустая/_folder.md", "Теперь есть назначение");
+	if (change === "настройка") s.plugin.settings.folderDescriptionName = "Правила.md";
+	if (change === "файл") s.files.delete(s.file.path);
+	if (change === "папка") s.folders.delete("Знания");
+	s.edit("Изменённая заметка"); s.root.find("ai-helper-review-move-old").click(); await flushPromises();
+	expect(s.renameFile).not.toHaveBeenCalled();
+	expect(s.root.getText()).toContain(change === "файл" ? "Заметка больше недоступна" : change === "папка" ? "Папка назначения больше не существует" : "Описание изменилось");
+	expect(s.texts.get("Личное/План.md")).toBe("Сохранённый текст"); await s.view.onClose();
+});
+
+it("обновляет рекомендации после редактирования и переносит новую версию обычной кнопкой", async () => {
+	const s = await setup(); await s.start(); s.edit("Новая справка о методе");
+	s.root.find("ai-helper-review-refresh").click(); await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(2)); await flushPromises();
+	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toBe("Новая справка о методе");
+	s.root.find("ai-helper-review-move").click(); await vi.waitFor(() => expect(s.files.has("Знания/План.md")).toBe(true));
+	expect(s.texts.get("Знания/План.md")).toBe("Новая справка о методе"); await s.view.onClose();
+});
+
+it("при конфликте сохраняет оба файла и открывает существующий по отдельной кнопке", async () => {
+	const s = await setup(); await s.start();
+	const existing = Object.assign(new TFile(), { path: "Знания/План.md", name: "План.md" });
+	s.files.set(existing.path, existing); s.texts.set(existing.path, "Существующий файл");
+	s.root.find("ai-helper-review-move").click(); await vi.waitFor(() => expect(s.root.getText()).toContain("Перенос остановлен"));
+	expect(s.texts.get(existing.path)).toBe("Существующий файл"); expect(s.texts.get(s.file.path)).toBe("Сохранённый текст");
+	expect(s.renameFile).not.toHaveBeenCalled(); expect(s.openFile).not.toHaveBeenCalled();
+	s.root.find("ai-helper-review-open-conflict").click(); await flushPromises(); expect(s.openFile).toHaveBeenCalledWith(existing);
+	await s.view.onClose();
+});
+
+it("не сообщает успех при ошибке переноса и позволяет повторить", async () => {
+	const s = await setup(); await s.start(); s.renameFile.mockRejectedValueOnce(new Error("Ошибка диска"));
+	s.root.find("ai-helper-review-move").click(); await vi.waitFor(() => expect(s.root.getText()).toContain("Не удалось перенести"));
+	expect(s.files.get("Личное/План.md")).toBe(s.file); expect(s.files.has("Знания/План.md")).toBe(false);
+	expect(s.root.getText()).not.toContain("Заметка перенесена");
+	s.root.find("ai-helper-review-move").click(); await vi.waitFor(() => expect(s.root.getText()).toContain("Заметка перенесена")); await s.view.onClose();
+});
+
+it.each(["/", "Личное"])("не делает фиктивный перенос и поддерживает корень: %s", async folder => {
+	const s = await setup(); s.chat.mockResolvedValueOnce({ ok: true, value: { content: JSON.stringify({ outcome: "recommendations", explanation: "Совет", candidates: [{ folder, explanation: "Подходит" }] }) } }); await s.start();
+	s.root.find("ai-helper-review-move").click(); await flushPromises();
+	if (folder === "/") { await vi.waitFor(() => expect(s.files.get("План.md")).toBe(s.file)); expect(s.texts.get("План.md")).toContain("Личный план"); }
+	else { await vi.waitFor(() => expect(s.root.getText()).toContain("Оставить в текущей папке")); expect(s.renameFile).not.toHaveBeenCalled(); }
+	await s.view.onClose();
+});
+
+it("не переносит после закрытия панели во время проверки и не выполняет двойной перенос", async () => {
+	const s = await setup(); await s.start(); const pending = deferred<string>(); s.read.mockReturnValueOnce(pending.promise);
+	const button = s.root.find("ai-helper-review-move"); button.click(); button.click();
+	await s.view.onClose(); pending.resolve(s.texts.get("_folder.md")!); await flushPromises();
+	expect(s.renameFile).not.toHaveBeenCalled(); expect(s.files.get("Личное/План.md")).toBe(s.file);
+});
+
+
+it("отклоняет новое содержательное описание, появившееся при сохранении редактора", async () => {
+	const s = await setup(); await s.start();
+	Object.assign(s.markdown, { save: async () => { s.texts.set("Пустая/_folder.md", "Новое назначение"); } });
+	s.root.find("ai-helper-review-move").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Описание изменилось"));
+	expect(s.renameFile).not.toHaveBeenCalled(); await s.view.onClose();
+});
+
+it("завершение предыдущего переноса не стирает рекомендации другой заметки", async () => {
+	const s = await setup(); await s.start();
+	const pending = deferred<void>(), rename = s.renameFile.getMockImplementation()!;
+	s.renameFile.mockImplementationOnce(async (file, path) => { await pending.promise; await rename(file, path); });
+	s.root.find("ai-helper-review-move").click(); await vi.waitFor(() => expect(s.renameFile).toHaveBeenCalledTimes(1));
+	const other = s.files.get("Секрет.md")!;
+	s.chat.mockResolvedValueOnce({ ok: true, value: { content: '{"outcome":"none","explanation":"Результат другой заметки","candidates":[]}' } });
+	await s.view.analyze(other, { getValue: () => "Другая заметка" });
+	pending.resolve(); await vi.waitFor(() => expect(s.files.has("Знания/План.md")).toBe(true)); await flushPromises();
+	expect(s.root.getText()).toContain("Результат другой заметки"); expect(s.root.getText()).not.toContain("Заметка перенесена"); await s.view.onClose();
+});
+
+
+it("изменение описания во время последней проверки конфликта останавливает перенос по прежним рекомендациям", async () => {
+	const s = await setup(); await s.start(); s.edit("Новая редакция заметки");
+	const pending = deferred<boolean>();
+	const exists = vi.mocked(s.app.vault.adapter.exists);
+	exists.mockResolvedValueOnce(false).mockReturnValueOnce(pending.promise);
+	s.root.find("ai-helper-review-move-old").click(); await vi.waitFor(() => expect(exists).toHaveBeenCalledTimes(2));
+	s.texts.set("Знания/_folder.md", "Новые критерии"); s.emit("modify", s.files.get("Знания/_folder.md"));
+	pending.resolve(false); await flushPromises();
+	expect(s.renameFile).not.toHaveBeenCalled(); expect(s.root.getText()).toContain("Описание изменилось");
+	expect(s.files.get("Личное/План.md")).toBe(s.file); await s.view.onClose();
 });

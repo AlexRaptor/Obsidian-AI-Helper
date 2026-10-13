@@ -12,11 +12,13 @@ class ReviewError extends Error {
 	constructor(readonly code: LocaleKey) { super(code); }
 }
 
+type ReviewEditor = Pick<Editor, "getValue"> & { save?: () => Promise<void> };
+
 type NoteSnapshot = { path: string; title: string; text: string; properties: Record<string, unknown> };
 type Recommendation = { source: FolderSource; explanation: string };
 type ReviewResult = { outcome: "recommendations" | "stay" | "none" | "insufficient"; explanation: string; candidates: Recommendation[] };
 
-function snapshot(file: TFile, editor: Pick<Editor, "getValue">): NoteSnapshot {
+function snapshot(file: TFile, editor: ReviewEditor): NoteSnapshot {
 	const text = editor.getValue();
 	const yaml = text.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)(?:\r?\n|$)/);
 	const properties: unknown = yaml ? parseYaml(yaml[1]) : {};
@@ -44,7 +46,7 @@ function parseResult(content: string, sources: FolderSource[]): ReviewResult {
 export class NoteReviewView extends ItemView implements HoverParent {
 	hoverPopover: HoverPopover | null = null;
 	private renderRevision = 0;
-	private target?: { file: TFile; editor: Pick<Editor, "getValue"> };
+	private target?: { file: TFile; editor: ReviewEditor };
 	private analyzed?: NoteSnapshot;
 	private request?: AbortController;
 	private result?: ReviewResult;
@@ -52,6 +54,9 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	private stale = false;
 	private status: LocaleKey = "review-empty";
 	private closed = false;
+	private moving = false;
+	private conflictPath?: string;
+	private descriptionRevision = 0;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: AiHelperPlugin) { super(leaf); }
 	getViewType(): string { return VIEW_TYPE_NOTE_REVIEW; }
@@ -62,9 +67,9 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		this.closed = false;
 		this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => { if (info.file === this.target?.file) this.changed(); }));
 		this.registerEvent(this.app.vault.on("create", file => this.descriptionsChanged(file.path)));
-		this.registerEvent(this.app.vault.on("modify", file => { if (file === this.target?.file) this.changed(); else this.descriptionsChanged(file.path); }));
-		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (file === this.target?.file) this.changed(); else { this.descriptionsChanged(oldPath); this.descriptionsChanged(file.path); } }));
-		this.registerEvent(this.app.vault.on("delete", file => { if (file === this.target?.file) { this.stale = true; this.stop(); } else this.descriptionsChanged(file.path); }));
+		this.registerEvent(this.app.vault.on("modify", file => { if (file === this.target?.file) this.changed(); this.descriptionsChanged(file.path); }));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (file === this.target?.file) this.changed(); this.descriptionsChanged(oldPath); this.descriptionsChanged(file.path); }));
+		this.registerEvent(this.app.vault.on("delete", file => { if (file === this.target?.file) { this.stale = true; this.stop(); } this.descriptionsChanged(file.path); }));
 		this.render();
 	}
 	async onClose(): Promise<void> { this.hoverPopover?.unload(); this.hoverPopover = null; this.closed = true; this.request?.abort(); this.request = undefined; this.target = undefined; }
@@ -77,10 +82,10 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	}
 	private descriptionsChanged(path: string): void {
 		if (this.analyzed && (path.split("/").pop() === this.plugin.settings.folderDescriptionName ||
-			this.sources.some(source => source.descriptions.some(description => description.path === path || description.path.startsWith(`${path}/`))))) { this.stale = true; this.render(); }
+			this.sources.some(source => source.descriptions.some(description => description.path === path || description.path.startsWith(`${path}/`))))) { this.descriptionRevision++; this.stale = true; this.render(); }
 	}
 
-	async analyze(file: TFile, editor: Pick<Editor, "getValue">): Promise<void> {
+	async analyze(file: TFile, editor: ReviewEditor): Promise<void> {
 		this.target = { file, editor };
 		await this.refresh();
 	}
@@ -92,7 +97,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		if (!this.target || this.closed) return;
 		this.request?.abort();
 		const active = new AbortController(); this.request = active;
-		this.result = undefined; this.sources = []; this.stale = false; this.status = "review-loading";
+		this.conflictPath = undefined; this.result = undefined; this.sources = []; this.stale = false; this.status = "review-loading";
 		this.render();
 		try {
 			const { file, editor } = this.target;
@@ -134,6 +139,62 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		}
 	}
 
+	private async validateDescriptions(): Promise<void> {
+		if (JSON.stringify(await this.plugin.folderDescriptions.sources()) !== JSON.stringify(this.sources)) throw new ReviewError("review-source-changed");
+		for (const source of this.sources) await this.plugin.folderDescriptions.validateSource(source);
+	}
+
+	private async move(candidate: Recommendation, allowOld: boolean): Promise<void> {
+		if (this.moving || this.request || !this.target || !this.result?.candidates.includes(candidate)) return;
+		const target = this.target, result = this.result;
+		const descriptionRevision = this.descriptionRevision, descriptionName = this.plugin.settings.folderDescriptionName;
+		const current = () => !this.closed && this.target === target && this.result === result;
+		const requireCurrentInputs = () => {
+			if (this.descriptionRevision !== descriptionRevision || this.plugin.settings.folderDescriptionName !== descriptionName) throw new ReviewError("review-source-changed");
+			if (!allowOld && JSON.stringify(snapshot(target.file, target.editor)) !== JSON.stringify(this.analyzed)) {
+				this.stale = true; throw new ReviewError("review-stale");
+			}
+		};
+		this.conflictPath = undefined;
+		this.moving = true; this.render();
+		try {
+			const { file, editor } = this.target;
+			if (this.app.vault.getAbstractFileByPath(file.path) !== file) throw new ReviewError("review-missing");
+			const folderPath = candidate.source.folderPath === "/" ? "" : candidate.source.folderPath;
+			if (!(this.app.vault.getAbstractFileByPath(folderPath) instanceof TFolder)) throw new ReviewError("review-folder-missing");
+			requireCurrentInputs();
+			await this.validateDescriptions();
+			if (!current()) return;
+			requireCurrentInputs();
+			const path = `${folderPath ? `${folderPath}/` : ""}${file.name}`;
+			if (path === file.path) { this.status = "review-stay"; return; }
+			if (this.app.vault.getAbstractFileByPath(path) || await this.app.vault.adapter.exists(path)) {
+				this.conflictPath = path; throw new ReviewError("review-conflict");
+			}
+			if (!current()) return;
+			requireCurrentInputs();
+			await editor.save?.();
+			await this.validateDescriptions();
+			if (!current()) return;
+			requireCurrentInputs();
+			if (this.app.vault.getAbstractFileByPath(file.path) !== file) throw new ReviewError("review-missing");
+			if (!(this.app.vault.getAbstractFileByPath(folderPath) instanceof TFolder)) throw new ReviewError("review-folder-missing");
+			const finalPath = `${folderPath ? `${folderPath}/` : ""}${file.name}`;
+			if (finalPath !== path) { this.stale = true; throw new ReviewError("review-stale"); }
+			if (this.app.vault.getAbstractFileByPath(path) || await this.app.vault.adapter.exists(path)) {
+				this.conflictPath = path; throw new ReviewError("review-conflict");
+			}
+			if (!current()) return;
+			requireCurrentInputs();
+			await this.app.fileManager.renameFile(file, path);
+			if (!current()) return;
+			this.result = undefined; this.stale = false; this.status = "review-moved";
+		} catch (error) {
+			if (!current()) return;
+			this.status = error instanceof NoteSearchError ? "review-source-changed" : error instanceof ReviewError ? error.code : "review-move-error";
+		} finally { this.moving = false; this.render(); }
+	}
+
 	refreshLanguage(): void { this.render(); }
 	private render(): void {
 		if (this.closed) return;
@@ -147,18 +208,33 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		}
 		const actions = root.createDiv({ cls: "ai-helper-review-actions" });
 		const refresh = actions.createEl("button", { cls: "ai-helper-review-refresh", text: this.plugin.t("review-refresh") });
-		refresh.disabled = !this.target; refresh.addEventListener("click", () => { void this.refresh(); });
+		refresh.disabled = !this.target || this.moving; refresh.addEventListener("click", () => { void this.refresh(); });
 		const stop = actions.createEl("button", { cls: "ai-helper-review-stop", text: this.plugin.t("review-stop") });
 		stop.disabled = !this.request; stop.addEventListener("click", () => this.stop());
 		root.createDiv({ cls: this.request ? "ai-helper-thinking" : "", text: this.plugin.t(this.status), attr: { role: "status", "aria-live": "polite" } });
+		if (this.conflictPath) {
+			const path = this.conflictPath;
+			root.createDiv({ text: path });
+			const open = root.createEl("button", { cls: "ai-helper-review-open-conflict", text: this.plugin.t("review-open-conflict") });
+			open.addEventListener("click", () => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (file instanceof TFile) void this.app.workspace.getLeaf(false).openFile(file).catch(() => { this.status = "review-open-error"; this.render(); });
+				else { this.status = "review-conflict-missing"; this.render(); }
+			});
+		}
 		if (this.stale) root.createDiv({ cls: "ai-helper-review-stale", text: this.plugin.t("review-stale"), attr: { role: "status" } });
 		if (!this.result) return;
 		if (this.result.outcome !== "recommendations") root.createEl("h3", { text: this.plugin.t(`review-${this.result.outcome}`) });
 		root.createEl("p", { text: this.result.explanation });
-		for (const { source, explanation } of this.result.candidates) {
+		for (const candidate of this.result.candidates) {
+			const { source, explanation } = candidate;
 			const item = root.createDiv({ cls: "ai-helper-review-candidate" });
 			item.createEl("h3", { text: source.folderPath });
 			item.createEl("p", { text: explanation });
+			const allowOld = this.stale;
+			const move = item.createEl("button", { cls: this.stale ? "ai-helper-review-move-old" : "ai-helper-review-move", text: this.plugin.t(this.stale ? "review-move-old" : "review-move") });
+			move.disabled = this.moving || !!this.request;
+			move.addEventListener("click", () => { void this.move(candidate, allowOld); });
 			const link = item.createEl("a", { cls: "internal-link ai-helper-review-source", text: source.path, attr: { href: "#", "data-href": source.path } });
 			let hovered = false;
 			link.addEventListener("mouseleave", () => { hovered = false; });
