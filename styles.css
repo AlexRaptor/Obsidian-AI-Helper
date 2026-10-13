@@ -478,3 +478,12 @@
 	gap: var(--size-4-2);
 	margin-block: var(--size-4-3);
 }
+
+.ai-helper-review-status[data-state="error"] {
+	color: var(--text-error);
+}
+
+.ai-helper-review-status[data-state="info"],
+.ai-helper-review-stale {
+	color: var(--color-blue);
+}

@@ -211,7 +211,9 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		refresh.disabled = !this.target || this.moving; refresh.addEventListener("click", () => { void this.refresh(); });
 		const stop = actions.createEl("button", { cls: "ai-helper-review-stop", text: this.plugin.t("review-stop") });
 		stop.disabled = !this.request; stop.addEventListener("click", () => this.stop());
-		root.createDiv({ cls: this.request ? "ai-helper-thinking" : "", text: this.plugin.t(this.status), attr: { role: "status", "aria-live": "polite" } });
+		const informational = ["review-empty", "review-loading", "review-stopped", "review-ready", "review-stale", "review-stay", "review-moved"].includes(this.status);
+		root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: this.plugin.t(this.status),
+			attr: { role: "status", "aria-live": "polite", "data-state": informational ? "info" : "error" } });
 		if (this.conflictPath) {
 			const path = this.conflictPath;
 			root.createDiv({ text: path });
