@@ -100,6 +100,9 @@ export class AiHelperPlugin extends Plugin {
 			this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
 				if (file instanceof TFolder) {
+					menu.addItem(item => item.setTitle(this.t("review-folder")).setIcon("folder-search").onClick(() => {
+						if (!this.unloading) void this.reviewFolder(file).catch(() => showStatusNotice(this.t("review-error"), "error"));
+					}));
 					menu.addItem(item => item.setTitle(this.t("folder-description-create")).setIcon("file-plus").onClick(() => {
 						if (!this.unloading) void this.folderDescriptions.createAndOpen(file).catch(() => showStatusNotice(this.t("folder-description-error"), "error"));
 					}));
@@ -404,6 +407,11 @@ export class AiHelperPlugin extends Plugin {
 			if (leaf.view instanceof ChatView) view = leaf.view;
 		}
 		view?.clearConversation();
+	}
+
+	async reviewFolder(folder: TFolder): Promise<void> {
+		const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_NOTE_REVIEW, "right", { active: true, reveal: true });
+		if (!this.unloading && leaf.view instanceof NoteReviewView) leaf.view.prepareFolder(folder);
 	}
 
 	async suggestNoteFolder(file: TFile, editor: Pick<Editor, "getValue"> & { save?: () => Promise<void> }): Promise<void> {

@@ -1,4 +1,4 @@
-import { ItemView, TFile, TFolder, parseYaml, type Editor, type HoverParent, type HoverPopover, type WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownView, TFile, TFolder, parseYaml, type Editor, type HoverParent, type HoverPopover, type WorkspaceLeaf } from "obsidian";
 import { setStatusTone, type StatusTone } from "./ui-status";
 import type { AiHelperPlugin } from "./main";
 import { folderSourceData, type FolderSource } from "./folder-descriptions";
@@ -13,7 +13,7 @@ class ReviewError extends Error {
 	constructor(readonly code: LocaleKey) { super(code); }
 }
 
-type ReviewEditor = Pick<Editor, "getValue"> & { save?: () => Promise<void> };
+type ReviewEditor = Pick<Editor, "getValue"> & { save?: () => Promise<void>; read?: () => Promise<void> };
 
 type NoteSnapshot = { path: string; title: string; text: string; properties: Record<string, unknown> };
 type Recommendation = { source: FolderSource; explanation: string };
@@ -58,6 +58,102 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	private moving = false;
 	private conflictPath?: string;
 	private descriptionRevision = 0;
+	private preview?: { folder: TFolder; recursive: boolean };
+	private queue?: { files: TFile[]; index: number; moved: number; skipped: number; deleted: string[]; done: boolean };
+	private opening = false;
+	private navigationRevision = 0;
+
+	prepareFolder(folder: TFolder): void {
+		if (this.moving) return;
+		this.resetRun();
+		this.preview = { folder, recursive: false };
+		this.render();
+	}
+
+	private resetRun(): void {
+		this.navigationRevision++;
+		this.request?.abort(); this.request = undefined;
+		this.preview = undefined; this.queue = undefined; this.target = undefined;
+		this.result = undefined; this.analyzed = undefined; this.stale = false; this.opening = false;
+		this.conflictPath = undefined; this.status = "review-empty";
+	}
+
+	private folderFiles(): TFile[] {
+		if (!this.preview) return [];
+		const { folder, recursive } = this.preview;
+		const prefix = folder.path && folder.path !== "/" ? `${folder.path}/` : "";
+		return this.app.vault.getMarkdownFiles().filter(file => file.name !== this.plugin.settings.folderDescriptionName &&
+			file.path.startsWith(prefix) && (recursive || !file.path.slice(prefix.length).includes("/")))
+			.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+	}
+
+	private async startQueue(): Promise<void> {
+		if (!this.preview || this.closed) return;
+		this.queue = { files: this.folderFiles(), index: 0, moved: 0, skipped: 0, deleted: [], done: false };
+		this.preview = undefined;
+		await this.openNext();
+	}
+
+	private finishQueue(): void {
+		if (!this.queue || this.moving) return;
+		this.navigationRevision++; this.opening = false;
+		this.request?.abort(); this.request = undefined;
+		this.queue.done = true; this.target = undefined; this.result = undefined; this.stale = false;
+		this.conflictPath = undefined; this.render();
+	}
+
+	private async openNext(): Promise<void> {
+		const queue = this.queue;
+		if (!queue || queue.done || this.closed) return;
+		this.request?.abort(); this.request = undefined;
+		this.target = undefined; this.result = undefined; this.analyzed = undefined; this.stale = false; this.conflictPath = undefined;
+		const revision = ++this.navigationRevision;
+		const current = () => !this.closed && this.queue === queue && !queue.done && revision === this.navigationRevision;
+		while (queue.index < queue.files.length) {
+			const file = queue.files[queue.index];
+			if (this.app.vault.getAbstractFileByPath(file.path) !== file) {
+				queue.deleted.push(file.path); queue.skipped++; queue.index++; continue;
+			}
+			this.opening = true; this.status = "review-opening"; this.render();
+			try {
+				const leaf = this.app.workspace.getLeavesOfType("markdown").find(leaf => leaf.view instanceof MarkdownView && leaf.view.file === file)
+					?? this.app.workspace.getLeaf(false);
+				await leaf.openFile(file);
+				if (!current()) return;
+				if (this.app.vault.getAbstractFileByPath(file.path) !== file) {
+					queue.deleted.push(file.path); queue.skipped++; queue.index++; continue;
+				}
+				let diskText = "";
+				const markdown = () => {
+					const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+					if (active?.file === file) return active;
+					return [leaf, ...this.app.workspace.getLeavesOfType("markdown")].map(item => item.view)
+						.find((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
+				};
+				this.target = { file, editor: {
+					read: async () => { if (!markdown()) diskText = await this.app.vault.read(file); },
+					getValue: () => {
+						const view = markdown();
+						if (view) diskText = view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
+						return diskText;
+					},
+					save: async () => { await markdown()?.save(); },
+				} };
+				this.opening = false;
+				await this.refresh();
+			} catch {
+				if (current()) { this.opening = false; this.status = "review-error"; this.render(); }
+			}
+			return;
+		}
+		this.opening = false; this.finishQueue();
+	}
+
+	private async skip(): Promise<void> {
+		if (!this.queue || this.queue.done || this.moving || this.opening) return;
+		this.queue.skipped++; this.queue.index++;
+		await this.openNext();
+	}
 
 	constructor(leaf: WorkspaceLeaf, private plugin: AiHelperPlugin) { super(leaf); }
 	getViewType(): string { return VIEW_TYPE_NOTE_REVIEW; }
@@ -73,7 +169,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		this.registerEvent(this.app.vault.on("delete", file => { if (file === this.target?.file) { this.stale = true; this.stop(); } this.descriptionsChanged(file.path); }));
 		this.render();
 	}
-	async onClose(): Promise<void> { this.hoverPopover?.unload(); this.hoverPopover = null; this.closed = true; this.request?.abort(); this.request = undefined; this.target = undefined; }
+	async onClose(): Promise<void> { this.hoverPopover?.unload(); this.hoverPopover = null; this.closed = true; this.request?.abort(); this.request = undefined; this.target = undefined; this.resetRun(); }
 
 	private changed(): void {
 		if (!this.analyzed || !this.target || this.closed) return;
@@ -82,11 +178,13 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		this.render();
 	}
 	private descriptionsChanged(path: string): void {
+		if (this.preview) this.render();
 		if (this.analyzed && (path.split("/").pop() === this.plugin.settings.folderDescriptionName ||
 			this.sources.some(source => source.descriptions.some(description => description.path === path || description.path.startsWith(`${path}/`))))) { this.descriptionRevision++; this.stale = true; this.render(); }
 	}
 
 	async analyze(file: TFile, editor: ReviewEditor): Promise<void> {
+		this.resetRun();
 		this.target = { file, editor };
 		await this.refresh();
 	}
@@ -103,6 +201,8 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		try {
 			const { file, editor } = this.target;
 			if (this.app.vault.getAbstractFileByPath(file.path) !== file) throw new ReviewError("review-missing");
+			await editor.read?.();
+			if (this.request !== active) return;
 			const note = snapshot(file, editor); this.analyzed = note;
 			const settings = { ...this.plugin.settings };
 			const sources = await this.plugin.folderDescriptions.sources(active.signal);
@@ -163,6 +263,8 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			if (this.app.vault.getAbstractFileByPath(file.path) !== file) throw new ReviewError("review-missing");
 			const folderPath = candidate.source.folderPath === "/" ? "" : candidate.source.folderPath;
 			if (!(this.app.vault.getAbstractFileByPath(folderPath) instanceof TFolder)) throw new ReviewError("review-folder-missing");
+			await editor.read?.();
+			if (!current()) return;
 			requireCurrentInputs();
 			await this.validateDescriptions();
 			if (!current()) return;
@@ -190,6 +292,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			await this.app.fileManager.renameFile(file, path);
 			if (!current()) return;
 			this.result = undefined; this.stale = false; this.status = "review-moved";
+			if (this.queue && !this.queue.done) { this.queue.moved++; this.queue.index++; this.moving = false; await this.openNext(); }
 		} catch (error) {
 			if (!current()) return;
 			this.status = error instanceof NoteSearchError ? "review-source-changed" : error instanceof ReviewError ? error.code : "review-move-error";
@@ -203,18 +306,45 @@ export class NoteReviewView extends ItemView implements HoverParent {
 		this.hoverPopover?.unload(); this.hoverPopover = null;
 		const root = this.contentEl; root.empty(); root.addClass("ai-helper-note-review");
 		root.createEl("h2", { text: this.plugin.t("review-title") });
-		if (this.target) {
-			root.createEl("h3", { text: this.target.file.basename });
-			root.createDiv({ cls: "ai-helper-review-path", text: this.target.file.path });
+		if (this.preview) {
+			root.createDiv({ cls: "ai-helper-review-path", text: this.preview.folder.path || "/" });
+			const label = root.createEl("label");
+			const checkbox = label.createEl("input", { cls: "ai-helper-review-recursive", attr: { type: "checkbox" } });
+			checkbox.checked = this.preview.recursive;
+			label.createSpan({ text: this.plugin.t("review-recursive") });
+			checkbox.addEventListener("change", () => { if (this.preview) { this.preview.recursive = checkbox.checked; this.render(); } });
+			root.createDiv({ text: `${this.plugin.t("review-count")} ${this.folderFiles().length}` });
+			const start = root.createEl("button", { cls: "mod-cta ai-helper-review-start", text: this.plugin.t("review-start") });
+			start.disabled = this.folderFiles().length === 0;
+			start.addEventListener("click", () => { void this.startQueue(); });
+			return;
+		}
+		if (this.queue) {
+			const queue = this.queue;
+			root.createDiv({ cls: "ai-helper-review-progress", text: `${this.plugin.t("review-moved-count")} ${queue.moved}; ${this.plugin.t("review-skipped-count")} ${queue.skipped}; ${this.plugin.t("review-remaining-count")} ${queue.files.length - queue.index}`, attr: { role: "status", "aria-live": "polite" } });
+			if (queue.deleted.length) root.createDiv({ cls: "ai-helper-review-path", text: `${this.plugin.t("review-deleted")} ${queue.deleted.join(", ")}` });
+			if (queue.done) { root.createEl("p", { text: this.plugin.t("review-summary") }); return; }
+			const actions = root.createDiv({ cls: "ai-helper-review-actions" });
+			const skip = actions.createEl("button", { cls: "ai-helper-review-skip", text: this.plugin.t("review-skip") });
+			skip.disabled = this.moving || this.opening; skip.addEventListener("click", () => { void this.skip(); });
+			const finish = actions.createEl("button", { cls: "ai-helper-review-finish", text: this.plugin.t("review-finish") });
+			finish.disabled = this.moving; finish.addEventListener("click", () => this.finishQueue());
+		}
+		const displayedFile = this.target?.file ?? (this.queue && !this.queue.done ? this.queue.files[this.queue.index] : undefined);
+		if (displayedFile) {
+			root.createEl("h3", { text: displayedFile.basename });
+			root.createDiv({ cls: "ai-helper-review-path", text: displayedFile.path });
 		}
 		const actions = root.createDiv({ cls: "ai-helper-review-actions" });
-		const refresh = actions.createEl("button", { cls: "ai-helper-review-refresh", text: this.plugin.t("review-refresh") });
-		refresh.disabled = !this.target || this.moving; refresh.addEventListener("click", () => { void this.refresh(); });
-		const stop = actions.createEl("button", { cls: "ai-helper-review-stop", text: this.plugin.t("review-stop") });
-		stop.disabled = !this.request; stop.addEventListener("click", () => this.stop());
+		const refresh = actions.createEl("button", { cls: "ai-helper-review-refresh", text: this.plugin.t(this.queue && !this.result ? "review-retry" : "review-refresh") });
+		refresh.disabled = (!this.target && !this.queue) || this.moving || this.opening; refresh.addEventListener("click", () => { void (this.target ? this.refresh() : this.openNext()); });
+		if (!this.queue) {
+			const stop = actions.createEl("button", { cls: "ai-helper-review-stop", text: this.plugin.t("review-stop") });
+			stop.disabled = !this.request; stop.addEventListener("click", () => this.stop());
+		}
 		const tone: StatusTone = this.status === "review-moved" ? "success"
 			: ["review-stale", "review-missing", "review-folder-missing", "review-source-changed", "review-budget", "review-conflict", "review-conflict-missing"].includes(this.status) ? "warning"
-			: ["review-empty", "review-loading", "review-stopped", "review-ready", "review-stay"].includes(this.status) ? "info" : "error";
+			: ["review-empty", "review-opening", "review-loading", "review-stopped", "review-ready", "review-stay"].includes(this.status) ? "info" : "error";
 		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: this.plugin.t(this.status),
 			attr: { role: "status", "aria-live": "polite" } });
 		setStatusTone(status, tone);

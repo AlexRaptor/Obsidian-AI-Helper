@@ -353,3 +353,170 @@ it("изменение описания во время последней пр�
 	expect(s.renameFile).not.toHaveBeenCalled(); expect(s.root.getText()).toContain("Описание изменилось");
 	expect(s.files.get("Личное/План.md")).toBe(s.file); await s.view.onClose();
 });
+
+async function folderMenu(s: Awaited<ReturnType<typeof setup>>, folder: TFolder) {
+	const { Menu } = await import("./helpers/obsidian");
+	const menu = new Menu(); s.emit("file-menu", menu, folder);
+	const action = menu.items.find(item => item.title === "Разобрать заметки");
+	expect(action).toBeDefined(); action!.callback!(); await flushPromises();
+}
+
+it("меню исключённой папки показывает область и счётчик до запуска, включая вложенные заметки по выбору", async () => {
+	const s = await setup();
+	const nested = Object.assign(new TFile(), { path: "Личное/Вложенная/Запись.md", name: "Запись.md", basename: "Запись", extension: "md" });
+	s.files.set(nested.path, nested); s.texts.set(nested.path, "Вложенная запись");
+	await folderMenu(s, s.folders.get("Личное")!);
+	expect(s.root.getText()).toContain("Заметок: 1"); expect(s.chat).not.toHaveBeenCalled();
+	const checkbox = s.root.find("ai-helper-review-recursive");
+	expect(checkbox.checked).toBe(false); checkbox.checked = true; checkbox.dispatchEvent({ type: "change" } as Event);
+	expect(s.root.getText()).toContain("Заметок: 2");
+	s.root.find("ai-helper-review-start").click(); await flushPromises();
+	expect(s.openFile).toHaveBeenNthCalledWith(1, nested);
+	expect(JSON.parse(s.chat.mock.calls[0][2][1].content).note.text).toBe("Вложенная запись");
+	s.root.find("ai-helper-review-skip").click(); await flushPromises();
+	expect(s.openFile).toHaveBeenNthCalledWith(2, s.file);
+	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toContain("Личный план");
+	await s.view.onClose();
+});
+
+function addQueueFile(s: Awaited<ReturnType<typeof setup>>, path: string, text = "Свежая справка") {
+	const file = Object.assign(new TFile(), { path, name: path.split("/").at(-1)!, basename: path.split("/").at(-1)!.replace(/\.md$/, ""), extension: "md" });
+	s.files.set(path, file); s.texts.set(path, text); return file;
+}
+
+it("перенос по прежним рекомендациям сохраняет редактор, пропуск завершает очередь и новый запуск собирает текущие файлы", async () => {
+	const s = await setup(); addQueueFile(s, "Личное/Я.md", "Вторая заметка");
+	await folderMenu(s, s.folders.get("Личное")!); s.root.find("ai-helper-review-start").click(); await flushPromises();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	s.edit("Обновлённая справка о методе");
+	s.root.find("ai-helper-review-move-old").click();
+	await vi.waitFor(() => expect(s.openFile).toHaveBeenCalledTimes(2)); await flushPromises();
+	expect(s.texts.get("Знания/План.md")).toBe("Обновлённая справка о методе");
+	expect(s.root.getText()).toContain("Личное/Я.md"); expect(s.root.getText()).toContain("Перенесено: 1");
+	s.root.find("ai-helper-review-skip").click(); await flushPromises();
+	expect(s.root.getText()).toContain("Разбор завершён.");
+	expect(s.root.getText()).toContain("Пропущено: 1; Осталось: 0");
+	await folderMenu(s, s.folders.get("Личное")!);
+	expect(s.root.getText()).toContain("Заметок: 1"); expect(s.root.getText()).not.toContain("Перенесено: 1");
+	await s.view.onClose(); await s.view.onOpen();
+	expect(s.root.getText()).not.toContain("Личное/Я.md"); expect(s.root.getText()).not.toContain("Перенесено:");
+	await s.view.onClose();
+});
+
+it("удалённая до анализа заметка отмечается, остальные читаются непосредственно перед своим запросом", async () => {
+	const s = await setup(); const deleted = addQueueFile(s, "Личное/Р.md"); const next = addQueueFile(s, "Личное/Я.md", "Старая версия");
+	await folderMenu(s, s.folders.get("Личное")!); s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	s.files.delete(deleted.path); s.texts.delete(deleted.path); s.texts.set(next.path, "Новая версия перед анализом");
+	s.root.find("ai-helper-review-skip").click();
+	await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(2));
+	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toBe("Новая версия перед анализом");
+	expect(s.root.getText()).toContain("Удалены до анализа: Личное/Р.md"); expect(s.root.getText()).toContain("Пропущено: 2; Осталось: 1");
+	expect(s.openFile).not.toHaveBeenCalledWith(deleted); expect(s.renameFile).not.toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it.each(["server", "invalid", "budget"])("ошибка %s сохраняет позицию, повтор использует текущий редактор, завершение отменяет запрос и поздний ответ", async error => {
+	const s = await setup(); addQueueFile(s, "Личное/Я.md");
+	if (error === "server") s.chat.mockResolvedValueOnce({ ok: false, error: { message: "Сбой" } });
+	if (error === "invalid") s.chat.mockResolvedValueOnce({ ok: true, value: { content: "Некорректно" } });
+	if (error === "budget") s.plugin.settings.contextWindow = "100";
+	await folderMenu(s, s.folders.get("Личное")!); s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain(error === "server" ? "Ошибка запроса" : error === "invalid" ? "некорректную рекомендацию" : "Ничего не усекалось"));
+	expect(s.openFile).toHaveBeenCalledTimes(1); expect(s.root.getText()).toContain("Личное/План.md");
+	expect(s.root.getText()).toContain("Осталось: 2");
+	s.plugin.settings.contextWindow = "32768"; s.edit("Текст для повтора");
+	const pending = deferred<ServerClientResult<ChatCompletionResult>>(); s.chat.mockReturnValueOnce(pending.promise);
+	s.root.find("ai-helper-review-refresh").click();
+	await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(error === "budget" ? 1 : 2));
+	const call = s.chat.mock.calls.at(-1)!;
+	expect(JSON.parse(call[2][1].content).note.text).toBe("Текст для повтора");
+	s.root.find("ai-helper-review-finish").click(); expect(call[3]?.signal?.aborted).toBe(true);
+	expect(s.root.getText()).toContain("Разбор завершён."); expect(s.root.getText()).toContain("Перенесено: 0; Пропущено: 0; Осталось: 2");
+	pending.resolve({ ok: true, value: { content: '{"outcome":"stay","explanation":"Поздний ответ","candidates":[]}' } }); await flushPromises();
+	expect(s.root.getText()).not.toContain("Поздний ответ"); expect(s.openFile).toHaveBeenCalledTimes(1); expect(s.renameFile).not.toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it("новый запуск во время открытия отменяет прежний переход и настроенное описание исключено из счётчика", async () => {
+	const s = await setup(); s.plugin.settings.folderDescriptionName = "Правила.md";
+	addQueueFile(s, "Личное/Правила.md", "Правила папки");
+	await folderMenu(s, s.folders.get("Личное")!);
+	expect(s.root.getText()).toContain("Заметок: 2"); // прежний _folder.md теперь обычная заметка
+	const opening = deferred<void>(); s.openFile.mockReturnValueOnce(opening.promise);
+	s.root.find("ai-helper-review-start").click(); await flushPromises();
+	s.root.find("ai-helper-review-finish").click();
+	await folderMenu(s, s.folders.get("Личное")!);
+	opening.resolve(); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled(); expect(s.root.getText()).toContain("Заметок: 2");
+	await s.view.onClose();
+});
+
+it("ошибка открытия сохраняет путь и допускает повтор или пропуск, меню есть в корне и локализовано", async () => {
+	const s = await setup(); const { Menu } = await import("./helpers/obsidian");
+	setLanguage("en"); const fileMenu = new Menu(); s.emit("file-menu", fileMenu, s.file);
+	expect(fileMenu.items.some(item => item.title === "Review notes")).toBe(false);
+	const rootMenu = new Menu(); s.emit("file-menu", rootMenu, s.folders.get("")!);
+	rootMenu.items.find(item => item.title === "Review notes")!.callback(); await flushPromises();
+	expect(s.root.getText()).toContain("Notes: 1"); expect(s.root.getText()).toContain("Include subfolders");
+	s.openFile.mockRejectedValueOnce(new Error("Открытие не удалось"));
+	s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Could not analyze"));
+	expect(s.root.getText()).toContain("Секрет.md"); expect(s.chat).not.toHaveBeenCalled();
+	s.root.find("ai-helper-review-refresh").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Recommendations are ready"));
+	s.root.find("ai-helper-review-skip").click(); await flushPromises();
+	expect(s.root.getText()).toContain("Review finished."); expect(s.root.getText()).toContain("Skipped: 1; Remaining: 0");
+	await s.view.onClose();
+});
+
+it("после перехода к следующей заметке повтор и перенос используют её текущий редактор", async () => {
+	const s = await setup(); const next = addQueueFile(s, "Личное/Я.md");
+	let nextText = "Несохранённый текст следующей заметки";
+	const nextEditor = { getValue: () => nextText };
+	s.openFile.mockImplementation(async () => {
+		if (s.openFile.mock.calls.length === 2) Object.assign(s.markdown, { file: next, editor: nextEditor, save: async () => { s.texts.set(next.path, nextText); } });
+	});
+	await folderMenu(s, s.folders.get("Личное")!); s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	s.root.find("ai-helper-review-skip").click();
+	await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(2));
+	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toBe(nextText);
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	nextText = "Новая редакция следующей заметки"; s.emit("editor-change", nextEditor, { file: next });
+	expect(s.root.getText()).toContain("Рекомендации устарели");
+	s.root.find("ai-helper-review-refresh").click();
+	await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(3));
+	expect(JSON.parse(s.chat.mock.calls[2][2][1].content).note.text).toBe(nextText);
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	s.root.find("ai-helper-review-move").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Разбор завершён."));
+	expect(s.texts.get("Знания/Я.md")).toBe(nextText);
+	expect(s.root.getText()).toContain("Перенесено: 1; Пропущено: 1; Осталось: 0");
+	await s.view.onClose();
+});
+
+it("открытие описания вместо исходного редактора не делает неизменённую заметку устаревшей", async () => {
+	const s = await setup();
+	// Редактор и диск содержат одну и ту же неизменённую заметку.
+	s.edit("Сохранённый текст");
+	await folderMenu(s, s.folders.get("Личное")!); s.root.find("ai-helper-review-start").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Рекомендации готовы"));
+	s.root.find("ai-helper-review-source").click(); await flushPromises();
+	Object.assign(s.markdown, { file: s.files.get("Знания/_folder.md") });
+	s.root.find("ai-helper-review-move").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Разбор завершён."));
+	expect(s.files.get("Знания/План.md")).toBe(s.file);
+	await s.view.onClose();
+});
+
+it("предварительный счётчик обновляется после создания, переименования и удаления заметки", async () => {
+	const s = await setup(); const folder = Object.assign(new TFolder(), { path: "Новая" }); s.folders.set(folder.path, folder);
+	await folderMenu(s, folder); expect(s.root.getText()).toContain("Заметок: 0"); expect(s.root.find("ai-helper-review-start").disabled).toBe(true);
+	const file = addQueueFile(s, "Новая/Запись.md"); s.emit("create", file);
+	expect(s.root.getText()).toContain("Заметок: 1"); expect(s.root.find("ai-helper-review-start").disabled).toBe(false);
+	file.path = "Личное/Запись.md"; s.emit("rename", file, "Новая/Запись.md"); expect(s.root.getText()).toContain("Заметок: 0");
+	file.path = "Новая/Запись.md"; s.emit("rename", file, "Личное/Запись.md");
+	s.files.delete("Новая/Запись.md"); s.emit("delete", file); expect(s.root.getText()).toContain("Заметок: 0");
+	expect(s.chat).not.toHaveBeenCalled(); await s.view.onClose();
+});

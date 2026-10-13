@@ -36,6 +36,7 @@ export class TestElement {
 	style: Record<string, string> = {};
 	value = "";
 	disabled = false;
+	checked = false;
 	text = "";
 	scrollTop = 0;
 	scrollHeight = 0;
