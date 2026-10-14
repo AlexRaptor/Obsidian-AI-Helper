@@ -62,6 +62,9 @@ export class TestElement {
 	addEventListener(name: string, callback: (event: any) => void): void {
 		this.listeners.set(name, [...(this.listeners.get(name) ?? []), callback]);
 	}
+	removeEventListener(name: string, callback: (event: any) => void): void {
+		this.listeners.set(name, (this.listeners.get(name) ?? []).filter(listener => listener !== callback));
+	}
 	dispatchEvent(event: { type: string }): void {
 		this.listeners.get(event.type)?.forEach((callback) => callback(event));
 	}

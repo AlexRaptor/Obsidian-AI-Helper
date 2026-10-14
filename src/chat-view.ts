@@ -4,6 +4,7 @@ import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
+import { MessageInput } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
@@ -54,8 +55,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private contextProgress: ProgressBarComponent | null = null;
 	private contextLabelEl: HTMLElement | null = null;
 	private contextTitleEl: HTMLElement | null = null;
-	private inputEl: HTMLTextAreaElement | null = null;
-	private sendBtn: HTMLButtonElement | null = null;
+	private messageInput: MessageInput;
 	private clearBtn: HTMLElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
@@ -65,13 +65,13 @@ export class ChatView extends ItemView implements HoverParent {
 	private releaseChatPriority: (() => void) | null = null;
 	private renderRevision = 0;
 	private activeMessage: DisplayMessage | null = null;
-	private draft = "";
 	private followingMessages = true;
 	private messageResizeObserver: ResizeObserver | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
 		this.plugin = plugin;
+		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration());
 	}
 
 	getViewType(): string {
@@ -170,7 +170,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.searchBtn) setTooltip(this.searchBtn, this.t("search-toggle"));
 		this.clearBtn?.setAttribute("aria-label", this.t("clear-conversation"));
 		if (this.clearBtn) setTooltip(this.clearBtn, this.t("clear-conversation"));
-		this.inputEl?.setAttribute("placeholder", this.t("input-placeholder"));
+		this.messageInput.refreshLocale();
 		for (const message of this.messages) {
 			if (message.kind === "thinking") message.content = this.t("thinking");
 		}
@@ -188,7 +188,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.indexTitleEl = null;
 		this.indexCoverageBar = null; this.indexProgress = null; this.indexCoverageLabel = null;
 		this.indexReason = null; this.indexAction = null; this.indexPause = null;
-		this.draft = this.inputEl?.value ?? this.draft;
+		this.messageInput.unmount();
 		this.cancelRequest();
 		this.renderRevision++;
 		this.detachScrollObserver();
@@ -197,8 +197,6 @@ export class ChatView extends ItemView implements HoverParent {
 		this.searchBtn?.remove();
 		this.searchBtn = null;
 		this.searchTypeSelect = null;
-		this.inputEl = null;
-		this.sendBtn = null;
 		this.clearBtn?.remove();
 		this.clearBtn = null;
 		this.contextBarEl = null;
@@ -289,16 +287,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
 		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
 
-		const inputRow = container.createDiv({ cls: "ai-helper-input-row" });
-		this.inputEl = inputRow.createEl("textarea", {
-			cls: "ai-helper-input",
-			attr: { rows: "2", placeholder: this.t("input-placeholder") },
-		});
-		this.inputEl.value = this.draft;
-		this.sendBtn = inputRow.createEl("button", {
-			cls: "ai-helper-send mod-cta",
-			attr: { type: "button" },
-		});
+		this.messageInput.mount(container);
 	}
 
 	private updateSearchType(): void {
@@ -379,16 +368,6 @@ export class ChatView extends ItemView implements HoverParent {
 				this.messageResizeObserver.observe(messages);
 			}
 		}
-		this.sendBtn?.addEventListener("click", () => {
-			if (this.thinking) this.stopGeneration();
-			else void this.handleSend();
-		});
-		this.inputEl?.addEventListener("keydown", (e) => {
-			if (e.key === "Enter" && !e.shiftKey) {
-				e.preventDefault();
-				void this.handleSend();
-			}
-		});
 	}
 
 	private toRequestMessages(): ChatMessage[] {
@@ -603,14 +582,7 @@ export class ChatView extends ItemView implements HoverParent {
 
 	private setThinking(thinking: boolean): void {
 		this.thinking = thinking;
-		if (this.sendBtn) {
-			this.sendBtn.disabled = false;
-			this.sendBtn.className = `ai-helper-send${thinking ? " ai-helper-stop" : " mod-cta"}`;
-			const label = this.t(thinking ? "stop" : "send");
-			this.sendBtn.setAttribute("aria-label", label);
-			setTooltip(this.sendBtn, label);
-			setIcon(this.sendBtn, thinking ? "square" : this.searchEnabled ? "search" : "play");
-		}
+		this.messageInput.setAction(thinking, this.searchEnabled);
 	}
 
 	private cancelRequest(preservePartial = true): void {
@@ -640,11 +612,11 @@ export class ChatView extends ItemView implements HoverParent {
 
 	private async handleSend(): Promise<void> {
 		if (this.thinking) return;
-		const text = this.inputEl?.value.trim() ?? "";
+		const text = this.messageInput.getDraft().trim();
 		if (!text) return;
 		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
 
-		this.inputEl!.value = "";
+		this.messageInput.clear();
 		this.messages.push({ role: "user", content: text, kind: "text" });
 		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
 		this.messages.push(pending);
@@ -797,14 +769,14 @@ export class ChatView extends ItemView implements HoverParent {
 					: result.error.code === "invalid-response-wait" ? this.t("setting-response-wait-invalid") : result.error.message;
 				if (pending.kind === "text") pending.error = message;
 				else { pending.content = message; pending.kind = "error"; }
-				if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
+				this.messageInput.restoreIfEmpty(text);
 			}
 		} catch (error) {
 			if (this.activeRequest !== request) return;
 			const message = error instanceof NoteSearchError ? this.t(hasFolders && error.code === "search-budget" ? (useMixed ? "search-mixed-budget" : "search-folder-budget") : useFolders && error.code === "search-rebuild" ? "search-folder-changed" : error.code) : error instanceof Error ? error.message : String(error);
 			if (pending.kind === "text") pending.error = message;
 			else { pending.content = message; pending.kind = "error"; }
-			if (this.inputEl && !this.inputEl.value) this.inputEl.value = text;
+			this.messageInput.restoreIfEmpty(text);
 		} finally {
 			priority?.release();
 			if (this.activeRequest === request) {

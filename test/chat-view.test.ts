@@ -50,6 +50,72 @@ it("uses the detected window for the progress bar and lets manual settings overr
 });
 
 describe("chat view request lifecycle", () => {
+	it.each(["button", "Enter"])("отправляет обычный текст через %s и не отправляет пустой вопрос", async action => {
+		const chat = vi.fn<Parameters<ServerClient["chat"]>, ReturnType<ServerClient["chat"]>>(async () => success("Ответ"));
+		const { view, input, send } = await setup(chat);
+		const submit = () => action === "button" ? send.click() : input.keydown("Enter");
+		for (const empty of ["", " \n\t "]) {
+			input.value = empty; submit(); await flushPromises();
+		}
+		expect(chat).not.toHaveBeenCalled();
+		input.value = "  Первая строка\nВторая строка  "; submit(); await flushPromises();
+		expect(chat.mock.calls[0]?.[2]).toEqual([{ role: "user", content: "Первая строка\nВторая строка" }]);
+		expect(input.value).toBe("");
+		await view.onClose();
+	});
+
+	it("оставляет Shift+Enter нативный перенос строки без отправки", async () => {
+		const chat = vi.fn(async () => success("Ответ"));
+		const { view, input } = await setup(chat);
+		input.value = "Черновик";
+		const event = { type: "keydown", key: "Enter", shiftKey: true, preventDefault: vi.fn() };
+		input.dispatchEvent(event); await flushPromises();
+		expect(input.tagName).toBe("TEXTAREA");
+		expect(event.preventDefault).not.toHaveBeenCalled();
+		expect(chat).not.toHaveBeenCalled();
+		expect(input.value).toBe("Черновик");
+		await view.onClose();
+	});
+
+	it("очистка сохраняет новый черновик и игнорирует позднюю ошибку", async () => {
+		const pending = deferred<Result>();
+		const { view, root, input, send } = await setup(() => pending.promise);
+		input.value = "Прежний вопрос"; send.click(); await flushPromises();
+		input.value = "Новый черновик";
+		root.find("ai-helper-clear-btn").click();
+		pending.resolve(failure); await flushPromises();
+		expect(input.value).toBe("Новый черновик");
+		expect(view.getMessages()).toEqual([]);
+		await view.onClose();
+	});
+
+	it.each(["", "Новый черновик"])("остановка не восстанавливает вопрос и сохраняет черновик (%s)", async draft => {
+		const pending = deferred<Result>();
+		const { view, input, send } = await setup(() => pending.promise);
+		input.value = "Прежний вопрос"; send.click(); await flushPromises();
+		input.value = draft; send.click();
+		pending.resolve(failure); await flushPromises();
+		expect(input.value).toBe(draft);
+		expect(view.getMessages()).toEqual([]);
+		await view.onClose();
+	});
+
+	it("повторное открытие сохраняет черновик и историю завершённого диалога", async () => {
+		const chat = vi.fn<Parameters<ServerClient["chat"]>, ReturnType<ServerClient["chat"]>>(async () => success("Ответ"));
+		const { view, root, input, send } = await setup(chat);
+		input.value = "Первый вопрос"; send.click(); await flushPromises();
+		input.value = "Следующий вопрос\nс уточнением";
+		await view.onClose(); await view.onOpen();
+		const reopened = root.find("ai-helper-input");
+		expect(reopened.value).toBe("Следующий вопрос\nс уточнением");
+		reopened.keydown("Enter"); await flushPromises();
+		expect(chat.mock.calls[1][2]).toEqual([
+			{ role: "user", content: "Первый вопрос" }, { role: "assistant", content: "Ответ" },
+			{ role: "user", content: "Следующий вопрос\nс уточнением" },
+		]);
+		await view.onClose();
+	});
+
 	it.each(["", "2000"])("обновляет серверный лимит перед каждым сообщением только в автоматическом режиме (%s)", async manual => {
 		const client = createServerClient(async () => new Response("{}"));
 		const get = vi.spyOn(client, "getContextWindow").mockResolvedValue({ ok: true, value: { tokens: 4000, source: "vLLM" } });
@@ -194,16 +260,16 @@ describe("chat view request lifecycle", () => {
 		expect(root.find("ai-helper-input").value).toBe("next draft");
 	});
 
-	it("does not overwrite a new draft when the previous request fails", async () => {
+	it.each(["Новый черновик", " \n\t"])("ошибка не перезаписывает новый черновик (%s)", async draft => {
 		const pending = deferred<Result>();
 		const { input, send } = await setup(() => pending.promise);
-		input.value = "question";
+		input.value = "Вопрос";
 		send.click();
 		await flushPromises();
-		input.value = "new draft";
+		input.value = draft;
 		pending.resolve(failure);
 		await flushPromises();
-		expect(input.value).toBe("new draft");
+		expect(input.value).toBe(draft);
 	});
 
 	it("cancels the request when the view closes and ignores its late response", async () => {
