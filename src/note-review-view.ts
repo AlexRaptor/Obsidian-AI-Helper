@@ -56,7 +56,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	private sources: FolderSource[] = [];
 	private stale = false;
 	private status: LocaleKey = "review-empty";
-	private contextBudget?: { required: number; available: number };
+	private contextBudget?: { required: number; available: number; method: "lmstudio" | "bytes" };
 	private closed = false;
 	private moving = false;
 	private conflictPath?: string;
@@ -235,9 +235,11 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection.value) ?? (settings.contextWindow ? NaN : 8192);
 			const reserve = settings.maxTokens ? Number(settings.maxTokens) : 1024;
 			if (!Number.isSafeInteger(window) || !Number.isSafeInteger(reserve) || reserve <= 0) throw new ReviewError("review-budget");
-			const required = new TextEncoder().encode(JSON.stringify(messages)).length + reserve + 256;
+			const count = await this.plugin.serverClient.countPromptTokens(settings.serverUrl, settings.model, messages, settings.apiKey, active.signal);
+			if (this.request !== active) return;
+			const required = count.tokens + reserve + 256;
 			if (required > window) {
-				this.contextBudget = { required, available: window };
+				this.contextBudget = { required, available: window, method: count.method };
 				throw new ReviewError("review-budget");
 			}
 			const response = await this.plugin.serverClient.chat(settings.serverUrl, settings.model, messages, {
@@ -402,7 +404,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			: ["review-empty", "review-opening", "review-loading", "review-stopped", "review-ready", "review-stay"].includes(this.status) ? "info" : "error";
 		let statusText = this.plugin.t(this.status);
 		if (this.status === "review-budget" && this.contextBudget) {
-			statusText += " " + this.plugin.t("review-budget-details")
+			statusText += " " + this.plugin.t(this.contextBudget.method === "lmstudio" ? "review-budget-details-tokenizer" : "review-budget-details")
 				.replace("{required}", String(this.contextBudget.required)).replace("{available}", String(this.contextBudget.available));
 		}
 		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: statusText,

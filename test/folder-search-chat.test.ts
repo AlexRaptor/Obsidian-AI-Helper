@@ -6,6 +6,7 @@ import { FolderDescriptions } from "../src/folder-descriptions";
 import type { AiHelperPlugin } from "../src/main";
 import { createNoteSearch } from "../src/note-index";
 import { createServerClient } from "../src/server-client";
+import { conservativePromptTokens } from "../src/prompt-tokens";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import { setLanguage, t } from "../src/i18n";
 import { TestElement, flushPromises } from "./helpers/obsidian";
@@ -32,6 +33,7 @@ async function setup(initial: Record<string, string> = { "Знания/_folder.m
 		return new Response(JSON.stringify(url.endsWith("/embeddings") ? { data: body.input.map((_: string, index: number) => ({ index, embedding: [1, 0] })) } : { choices: [{ message: { content: answer } }] }));
 	});
 	const client = createServerClient(fetcher);
+	vi.spyOn(client, "countPromptTokens").mockImplementation(async (_url, _model, messages) => conservativePromptTokens(messages));
 	const settings = { ...DEFAULT_SETTINGS, serverUrl: "http://model/v1", model: "диалог", excludedFolders: ["Личное"], autoUpdateNotes: false };
 	const noteSearch = createNoteSearch({ factory: new IDBFactory(), vaultPath: "/папки", client, read: async path => texts.get(path) ?? null, open: openNote });
 	noteSearch.configure(settings);
@@ -45,6 +47,44 @@ async function setup(initial: Record<string, string> = { "Знания/_folder.m
 		async send(text = "Где создать заметку о GTD?") { root.find("ai-helper-input").value = text; root.find("ai-helper-send").click(); await vi.waitFor(() => expect(root.find("ai-helper-send").attributes["aria-label"]).toBe(t("send"))); await flushPromises(); },
 	};
 }
+
+it("поиск папок использует токенизатор для полного запроса с историей и системным промптом", async () => {
+	const s = await setup({ "Знания/_folder.md": "Справочные материалы. ".repeat(500) });
+	Object.assign(s.settings, { contextWindow: "1780", systemPrompt: "Ответь кратко по-русски." });
+	vi.mocked(s.view.plugin.serverClient.countPromptTokens).mockImplementation(async (_url, _model, messages) => ({
+		tokens: messages.some(message => message.content.includes('"ancestors"')) ? 500 : 100, method: "lmstudio",
+	}));
+	s.folders(); await s.send(); await s.send("А куда положить отчёт?");
+	expect(s.view.getMessages()).toHaveLength(4);
+	const final = s.requests.filter(request => request.messages).at(-1)!.messages!;
+	expect(final[0]).toEqual({ role: "system", content: "Ответь кратко по-русски." });
+	expect(final.at(-1)?.content).toBe("А куда положить отчёт?");
+	expect(JSON.parse(final.at(-2)!.content)[0].text).toBe(s.texts.get("Знания/_folder.md")!.trim());
+	expect(conservativePromptTokens(final as import("../src/server-client").ChatMessage[]).tokens).toBeGreaterThan(1780);
+	expect(vi.mocked(s.view.plugin.serverClient.countPromptTokens).mock.calls.at(-1)![2]).toEqual(final);
+	await s.view.onClose();
+});
+
+it("поиск папок сохраняет резерв ответа при точном подсчёте", async () => {
+	const s = await setup(); s.settings.contextWindow = "1779";
+	vi.mocked(s.view.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
+	s.folders(); await s.send();
+	expect(s.requests).toHaveLength(0); expect(s.view.getMessages()).toHaveLength(0);
+	expect(s.root.getText()).toContain("Недостаточно контекста");
+	await s.view.onClose();
+});
+
+it("в смешанном поиске выделяет бюджет заметок после подсчёта всех описаний токенизатором", async () => {
+	const s = await setup({ "Знания/_folder.md": "Справка о GTD. ".repeat(1000), "Метод.md": "GTD: регулярный обзор задач." });
+	Object.assign(s.settings, { embeddingServerUrl: "http://model/v1", embeddingModel: "embedding", contextWindow: "4096" });
+	s.noteSearch.configure(s.settings); await s.noteSearch.index("Метод.md"); s.requests.length = 0;
+	vi.mocked(s.view.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
+	s.root.find("ai-helper-search-toggle").click(); s.mode("mixed"); await s.send();
+	const data = JSON.parse(s.requests.filter(request => request.messages).at(-1)!.messages!.at(-2)!.content);
+	expect(data.map((source: { kind: string }) => source.kind)).toEqual(["folder", "note"]);
+	expect(data[0].text).toBe(s.texts.get("Знания/_folder.md")!.trim());
+	await s.view.onClose();
+});
 
 it("автоматически выбирает папки без embedding-модели и обычного индекса", async () => {
 	const s = await setup();

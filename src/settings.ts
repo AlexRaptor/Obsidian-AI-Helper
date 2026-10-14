@@ -201,7 +201,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 				const sources = await this.plugin.folderDescriptions.sources(current.signal);
 				if (!active || current.signal.aborted) return;
 				// The folder array is embedded in the user message's JSON string. Count escaped bytes,
-				// excluding the outer string quotes, just as the review's context check does.
+				// excluding the outer string quotes. This local preview remains a conservative
+				// estimate; the full review can use the server's model-specific tokenizer.
 				const bytes = new TextEncoder().encode(JSON.stringify(JSON.stringify(folderSourceData(sources)))).length - 2;
 				status.setText(this.t("folder-description-context-size").replace("{tokens}", bytes.toLocaleString(getLanguage())));
 			} catch {

@@ -6,6 +6,7 @@ import { DEFAULT_SETTINGS } from "../src/settings";
 import { setLanguage } from "../src/i18n";
 import { TestElement, deferred, flushPromises } from "./helpers/obsidian";
 import type { ChatCompletionResult, ServerClientResult } from "../src/server-client";
+import { conservativePromptTokens } from "../src/prompt-tokens";
 
 vi.mock("obsidian", async () => ({ ...await import("./helpers/obsidian"), parseYaml: (text: string) => Object.fromEntries(text.split("\n").map(line => line.split(":").map(part => part.trim()))) }));
 afterEach(() => setLanguage("en"));
@@ -56,6 +57,7 @@ async function setup() {
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, language: "ru", serverUrl: "http://model/v1", model: "диалог", contextWindow: "32768", excludedFolders: ["Личное"], systemPrompt: "НЕ ОТПРАВЛЯТЬ" });
 	vi.spyOn(plugin.serverClient, "listModels").mockResolvedValue({ ok: true, value: ["диалог"] });
 	vi.spyOn(plugin.serverClient, "getContextWindow").mockResolvedValue({ ok: true, value: undefined });
+	vi.spyOn(plugin.serverClient, "countPromptTokens").mockImplementation(async (_url, _model, messages) => conservativePromptTokens(messages));
 	const chat = vi.spyOn(plugin.serverClient, "chat").mockResolvedValue({ ok: true, value: { content: JSON.stringify({ outcome: "recommendations", explanation: "По назначению заметки", candidates: [{ folder: "Знания", explanation: "Справка о методе" }] }) } });
 	const commands = vi.spyOn(plugin, "addCommand");
 	const hoverSource = vi.spyOn(plugin, "registerHoverLinkSource");
@@ -157,6 +159,40 @@ it.each(["stay", "none", "insufficient"] as const)("показывает доп�
 	expect(s.root.getText()).toContain("Обоснование результата"); expect(() => s.root.find("ai-helper-review-source")).toThrow();
 	expect(() => s.root.find("ai-helper-review-move")).toThrow();
 	await s.view.onClose();
+});
+
+it("пропускает полный запрос по токенизатору, хотя оценка по байтам превышает окно", async () => {
+	const s = await setup(); s.plugin.settings.contextWindow = "1780";
+	vi.mocked(s.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
+	await s.start();
+	expect(s.chat).toHaveBeenCalledTimes(1);
+	const messages = s.chat.mock.calls[0][2];
+	expect(conservativePromptTokens(messages).tokens + 1024 + 256).toBeGreaterThan(1780);
+	expect(s.plugin.serverClient.countPromptTokens).toHaveBeenCalledWith("http://model/v1", "диалог", messages, "", expect.any(AbortSignal));
+	expect(JSON.parse(messages[1].content).folders).toHaveLength(4);
+	expect(s.chat.mock.calls[0][3]?.maxTokens).toBe("1024");
+	await s.view.onClose();
+});
+
+it("при подсчёте токенизатором сохраняет резерв ответа и показывает правильный способ оценки", async () => {
+	const s = await setup(); s.plugin.settings.contextWindow = "1779";
+	vi.mocked(s.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
+	await s.start();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.root.getText()).toContain("По оценке требуется: 1780 токенов");
+	expect(s.root.getText()).toContain("Запрос посчитан токенизатором выбранной модели в LM Studio");
+	expect(s.root.getText()).not.toContain("каждый байт UTF-8 запроса");
+	await s.view.onClose();
+});
+
+it("отмена во время подсчёта не запускает ответ модели после позднего результата", async () => {
+	const s = await setup(); const pending = deferred<{ tokens: number; method: "lmstudio" }>();
+	vi.mocked(s.plugin.serverClient.countPromptTokens).mockReturnValue(pending.promise);
+	s.command.callback!(); await vi.waitFor(() => expect(s.plugin.serverClient.countPromptTokens).toHaveBeenCalled());
+	s.root.find("ai-helper-review-stop").click();
+	expect(vi.mocked(s.plugin.serverClient.countPromptTokens).mock.calls[0][4]?.aborted).toBe(true);
+	pending.resolve({ tokens: 500, method: "lmstudio" }); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled(); await s.view.onClose();
 });
 
 it("останавливает превышение контекста без усечения и позволяет повторить после исправления настроек", async () => {
@@ -402,10 +438,10 @@ it("меню исключённой папки показывает област
 	expect(s.root.getText()).toContain("Заметок: 2");
 	s.root.find("ai-helper-review-start").click(); await flushPromises();
 	expect(s.openFile).toHaveBeenNthCalledWith(1, nested, { active: true, state: { mode: "preview" } });
-	expect(JSON.parse(s.chat.mock.calls[0][2][1].content).note.text).toBe("Вложенная запись");
+	await vi.waitFor(() => expect(JSON.parse(s.chat.mock.calls[0][2][1].content).note.text).toBe("Вложенная запись"));
 	s.root.find("ai-helper-review-skip").click(); await flushPromises();
 	expect(s.openFile).toHaveBeenNthCalledWith(2, s.file, { active: true, state: { mode: "preview" } });
-	expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toContain("Личный план");
+	await vi.waitFor(() => expect(JSON.parse(s.chat.mock.calls[1][2][1].content).note.text).toContain("Личный план"));
 	await s.view.onClose();
 });
 

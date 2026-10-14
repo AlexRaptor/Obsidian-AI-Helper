@@ -1,5 +1,6 @@
 import { parseResponseWait } from "./response-wait";
 import { discoverContextWindow, type ContextWindow } from "./context-window";
+import { conservativePromptTokens, lmStudioPromptTokens, type PromptTokenCount } from "./prompt-tokens";
 
 export type ClientFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -72,6 +73,7 @@ export interface TokenUsage {
 }
 
 export interface ServerClient {
+	countPromptTokens(serverUrl: string, model: string, messages: ChatMessage[], apiKey?: string, signal?: AbortSignal): Promise<PromptTokenCount>;
 	getContextWindow(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<ContextWindow | undefined>>;
 	verifyModel(serverUrl: string, model: string, apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<void>>;
 	embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>>;
@@ -467,5 +469,14 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		return request(async (active) => ({ ok: true, value: await discoverContextWindow(fetchImpl, url, model.trim(), apiKey, active) }), MODELS_TIMEOUT_MS, signal);
 	}
 
-	return { listModels, chat, embeddings, verifyModel, getContextWindow };
+	async function countPromptTokens(serverUrl: string, model: string, messages: ChatMessage[], apiKey?: string, signal?: AbortSignal): Promise<PromptTokenCount> {
+		const fallback = conservativePromptTokens(messages);
+		const result = await request(async active => {
+			try { return { ok: true, value: await lmStudioPromptTokens(fetchImpl, serverUrl, model, messages, apiKey, active) ?? fallback }; }
+			catch { return { ok: true, value: fallback }; }
+		}, 5_000, signal);
+		return result.ok ? result.value : fallback;
+	}
+
+	return { listModels, chat, embeddings, verifyModel, getContextWindow, countPromptTokens };
 }
