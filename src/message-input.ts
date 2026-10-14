@@ -31,7 +31,6 @@ export class MessageInput {
 	private candidate: TFile | null = null;
 	private mentionStart = 0;
 	private mentionEnd = 0;
-	private navigated = false;
 	private thinking = false;
 	private searchEnabled = false;
 
@@ -50,7 +49,7 @@ export class MessageInput {
 	private closeSuggestion(): void {
 		this.suggestion?.empty();
 		if (this.suggestion) this.suggestion.style.display = "none";
-		this.candidate = null; this.navigated = false;
+		this.candidate = null;
 		this.inputEl?.setAttribute("aria-expanded", "false");
 		this.inputEl?.removeAttribute("aria-activedescendant");
 	}
@@ -133,8 +132,8 @@ export class MessageInput {
 		if (event.isComposing) return;
 		if (this.candidate) {
 			if (event.key === "Escape") { event.preventDefault(); this.closeSuggestion(); return; }
-			if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); this.navigated = true; return; }
-			if (event.key === "Tab" || (event.key === "Enter" && this.navigated && !event.shiftKey)) {
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); return; }
+			if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
 				event.preventDefault(); this.confirmMention(); return;
 			}
 		}

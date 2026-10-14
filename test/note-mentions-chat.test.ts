@@ -51,7 +51,7 @@ it("отправляет актуальную выбранную заметку 
 	await s.view.onClose();
 });
 
-it.each(["Tab", "ArrowDown", "ArrowUp", "click"])("явный выбор через %s, удаление и чистое упоминание", async action => {
+it.each(["Enter", "Tab", "ArrowDown", "ArrowUp", "click"])("явный выбор через %s, удаление и чистое упоминание", async action => {
 	const s = await setup();
 	s.type("@");
 	expect(s.root.getText()).toContain("Проекты/План.md");
@@ -81,11 +81,11 @@ it.each(["Почта user@example.com", "`код @", "``код ` @", "```ts\nк�
 	await s.view.onClose();
 });
 
-it.each(["Escape", "Enter", "paste"])("обычный @ сохраняется без вложения: %s", async action => {
+it.each(["Escape", "Escape+Enter", "paste"])("обычный @ сохраняется без вложения: %s", async action => {
 	const s = await setup();
 	s.type("Вопрос @", action === "paste" ? "insertFromPaste" : "insertText");
-	if (action === "Escape") s.input.keydown("Escape");
-	if (action === "Enter") s.input.keydown("Enter"); else s.send.click();
+	if (action !== "paste") s.input.keydown("Escape");
+	if (action === "Escape+Enter") s.input.keydown("Enter"); else s.send.click();
 	await flushPromises();
 	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Вопрос @" }]);
 	await s.view.onClose();
@@ -245,3 +245,38 @@ it("запоминает последнюю открытую заметку до
 	expect(preventDefault).not.toHaveBeenCalled();
 	await s.view.onClose();
  });
+
+
+it.each(["без стрелок", "ArrowDown", "ArrowUp"])("Enter подтверждает подсказку без отправки (%s), следующий Enter отправляет снимок", async navigation => {
+	const s = await setup();
+	s.type("Объясни @");
+	if (navigation !== "без стрелок") s.input.keydown(navigation);
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Объясни @План");
+	expect(s.input.children.some(child => child.attributes.title === s.file.path)).toBe(true);
+	expect(s.input.attributes["aria-expanded"]).toBe("false");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Проекты/План.md");
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Первоначальная метка");
+	await s.view.onClose();
+});
+
+
+it("Shift+Enter при открытой подсказке оставляет нативный перенос строки без выбора и отправки", async () => {
+	const s = await setup();
+	s.type("Объясни @");
+	s.input.keydown("ArrowDown");
+	const preventDefault = vi.fn();
+	s.input.dispatchEvent({ type: "keydown", key: "Enter", shiftKey: true, preventDefault } as any);
+	await flushPromises();
+	expect(preventDefault).not.toHaveBeenCalled();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Объясни @");
+	expect(s.input.children.some(child => child.attributes.title === s.file.path)).toBe(false);
+	s.type("Объясни @\nСледующая строка", "insertLineBreak");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Объясни @\nСледующая строка" }]);
+	await s.view.onClose();
+});
