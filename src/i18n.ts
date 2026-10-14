@@ -15,6 +15,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 
 export const en = {
 	"mention-current": "Current note",
+	"mention-notes": "Vault notes",
+	"mention-no-results": "No matching notes.",
 	"mention-question-required": "Add a question or instruction alongside the note mention.",
 	"mention-search-unavailable": "Note attachments cannot be combined with search yet. Turn off search to send this draft.",
 	"mention-file-unavailable": "The mentioned note is unavailable. The draft has been preserved.",
@@ -332,6 +334,8 @@ export const en = {
 
 export const ru = {
 	"mention-current": "Текущая заметка",
+	"mention-notes": "Заметки хранилища",
+	"mention-no-results": "Подходящие заметки не найдены.",
 	"mention-question-required": "Добавьте вопрос или инструкцию к упоминанию заметки.",
 	"mention-search-unavailable": "Вложения заметок пока нельзя сочетать с поиском. Выключите поиск для отправки этого черновика.",
 	"mention-file-unavailable": "Упомянутая заметка недоступна. Черновик сохранён.",

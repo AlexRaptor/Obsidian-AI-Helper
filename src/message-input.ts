@@ -28,7 +28,9 @@ export class MessageInput {
 	private bindings = new Map<string, TFile>();
 	private mentionSequence = 0;
 	private suggestion: HTMLElement | null = null;
-	private candidate: TFile | null = null;
+	private candidates: TFile[] = [];
+	private selectedIndex = 0;
+	private suggestionOpen = false;
 	private mentionStart = 0;
 	private mentionEnd = 0;
 	private thinking = false;
@@ -39,6 +41,7 @@ export class MessageInput {
 		private onSend: () => void,
 		private onStop: () => void,
 		private currentNote: () => TFile | null = () => null,
+		private markdownFiles: () => TFile[] = () => [],
 	) {}
 
 	private handleClick = (): void => {
@@ -49,7 +52,9 @@ export class MessageInput {
 	private closeSuggestion(): void {
 		this.suggestion?.empty();
 		if (this.suggestion) this.suggestion.style.display = "none";
-		this.candidate = null;
+		this.candidates = [];
+		this.selectedIndex = 0;
+		this.suggestionOpen = false;
 		this.inputEl?.setAttribute("aria-expanded", "false");
 		this.inputEl?.removeAttribute("aria-activedescendant");
 	}
@@ -64,12 +69,21 @@ export class MessageInput {
 
 	private handleInput = (event: Event): void => {
 		const input = event as InputEvent;
+		const editingFilter = this.suggestionOpen && (input.inputType === "deleteContentBackward" || input.inputType === "deleteContentForward");
 		this.closeSuggestion();
-		if (input.inputType !== "insertText" || input.isComposing) return;
-		const text = draftText(this.getDraft()).slice(0, this.caretOffset());
-		const match = /(?:^|[ \t\n])@([^\s@]*)$/.exec(text);
+		if ((input.inputType !== "insertText" && !editingFilter) || input.isComposing) return;
+		const draft = this.getDraft();
+		const text = draftText(draft).slice(0, this.caretOffset());
+		const match = /(?:^|[ \t\n])@([^\n@]*)$/.exec(text);
 		if (!match) return;
 		const start = text.length - match[1].length - 1;
+		// A confirmed mention is an atomic attachment, never a new filter trigger.
+		let offset = 0;
+		for (const part of draft.parts) {
+			const length = typeof part === "string" ? part.length : `@${part.file.basename}`.length;
+			if (typeof part !== "string" && offset < text.length && offset + length > start) return;
+			offset += length;
+		}
 		const before = text.slice(0, start);
 		let fence = "";
 		let inline = 0;
@@ -89,21 +103,42 @@ export class MessageInput {
 			}
 		}
 		if (fence || inline || indented) return;
-		const file = this.currentNote();
-		if (!file || (match[1] && !`${file.basename} ${file.path}`.toLocaleLowerCase().includes(match[1].toLocaleLowerCase()))) return;
-		this.candidate = file; this.mentionStart = start; this.mentionEnd = text.length;
-		if (!this.suggestion) return;
-		this.suggestion.style.display = "";
-		const option = this.suggestion.createEl("button", { cls: "suggestion-item is-selected", text: `${file.basename} — ${file.path}`, attr: { type: "button", id: `${this.suggestionId}-current`, role: "option", "aria-selected": "true" } });
-		option.addEventListener("mousedown", event => event.preventDefault());
-		option.addEventListener("click", () => this.confirmMention());
-		this.inputEl?.setAttribute("aria-expanded", "true");
-		this.inputEl?.setAttribute("aria-activedescendant", `${this.suggestionId}-current`);
+		const current = this.currentNote();
+		this.candidates = this.markdownFiles().sort((a, b) => a.path.localeCompare(b.path));
+		if (current?.extension === "md" && !match[1]) {
+			this.candidates = [current, ...this.candidates.filter(file => file.path !== current.path)];
+		}
+		const filter = match[1].toLocaleLowerCase();
+		this.candidates = this.candidates.filter(file => file.path.toLocaleLowerCase().includes(filter));
+		this.mentionStart = start; this.mentionEnd = text.length;
+		this.suggestionOpen = true;
+		this.renderSuggestion();
 	};
 
+	private renderSuggestion(): void {
+		if (!this.suggestion) return;
+		this.suggestion.empty();
+		this.suggestion.style.display = "";
+		this.inputEl?.setAttribute("aria-expanded", "true");
+		this.inputEl?.removeAttribute("aria-activedescendant");
+		if (!this.candidates.length) {
+			this.suggestion.createDiv({ cls: "suggestion-item", text: this.t("mention-no-results"), attr: { role: "status" } });
+			return;
+		}
+		this.candidates.forEach((file, index) => {
+			const selected = index === this.selectedIndex;
+			const id = `${this.suggestionId}-${index}`;
+			const option = this.suggestion!.createEl("button", { cls: `suggestion-item${selected ? " is-selected" : ""}`, text: `${file.basename} — ${file.path}`, attr: { type: "button", id, role: "option", "aria-selected": String(selected) } });
+			option.addEventListener("mousedown", event => event.preventDefault());
+			option.addEventListener("click", () => { this.selectedIndex = index; this.confirmMention(); });
+			if (selected) this.inputEl?.setAttribute("aria-activedescendant", id);
+		});
+		(this.suggestion.children[this.selectedIndex] as HTMLElement)?.scrollIntoView?.({ block: "nearest" });
+	}
+
 	private confirmMention(): void {
-		if (!this.candidate) return;
-		const file = this.candidate;
+		const file = this.candidates[this.selectedIndex];
+		if (!file) return;
 		const draft = this.getDraft();
 		const parts: DraftPart[] = [];
 		let offset = 0;
@@ -130,9 +165,16 @@ export class MessageInput {
 
 	private handleKeydown = (event: KeyboardEvent): void => {
 		if (event.isComposing) return;
-		if (this.candidate) {
+		if (this.suggestionOpen) {
 			if (event.key === "Escape") { event.preventDefault(); this.closeSuggestion(); return; }
-			if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); return; }
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				event.preventDefault();
+				if (this.candidates.length) {
+					this.selectedIndex = (this.selectedIndex + (event.key === "ArrowDown" ? 1 : -1) + this.candidates.length) % this.candidates.length;
+					this.renderSuggestion();
+				}
+				return;
+			}
 			if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
 				event.preventDefault(); this.confirmMention(); return;
 			}
@@ -153,7 +195,7 @@ export class MessageInput {
 			attr: { contenteditable: "plaintext-only", role: "textbox", "aria-autocomplete": "list", "aria-controls": this.suggestionId, "aria-multiline": "true", "aria-label": this.t("input-placeholder"), "data-placeholder": this.t("input-placeholder") },
 		});
 		this.setDraft(this.draft);
-		this.suggestion = row.createDiv({ cls: "ai-helper-mention-suggest suggestion-container", attr: { id: this.suggestionId, role: "listbox", "aria-label": this.t("mention-current") } });
+		this.suggestion = row.createDiv({ cls: "ai-helper-mention-suggest suggestion-container", attr: { id: this.suggestionId, role: "listbox", "aria-label": this.t("mention-notes") } });
 		this.closeSuggestion();
 		this.inputEl.addEventListener("input", this.handleInput);
 		this.inputEl.addEventListener("paste", this.handlePaste);
@@ -244,7 +286,8 @@ export class MessageInput {
 	refreshLocale(): void {
 		this.inputEl?.setAttribute("data-placeholder", this.t("input-placeholder"));
 		this.inputEl?.setAttribute("aria-label", this.t("input-placeholder"));
-		this.suggestion?.setAttribute("aria-label", this.t("mention-current"));
+		this.suggestion?.setAttribute("aria-label", this.t("mention-notes"));
+		if (this.suggestionOpen) this.renderSuggestion();
 		this.setAction(this.thinking, this.searchEnabled);
 	}
 }

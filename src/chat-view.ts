@@ -74,7 +74,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.plugin = plugin;
 		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration(), () => {
 			return this.app.workspace?.getActiveViewOfType?.(MarkdownView)?.file ?? this.plugin.currentNote ?? null;
-		});
+		}, () => this.app.vault.getMarkdownFiles?.() ?? []);
 	}
 
 	getViewType(): string {

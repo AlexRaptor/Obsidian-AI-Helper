@@ -10,18 +10,19 @@ import { Notice, TestElement, flushPromises } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 afterEach(() => { vi.restoreAllMocks(); });
 
-async function setup() {
+async function setup(paths?: string[], hasCurrent = true) {
 	setLanguage("ru");
 	Notice.messages = [];
 	const file = Object.assign(new TFile(), { path: "Проекты/План.md", basename: "План", extension: "md" });
 	let markdown = "---\nстатус: готов\n---\n# План\nПервоначальная метка\n[[Секрет]]\n![[Вложение]]";
 	const editor = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file, getMode: (): "source" | "preview" => "source", editor: { getValue: () => markdown } });
-	const workspace = { getActiveViewOfType: () => editor, getLeavesOfType: () => [{ view: editor }] };
-	const read = vi.fn(async () => markdown);
+	const files = paths ? paths.map(path => Object.assign(new TFile(), { path, basename: path.split("/").pop()!.slice(0, -3), extension: "md" })) : [file];
+	const workspace = { getActiveViewOfType: () => hasCurrent ? editor : null, getLeavesOfType: () => [{ view: editor }] };
+	const read = vi.fn(async (_file: TFile) => markdown);
 	const chat = vi.fn<Parameters<ServerClient["chat"]>, ReturnType<ServerClient["chat"]>>(async () => ({ ok: true as const, value: { content: "Ответ" } }));
 	const plugin = { settings: { ...DEFAULT_SETTINGS, serverUrl: "http://s", model: "модель", contextWindow: "20000" }, serverClient: { chat }, t } as unknown as AiHelperPlugin;
 	const view = new ChatView({} as WorkspaceLeaf, plugin);
-	view.app = { workspace, vault: { getFileByPath: () => file, read } } as any;
+	view.app = { workspace, vault: { getMarkdownFiles: () => files, getFileByPath: (path: string) => files.find(candidate => candidate.path === path) ?? null, read } } as any;
 	await view.onOpen();
 	const root = view.contentEl as unknown as TestElement;
 	const input = root.find("ai-helper-input");
@@ -105,7 +106,7 @@ it("читает выбранный файл из хранилища после 
 it("переключение вкладки не меняет выбранную заметку; режим чтения использует полные данные", async () => {
 	const s = await setup(); s.mention();
 	const other = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file: Object.assign(new TFile(), { path: "Другой.md", basename: "Другой" }) });
-	const original = s.workspace.getActiveViewOfType();
+	const original = s.workspace.getActiveViewOfType()!;
 	original.getMode = () => "preview";
 	original.getViewData = () => "---\nметка: режим чтения\n---\nТекст";
 	s.workspace.getActiveViewOfType = () => other as any;
@@ -205,7 +206,7 @@ it("без текущей заметки доступен обычный чат;
 	await s.view.onClose(); await s.view.onOpen();
 	expect((s.view.contentEl as unknown as TestElement).find("ai-helper-input").getText()).toBe("@План Объясни");
 	await s.view.onClose();
-	const plain = await setup();
+	const plain = await setup([]);
 	plain.workspace.getActiveViewOfType = () => null as any;
 	plain.type("Вопрос @"); plain.input.keydown("Tab"); plain.send.click(); await flushPromises();
 	expect(plain.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Вопрос @" }]);
@@ -278,5 +279,112 @@ it("Shift+Enter при открытой подсказке оставляет н
 	s.type("Объясни @\nСледующая строка", "insertLineBreak");
 	s.input.keydown("Enter"); await flushPromises();
 	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Объясни @\nСледующая строка" }]);
+	await s.view.onClose();
+});
+
+it("предлагает текущую заметку первой и весь каталог по пути без индекса и embedding-модели", async () => {
+	const s = await setup(["Я/План.md", "Исключённые/План.md", "Проекты/План.md", "Архив/План.md"]);
+	s.view.plugin.settings.excludedFolders = ["Исключённые"];
+	s.type("@");
+	expect(s.root.find("ai-helper-mention-suggest").children.map(option => option.getText())).toEqual([
+		"План — Проекты/План.md", "План — Архив/План.md", "План — Исключённые/План.md", "План — Я/План.md",
+	]);
+	await s.view.onClose();
+});
+
+it.each([
+	["@ПЛАН", ["План — Архив/План.md", "План встречи — Новый проект/План встречи.md", "План — Проекты/План.md"]],
+	["@аРхИв/пЛ", ["План — Архив/План.md"]],
+	["@Новый проект/план", ["План встречи — Новый проект/План встречи.md"]],
+	["@проект план", ["Подходящие заметки не найдены."]],
+])("фильтрует полный путь цельной подстрокой без регистра: %s", async (query, expected) => {
+	const s = await setup(["Проекты/План.md", "Новый проект/План встречи.md", "Архив/План.md"], false);
+	s.type(query);
+	expect(s.root.find("ai-helper-mention-suggest").children.map(option => option.getText())).toEqual(expected);
+	expect(s.input.getText()).toBe(query);
+	await s.view.onClose();
+});
+
+
+it.each(["Enter", "Tab", "click"])("выбирает исключённую заметку без текущей вкладки через %s и сохраняет её снимок", async action => {
+	const s = await setup(["Исключённые/План.md", "Архив/План.md"], false);
+	s.view.plugin.settings.excludedFolders = ["Исключённые"];
+	s.type("Объясни @ИСКЛЮЧЁННЫЕ");
+	if (action === "click") s.root.find("ai-helper-mention-suggest").children[0].click();
+	else s.input.keydown(action);
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.children.some(child => child.attributes.title === "Исключённые/План.md")).toBe(true);
+	s.edit("Свежий текст исключённой заметки");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Исключённые/План.md");
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Свежий текст исключённой заметки");
+	expect(s.chat.mock.calls[0][2][0].content).not.toContain("Архив/План.md");
+	s.edit("Изменение после ответа");
+	s.type("Продолжи"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2][0].content).toContain("Свежий текст исключённой заметки");
+	expect(s.chat.mock.calls[1][2][0].content).not.toContain("Изменение после ответа");
+	await s.view.onClose();
+});
+
+it.each(["ArrowDown", "ArrowUp"])("навигация %s выбирает другой путь; удаление позволяет заменить заметку без остаточного контекста", async key => {
+	const s = await setup(["Проекты/План.md", "Архив/План.md"]);
+	s.type("Объясни @"); s.input.keydown(key);
+	const options = s.root.find("ai-helper-mention-suggest").children;
+	expect(options[1].attributes["aria-selected"]).toBe("true");
+	expect(s.input.attributes["aria-activedescendant"]).toBe(options[1].attributes.id);
+	s.input.keydown("Enter");
+	expect(s.input.children.some(child => child.attributes.title === "Архив/План.md")).toBe(true);
+	s.workspace.getActiveViewOfType = () => null;
+	s.edit("Текст выбранной архивной заметки");
+	s.input.children.find(child => child.attributes.title === "Архив/План.md")!.remove();
+	s.input.createSpan({ text: "@Проекты" });
+	s.input.dispatchEvent({ type: "input", inputType: "insertText" } as any);
+	s.input.keydown("Tab");
+	s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Проекты/План.md");
+	expect(s.chat.mock.calls[0][2][0].content).not.toContain("Архив/План.md");
+	await s.view.onClose();
+});
+
+it.each(["ru", "en"] as const)("нет совпадений: локализованная подсказка, Enter сохраняет текст, Escape закрывает список (%s)", async locale => {
+	const s = await setup(["Архив/План.md"], false);
+	setLanguage(locale);
+	s.type("Объясни @Несуществующая");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toBe(locale === "ru" ? "Подходящие заметки не найдены." : "No matching notes.");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Объясни @Несуществующая");
+	s.input.keydown("Escape");
+	expect(s.root.find("ai-helper-mention-suggest").style.display).toBe("none");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Объясни @Несуществующая" }]);
+	await s.view.onClose();
+});
+
+
+it("ввод вопроса после выбранной заметки не открывает подсказку повторно и отправляет выбранный файл при другой вкладке", async () => {
+	const s = await setup(["Проекты/План.md", "Архив/План.md"]);
+	s.read.mockImplementation(async file => file.path === "Архив/План.md" ? "Архивный текст" : "Другой текст");
+	s.type("@Архив"); s.input.keydown("Enter");
+	s.input.createSpan({ text: " Объясни" });
+	s.input.dispatchEvent({ type: "input", inputType: "insertText" } as any);
+	expect(s.input.attributes["aria-expanded"]).toBe("false");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Архивный текст");
+	expect(s.chat.mock.calls[0][2][0].content).not.toContain("Первоначальная метка");
+	await s.view.onClose();
+});
+
+
+it.each(["deleteContentBackward", "deleteContentForward"])("исправление фильтра через %s обновляет список и позволяет отправить снимок", async inputType => {
+	const s = await setup(["Архив/План.md"], false);
+	s.type("Объясни @Планы");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toBe("Подходящие заметки не найдены.");
+	s.type("Объясни @План", inputType);
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toBe("План — Архив/План.md");
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Архив/План.md");
 	await s.view.onClose();
 });
