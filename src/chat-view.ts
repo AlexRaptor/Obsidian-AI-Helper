@@ -774,6 +774,11 @@ export class ChatView extends ItemView implements HoverParent {
 				if (this.activeRequest !== request) return;
 				pending.sources = sources;
 			}
+			// Reading and token counting can yield while a selected file is removed.
+			// Validate the whole attachment set before sending any of its snapshots.
+			if (files.some(file => this.app.vault.getFileByPath(file.path) !== file)) {
+				throw new Error(this.t("mention-file-unavailable"));
+			}
 			const result = await serverClient.chat(serverUrl, model, requestMessages, params);
 			if (this.activeRequest !== request) return;
 

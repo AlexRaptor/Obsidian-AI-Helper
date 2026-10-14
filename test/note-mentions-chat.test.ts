@@ -5,7 +5,7 @@ import type { AiHelperPlugin } from "../src/main";
 import type { ServerClient, ServerClientResult, ChatCompletionResult } from "../src/server-client";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import { setLanguage, t } from "../src/i18n";
-import { Notice, TestElement, flushPromises } from "./helpers/obsidian";
+import { Notice, TestElement, deferred, flushPromises } from "./helpers/obsidian";
 
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 afterEach(() => { vi.restoreAllMocks(); });
@@ -17,7 +17,7 @@ async function setup(paths?: string[], hasCurrent = true) {
 	let markdown = "---\nстатус: готов\n---\n# План\nПервоначальная метка\n[[Секрет]]\n![[Вложение]]";
 	const editor = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file, getMode: (): "source" | "preview" => "source", editor: { getValue: () => markdown } });
 	const files = paths ? paths.map(path => Object.assign(new TFile(), { path, basename: path.split("/").pop()!.slice(0, -3), extension: "md" })) : [file];
-	const workspace = { getActiveViewOfType: () => hasCurrent ? editor : null, getLeavesOfType: () => [{ view: editor }] };
+	const workspace = { getActiveViewOfType: (): MarkdownView | null => hasCurrent ? editor : null, getLeavesOfType: (): { view: MarkdownView }[] => [{ view: editor }] };
 	const read = vi.fn(async (_file: TFile) => markdown);
 	const chat = vi.fn<Parameters<ServerClient["chat"]>, ReturnType<ServerClient["chat"]>>(async () => ({ ok: true as const, value: { content: "Ответ" } }));
 	const plugin = { settings: { ...DEFAULT_SETTINGS, serverUrl: "http://s", model: "модель", contextWindow: "20000" }, serverClient: { chat }, t } as unknown as AiHelperPlugin;
@@ -31,6 +31,209 @@ async function setup(paths?: string[], hasCurrent = true) {
 	const mention = () => { type("@"); input.keydown("Tab"); };
 	return { view, root, input, send, chat, file, workspace, read, type, mention, edit: (text: string) => { markdown = text; } };
 }
+
+// Append through the field so choosing another note preserves earlier elements.
+function appendMention(s: Awaited<ReturnType<typeof setup>>, text: string): void {
+	s.input.createSpan({ text });
+	s.input.dispatchEvent({ type: "input", inputType: "insertText" } as any);
+	s.input.keydown("Tab");
+}
+
+function attachments(content: string) {
+	return JSON.parse(content.split("\n\nNote attachments (context data):\n")[1]) as { title: string; path: string; markdown: string }[];
+}
+
+it.each([1, 2])("удаление %i повторений оставляет только явно выбранные вложения", async removed => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " и @Личное"); appendMention(s, " с @Знания");
+	const repeated = s.input.children.filter(child => child.attributes.title === "Личное/План.md");
+	for (const chip of repeated.slice(0, removed)) chip.remove();
+	s.input.dispatchEvent({ type: "input", inputType: "deleteContentBackward" } as any);
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content).map(snapshot => snapshot.path)).toEqual(
+		removed === 1 ? ["Личное/План.md", "Знания/План.md"] : ["Знания/План.md"],
+	);
+	await s.view.onClose();
+});
+
+it("читает несохранённые правки каждого редактора, предпочитая их вкладкам чтения после переключения", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	let personal = "Старый личный план", learning = "Старый учебный план";
+	const personalView = Object.assign(new MarkdownView({} as WorkspaceLeaf), {
+		file: s.view.app.vault.getFileByPath("Личное/План.md"), getMode: () => "source", editor: { getValue: () => personal },
+	});
+	const learningView = Object.assign(new MarkdownView({} as WorkspaceLeaf), {
+		file: s.view.app.vault.getFileByPath("Знания/План.md"), getMode: () => "source", editor: { getValue: () => learning },
+	});
+	const readingViews = [personalView, learningView].map(source => Object.assign(new MarkdownView({} as WorkspaceLeaf), {
+		file: source.file, getMode: () => "preview", getViewData: () => "Устаревшее представление чтения",
+	}));
+	s.workspace.getLeavesOfType = () => [...readingViews, personalView, learningView].map(view => ({ view }));
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	personal = "Несохранённый личный план"; learning = "Несохранённый учебный план";
+	s.workspace.getActiveViewOfType = () => readingViews[1];
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([
+		{ title: "План", path: "Личное/План.md", markdown: "Несохранённый личный план" },
+		{ title: "План", path: "Знания/План.md", markdown: "Несохранённый учебный план" },
+	]);
+	expect(s.read).not.toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it.each(["missing", "read-error"])("недоступность одного из файлов сохраняет весь вопрос и все повторения: %s", async reason => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); appendMention(s, " и @Личное");
+	const lookup = s.view.app.vault.getFileByPath;
+	if (reason === "missing") s.view.app.vault.getFileByPath = path => path === "Знания/План.md" ? null : lookup(path);
+	else s.read.mockImplementation(async file => {
+		if (file.path === "Знания/План.md") throw new Error("Ошибка чтения");
+		return "Личный план";
+	});
+	s.send.click(); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.view.getMessages()).toEqual([]);
+	expect(s.input.getText()).toBe("Сравни @План с @План и @План");
+	expect(s.input.children.filter(child => child.attributes.title).map(child => child.attributes.title)).toEqual([
+		"Личное/План.md", "Знания/План.md", "Личное/План.md",
+	]);
+	expect(s.root.getText()).toContain(t("mention-file-unavailable"));
+	await s.view.onClose();
+});
+
+it("история хранит обе старые версии, новый выбор передаёт свежую версию только в новом ходе", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	s.read.mockImplementation(async file => `Старый текст: ${file.path}`);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	s.send.click(); await flushPromises();
+	const original = s.chat.mock.calls[0][2][0].content;
+	s.read.mockImplementation(async file => `Новый текст: ${file.path}`);
+	s.type("Продолжи сравнение"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2][0].content).toBe(original);
+	expect(s.chat.mock.calls[1][2][2].content).toBe("Продолжи сравнение");
+	appendMention(s, "Теперь обсуди @Личное"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[2][2][0].content).toBe(original);
+	expect(attachments(s.chat.mock.calls[2][2][4].content)).toEqual([
+		{ title: "План", path: "Личное/План.md", markdown: "Новый текст: Личное/План.md" },
+	]);
+	await s.view.onClose();
+});
+
+it("бюджет включает историю, все новые снимки, системный промпт и резерв без усечения", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	s.view.plugin.settings.systemPrompt = "Сравнивай подробно";
+	s.view.plugin.settings.maxTokens = "100";
+	s.view.plugin.settings.contextWindow = "1056";
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 700, method: "bytes" }));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	s.read.mockImplementation(async file => `Полный текст: ${file.path}`);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledOnce();
+	const original = s.chat.mock.calls[0][2][0].content;
+	count.mockResolvedValue({ tokens: 701, method: "bytes" });
+	appendMention(s, "Ещё сравни @Личное"); appendMention(s, " с @Знания");
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(count.mock.calls[1][2]).toHaveLength(4);
+	expect(count.mock.calls[1][2][0]).toEqual({ role: "system", content: "Сравнивай подробно" });
+	expect(count.mock.calls[1][2][1].content).toBe(original);
+	expect(attachments(count.mock.calls[1][2][3].content)).toEqual(attachments(original));
+	expect(s.input.getText()).toBe("Ещё сравни @План с @План");
+	expect(s.root.getText()).toContain(t("mention-budget"));
+	s.view.plugin.settings.contextWindow = "1057";
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledTimes(2);
+	await s.view.onClose();
+});
+
+it("ошибка восстанавливает весь набор с повторениями, повтор читает свежие версии", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	s.chat.mockResolvedValueOnce({ ok: false, error: { message: "Ошибка сервера" } });
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); appendMention(s, " и @Личное");
+	s.send.click(); await flushPromises();
+	expect(s.input.getText()).toBe("Сравни @План с @План и @План");
+	expect(s.view.getMessages()).toEqual([]);
+	s.read.mockImplementation(async file => `Свежий текст: ${file.path}`);
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[1][2][0].content)).toEqual([
+		{ title: "План", path: "Личное/План.md", markdown: "Свежий текст: Личное/План.md" },
+		{ title: "План", path: "Знания/План.md", markdown: "Свежий текст: Знания/План.md" },
+	]);
+	expect(s.view.getMessages()).toHaveLength(2);
+	await s.view.onClose();
+});
+
+it.each(["new-draft", "new-mentions", "stop", "clear"])("поздний результат не возвращает прежний набор снимков: %s", async action => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	const pending = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockReturnValueOnce(pending.promise);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	s.send.click(); await flushPromises();
+	if (action === "new-draft") s.type("Новый вопрос");
+	if (action === "new-mentions") { appendMention(s, "Новый @Знания"); appendMention(s, " и @Личное"); }
+	if (action === "stop") s.send.click();
+	if (action === "clear") { s.type("После очистки"); s.root.find("ai-helper-clear-btn").click(); }
+	pending.resolve(action === "stop" || action === "clear" ? { ok: true, value: { content: "Поздний ответ" } } : { ok: false, error: { message: "Ошибка" } });
+	await flushPromises();
+	expect(s.view.getMessages()).toEqual([]);
+	expect(s.input.getText()).toBe(action === "new-draft" ? "Новый вопрос" : action === "new-mentions" ? "Новый @План и @План" : action === "clear" ? "После очистки" : "");
+	if (action === "new-mentions") expect(s.input.children.filter(child => child.attributes.title).map(child => child.attributes.title)).toEqual(["Знания/План.md", "Личное/План.md"]);
+	s.type("Продолжи"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2]).toEqual([{ role: "user", content: "Продолжи" }]);
+	await s.view.onClose();
+});
+
+it("смена языка, очистка истории и повторное открытие сохраняют несколько упоминаний и повторения", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); appendMention(s, " и @Личное");
+	setLanguage("en"); await s.view.refreshLocale();
+	s.root.find("ai-helper-clear-btn").click();
+	await s.view.onClose(); await s.view.onOpen();
+	const input = (s.view.contentEl as unknown as TestElement).find("ai-helper-input");
+	expect(input.getText()).toBe("Сравни @План с @План и @План");
+	expect(input.children.filter(child => child.attributes.title).map(child => child.attributes.title)).toEqual(["Личное/План.md", "Знания/План.md", "Личное/План.md"]);
+	input.keydown("Enter"); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toHaveLength(2);
+	await s.view.onClose();
+});
+
+it("сохраняет три упоминания на своих местах и передаёт по одному снимку двух заметок", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	s.read.mockImplementation(async file => `Текст: ${file.path}`);
+	appendMention(s, "Сравни @Личное");
+	appendMention(s, " с @Знания");
+	appendMention(s, " и уточни @Личное");
+	expect(s.input.getText()).toBe("Сравни @План с @План и уточни @План");
+	expect(s.input.children.filter(child => child.attributes.title).map(child => child.attributes.title)).toEqual([
+		"Личное/План.md", "Знания/План.md", "Личное/План.md",
+	]);
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([
+		{ title: "План", path: "Личное/План.md", markdown: "Текст: Личное/План.md" },
+		{ title: "План", path: "Знания/План.md", markdown: "Текст: Знания/План.md" },
+	]);
+	expect(s.read).toHaveBeenCalledTimes(2);
+	await s.view.onClose();
+});
+
+it("блокирует весь набор, если одна заметка стала недоступна во время подсчёта контекста", async () => {
+	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
+	const count = deferred<{ tokens: number; method: "bytes" }>();
+	s.view.plugin.serverClient.countPromptTokens = vi.fn(() => count.promise);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	s.send.click(); await flushPromises();
+	const lookup = s.view.app.vault.getFileByPath;
+	s.view.app.vault.getFileByPath = path => path === "Знания/План.md" ? null : lookup(path);
+	count.resolve({ tokens: 200, method: "bytes" }); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Сравни @План с @План");
+	expect(s.input.children.filter(child => child.attributes.title).map(child => child.attributes.title)).toEqual(["Личное/План.md", "Знания/План.md"]);
+	expect(s.root.getText()).toContain(t("mention-file-unavailable"));
+	expect(s.view.getMessages()).toEqual([]);
+	await s.view.onClose();
+});
 
 it("отправляет актуальную выбранную заметку и сохраняет снимок для следующего вопроса", async () => {
 	const s = await setup();
