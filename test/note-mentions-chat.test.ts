@@ -296,7 +296,7 @@ it.each([
 	["@ПЛАН", ["План — Архив/План.md", "План встречи — Новый проект/План встречи.md", "План — Проекты/План.md"]],
 	["@аРхИв/пЛ", ["План — Архив/План.md"]],
 	["@Новый проект/план", ["План встречи — Новый проект/План встречи.md"]],
-	["@проект план", ["Подходящие заметки не найдены."]],
+	["@проект план", ["План встречи — Новый проект/План встречи.md", "План — Проекты/План.md"]],
 ])("фильтрует полный путь цельной подстрокой без регистра: %s", async (query, expected) => {
 	const s = await setup(["Проекты/План.md", "Новый проект/План встречи.md", "Архив/План.md"], false);
 	s.type(query);
@@ -305,6 +305,77 @@ it.each([
 	await s.view.onClose();
 });
 
+it.each(["project monexa", "MONEXA PROJECT", "project   monexa"])("находит слова в любом порядке и отправляет выбранную заметку: %s", async query => {
+	const s = await setup(["Projects/Another.md", "Monexa/Project.md", "Docs/ProjectDescriptionMonexa/README.md", "1.Projects/Monexa.md"], false);
+	s.read.mockImplementation(async file => `Содержимое выбранной заметки: ${file.path}`);
+	s.type(`Объясни @${query}`);
+	expect(s.root.find("ai-helper-mention-suggest").children.map(option => option.getText())).toEqual([
+		"Monexa — 1.Projects/Monexa.md", "README — Docs/ProjectDescriptionMonexa/README.md", "Project — Monexa/Project.md",
+	]);
+	expect(s.input.getText()).toBe(`Объясни @${query}`);
+	expect(s.input.children.some(child => child.attributes.title)).toBe(false);
+	s.root.find("ai-helper-mention-suggest").children[1].click();
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Содержимое выбранной заметки: Docs/ProjectDescriptionMonexa/README.md");
+	expect(s.chat.mock.calls[0][2][0].content).not.toContain("1.Projects/Monexa.md");
+	await s.view.onClose();
+});
+
+
+it.each([
+	["projemonex", ["1.Projects/Monexa.md", "Docs/ProjectDescriptionMonexa/README.md"]],
+	["ПРКТПЛН", ["Проекты/План.md"]],
+	["плн пркт", ["Проекты/План.md"]],
+	["monexproje", ["Monexa/Project.md"]],
+	["projeznex", []],
+])("находит сокращения с сохранением порядка букв: %s", async (query, paths) => {
+	const s = await setup(["Проекты/План.md", "Projects/Another.md", "Monexa/Project.md", "Docs/ProjectDescriptionMonexa/README.md", "1.Projects/Monexa.md"], false);
+	s.read.mockImplementation(async file => `Снимок: ${file.path}`);
+	s.type(`Объясни @${query}`);
+	const options = s.root.find("ai-helper-mention-suggest").children;
+	expect(options.map(option => option.getText())).toEqual(paths.length ? paths.map(path => `${path.split("/").pop()!.slice(0, -3)} — ${path}`) : [t("mention-no-results")]);
+	if (paths.length) {
+		s.input.keydown("Tab");
+		s.input.keydown("Enter"); await flushPromises();
+		expect(s.chat.mock.calls[0][2][0].content).toContain(`Снимок: ${paths[0]}`);
+	} else {
+		s.input.keydown("Escape");
+		expect(s.input.getText()).toBe(`Объясни @${query}`);
+		s.input.keydown("Enter"); await flushPromises();
+		expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: `Объясни @${query}`.trim() }]);
+	}
+	await s.view.onClose();
+});
+
+it.each(["план", "ПЛАН", "  план  "])("ранжирует цельное совпадение, затем компактность, затем путь: %s", async query => {
+	const s = await setup(["Проекты/План.md", "Я/План.md", "Б/Пл-ан.md", "А/Пл-ан.md", "0/П---л---а---н.md", "1/П----------л/Пл-ан.md"]);
+	s.type("@");
+	expect(s.root.find("ai-helper-mention-suggest").children[0].getText()).toBe("План — Проекты/План.md");
+	s.type(`Объясни @${query}`);
+	expect(s.root.find("ai-helper-mention-suggest").children.map(option => option.getText())).toEqual([
+		"План — Проекты/План.md", "План — Я/План.md", "Пл-ан — 1/П----------л/Пл-ан.md",
+		"Пл-ан — А/Пл-ан.md", "Пл-ан — Б/Пл-ан.md", "П---л---а---н — 0/П---л---а---н.md",
+	]);
+	s.input.keydown("Escape");
+	expect(s.input.getText()).toBe(`Объясни @${query}`);
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: `Объясни @${query}`.trim() }]);
+	await s.view.onClose();
+});
+
+it("релевантность фильтра важнее текущей заметки", async () => {
+	const s = await setup(["Проекты/План.md", "А/ПрктПлн.md"]);
+	s.type("Объясни @прктплн");
+	expect(s.root.find("ai-helper-mention-suggest").children.map(option => option.getText())).toEqual([
+		"ПрктПлн — А/ПрктПлн.md", "План — Проекты/План.md",
+	]);
+	s.read.mockResolvedValue("Выбрана точная заметка");
+	s.input.keydown("Enter"); s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain("А/ПрктПлн.md");
+	expect(s.chat.mock.calls[0][2][0].content).toContain("Выбрана точная заметка");
+	expect(s.chat.mock.calls[0][2][0].content).not.toContain("Проекты/План.md");
+	await s.view.onClose();
+});
 
 it.each(["Enter", "Tab", "click"])("выбирает исключённую заметку без текущей вкладки через %s и сохраняет её снимок", async action => {
 	const s = await setup(["Исключённые/План.md", "Архив/План.md"], false);

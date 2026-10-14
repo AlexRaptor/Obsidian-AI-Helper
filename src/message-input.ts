@@ -3,6 +3,27 @@ import type { LocaleKey } from "./i18n";
 
 let inputSequence = 0;
 
+/** Minimum skipped characters in an ordered match; Infinity means no match. */
+function tokenGaps(path: string, token: string): number {
+	if (path.includes(token)) return 0;
+	const letters = Array.from(token);
+	const starts = new Array<number>(letters.length).fill(-1);
+	let best = Infinity;
+	let position = 0;
+	for (const letter of path) {
+		// Walk backwards so a path character cannot satisfy two token characters.
+		for (let index = letters.length - 1; index >= 0; index--) {
+			if (letter !== letters[index]) continue;
+			if (index === 0) starts[index] = position;
+			else if (starts[index - 1] >= 0) starts[index] = starts[index - 1];
+			else continue;
+			if (index === letters.length - 1) best = Math.min(best, position - starts[index] + 1 - letters.length);
+		}
+		position++;
+	}
+	return best;
+}
+
 export type DraftPart = string | { file: TFile };
 export interface MessageDraft { parts: DraftPart[]; }
 
@@ -105,11 +126,19 @@ export class MessageInput {
 		if (fence || inline || indented) return;
 		const current = this.currentNote();
 		this.candidates = this.markdownFiles().sort((a, b) => a.path.localeCompare(b.path));
-		if (current?.extension === "md" && !match[1]) {
+		const tokens = match[1].toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+		if (current?.extension === "md" && !tokens.length) {
 			this.candidates = [current, ...this.candidates.filter(file => file.path !== current.path)];
 		}
-		const filter = match[1].toLocaleLowerCase();
-		this.candidates = this.candidates.filter(file => file.path.toLocaleLowerCase().includes(filter));
+		if (tokens.length) {
+			this.candidates = this.candidates.map(file => {
+				const path = file.path.toLocaleLowerCase();
+				const gaps = tokens.map(token => tokenGaps(path, token));
+				return { file, fuzzyTokens: gaps.filter(gap => gap > 0).length, gaps: gaps.reduce((sum, gap) => sum + gap, 0) };
+			}).filter(match => Number.isFinite(match.gaps))
+				.sort((a, b) => a.fuzzyTokens - b.fuzzyTokens || a.gaps - b.gaps || a.file.path.localeCompare(b.file.path))
+				.map(match => match.file);
+		}
 		this.mentionStart = start; this.mentionEnd = text.length;
 		this.suggestionOpen = true;
 		this.renderSuggestion();
