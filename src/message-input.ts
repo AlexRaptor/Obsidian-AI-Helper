@@ -54,7 +54,9 @@ export interface MessageDraft { parts: DraftPart[]; }
 export function draftText(draft: MessageDraft): string {
 	return draft.parts.map(part => typeof part === "string" ? part : `@${part.file.basename}`).join("");
 }
-export function renderDraft(container: HTMLElement, draft: MessageDraft): void {
+export type DisplayDraft = { parts: (string | { file: Pick<TFile, "basename" | "path"> })[] };
+
+export function renderDraft(container: HTMLElement, draft: DisplayDraft): void {
 	for (const part of draft.parts) {
 		if (typeof part === "string") container.createSpan({ text: part });
 		else {
@@ -119,6 +121,11 @@ export class MessageInput {
 		const editingFilter = this.suggestionOpen && (input.inputType === "deleteContentBackward" || input.inputType === "deleteContentForward");
 		this.closeSuggestion();
 		if ((input.inputType !== "insertText" && !editingFilter) || input.isComposing) return;
+		this.updateSuggestion();
+	};
+
+	private updateSuggestion(): void {
+		this.closeSuggestion();
 		const draft = this.getDraft();
 		const text = draftText(draft).slice(0, this.caretOffset());
 		const match = /(?:^|[ \t\n])@([^\n@]*)$/.exec(text);
@@ -151,9 +158,9 @@ export class MessageInput {
 		}
 		if (fence || inline || indented) return;
 		const current = this.currentNote();
-		this.candidates = this.markdownFiles().sort((a, b) => a.path.localeCompare(b.path));
+		this.candidates = this.markdownFiles().slice().sort((a, b) => a.path.localeCompare(b.path));
 		const tokens = match[1].toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-		if (current?.extension === "md" && !tokens.length) {
+		if (current?.extension === "md" && this.candidates.includes(current) && !tokens.length) {
 			this.candidates = [current, ...this.candidates.filter(file => file.path !== current.path)];
 		}
 		if (tokens.length) {
@@ -172,7 +179,7 @@ export class MessageInput {
 		this.mentionStart = start; this.mentionEnd = text.length;
 		this.suggestionOpen = true;
 		this.renderSuggestion();
-	};
+	}
 
 	private renderSuggestion(): void {
 		if (!this.suggestion) return;
@@ -284,6 +291,29 @@ export class MessageInput {
 		this.sendBtn?.removeEventListener("click", this.handleClick);
 		this.inputEl = null;
 		this.sendBtn = null;
+	}
+
+	/** Refresh chips in place so vault changes preserve the editor selection. */
+	refreshFiles(): void {
+		const visit = (node: Node) => {
+			if (node.nodeType !== 1) return;
+			const chip = node as HTMLElement;
+			const id = chip.getAttribute?.("data-ai-mention");
+			const file = id ? this.bindings.get(id) : undefined;
+			if (file) {
+				chip.setText(`@${file.basename}`);
+				chip.setAttribute("title", file.path);
+				chip.setAttribute("aria-label", `${file.basename}: ${file.path}`);
+				setTooltip(chip, file.path);
+			} else for (const child of Array.from(node.childNodes)) visit(child);
+		};
+		if (this.inputEl) visit(this.inputEl);
+		if (this.suggestionOpen) {
+			const selected = this.candidates[this.selectedIndex];
+			this.updateSuggestion();
+			const index = this.candidates.indexOf(selected);
+			if (index >= 0) { this.selectedIndex = index; this.renderSuggestion(); }
+		}
 	}
 
 	private closeOnBlur = (): void => { this.closeSuggestion(); };

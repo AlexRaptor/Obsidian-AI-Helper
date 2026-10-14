@@ -1,11 +1,11 @@
-import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType } from "obsidian";
+import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType, type EventRef, type TFile } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
 import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
 import { readNoteSnapshot, snapshotMessage, type NoteSnapshot } from "./note-attachments";
-import { MessageInput, draftText, renderDraft, type MessageDraft } from "./message-input";
+import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
@@ -25,7 +25,7 @@ function formatNumber(value: number): string {
 	return value.toLocaleString(getLanguage());
 }
 
-type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; sources?: ChatSource[]; folderSearch?: boolean; draft?: MessageDraft };
+type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; sources?: ChatSource[]; folderSearch?: boolean; draft?: DisplayDraft };
 type MessageRow = {
 	div: HTMLElement; branch: HTMLElement; body: HTMLElement; content: HTMLElement;
 	revision: number; signature: string; component?: Component;
@@ -49,6 +49,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private indexAction: HTMLButtonElement | null = null;
 	private indexPause: HTMLButtonElement | null = null;
 	private indexActionPending = false;
+	private vaultEvents: EventRef[] = [];
 	private unsubscribeIndex: (() => void) | undefined;
 	private searchBtn: HTMLElement | null = null;
 	private messagesEl: HTMLElement | null = null;
@@ -154,7 +155,16 @@ export class ChatView extends ItemView implements HoverParent {
 		this.detachMarkdown();
 		this.followingMessages = true;
 		this.unsubscribeIndex?.();
+		this.detachVaultEvents();
 		this.buildStructure();
+		if (this.app.vault?.on) {
+			const refresh = () => this.messageInput.refreshFiles();
+			this.vaultEvents = [
+				this.app.vault.on("create", refresh),
+				this.app.vault.on("rename", refresh),
+				this.app.vault.on("delete", refresh),
+			];
+		}
 		this.unsubscribeIndex = this.plugin.noteSearch?.subscribe(() => this.updateIndexStatus());
 		this.updateIndexStatus();
 		this.bindEvents();
@@ -182,7 +192,13 @@ export class ChatView extends ItemView implements HoverParent {
 		await this.renderMessages();
 	}
 
+	private detachVaultEvents(): void {
+		for (const ref of this.vaultEvents) this.app.vault.offref(ref);
+		this.vaultEvents = [];
+	}
+
 	async onClose(): Promise<void> {
+		this.detachVaultEvents();
 		this.hoverPopover?.unload();
 		this.hoverPopover = null;
 		this.unsubscribeIndex?.();
@@ -614,6 +630,10 @@ export class ChatView extends ItemView implements HoverParent {
 		this.setThinking(false);
 	}
 
+	private unavailableNote(file: TFile): Error {
+		return new Error(`${this.t("mention-file-unavailable")} ${file.basename} (${file.path})`);
+	}
+
 	private async handleSend(): Promise<void> {
 		if (this.thinking) return;
 		const draft = this.messageInput.getDraft();
@@ -630,7 +650,12 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
 
 		this.messageInput.clear();
-		this.messages.push({ role: "user", content: text, kind: "text", draft: files.length ? draft : undefined });
+		const displayDraft: DisplayDraft | undefined = files.length ? {
+			parts: draft.parts.map(part => typeof part === "string" ? part : {
+				file: { basename: part.file.basename, path: part.file.path },
+			}),
+		} : undefined;
+		this.messages.push({ role: "user", content: text, kind: "text", draft: displayDraft });
 		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
 		this.messages.push(pending);
 		this.activeMessage = pending;
@@ -679,18 +704,25 @@ export class ChatView extends ItemView implements HoverParent {
 			if (!settings.contextWindow.trim()) await this.plugin.contextWindowConnection?.refresh();
 			if (this.activeRequest !== request) return;
 			if (hasSnapshots) {
-				try { snapshots = await Promise.all(files.map(file => readNoteSnapshot(this.app, file))); }
-				catch { throw new Error(this.t("mention-file-unavailable")); }
-				if (this.activeRequest !== request) return;
-				requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
-				const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
-				if (window === undefined) throw new Error(this.t("mention-window-unknown"));
-				const reserve = settings.maxTokens.trim() ? Number(settings.maxTokens) : 1024;
-				const fullMessages: ChatMessage[] = params.systemPrompt ? [{ role: "system", content: params.systemPrompt }, ...requestMessages] : requestMessages;
-				const count = serverClient.countPromptTokens ? await serverClient.countPromptTokens(serverUrl, model, fullMessages, settings.apiKey, request.signal) : conservativePromptTokens(fullMessages);
-				if (this.activeRequest !== request) return;
-				if (!Number.isSafeInteger(reserve) || reserve <= 0 || count.tokens + reserve + 256 > window) throw new Error(this.t("mention-budget"));
-				params.maxTokens = String(reserve);
+				while (true) {
+					snapshots = await Promise.all(files.map(async file => {
+						try { return await readNoteSnapshot(this.app, file); }
+						catch { throw this.unavailableNote(file); }
+					}));
+					if (this.activeRequest !== request) return;
+					requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
+					const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
+					if (window === undefined) throw new Error(this.t("mention-window-unknown"));
+					const reserve = settings.maxTokens.trim() ? Number(settings.maxTokens) : 1024;
+					const fullMessages: ChatMessage[] = params.systemPrompt ? [{ role: "system", content: params.systemPrompt }, ...requestMessages] : requestMessages;
+					const count = serverClient.countPromptTokens ? await serverClient.countPromptTokens(serverUrl, model, fullMessages, settings.apiKey, request.signal) : conservativePromptTokens(fullMessages);
+					if (this.activeRequest !== request) return;
+					// A rename while counting changes the serialized context and its budget.
+					if (files.some((file, index) => file.path !== snapshots[index].path)) continue;
+					if (!Number.isSafeInteger(reserve) || reserve <= 0 || count.tokens + reserve + 256 > window) throw new Error(this.t("mention-budget"));
+					params.maxTokens = String(reserve);
+					break;
+				}
 			}
 			if (useSearch) {
 				const instruction = useMixed ? MIXED_SEARCH_INSTRUCTION : useFolders ? FOLDER_SEARCH_INSTRUCTION : NOTE_SEARCH_INSTRUCTION;
@@ -776,9 +808,8 @@ export class ChatView extends ItemView implements HoverParent {
 			}
 			// Reading and token counting can yield while a selected file is removed.
 			// Validate the whole attachment set before sending any of its snapshots.
-			if (files.some(file => this.app.vault.getFileByPath(file.path) !== file)) {
-				throw new Error(this.t("mention-file-unavailable"));
-			}
+			const unavailable = files.find(file => this.app.vault.getFileByPath(file.path) !== file);
+			if (unavailable) throw this.unavailableNote(unavailable);
 			const result = await serverClient.chat(serverUrl, model, requestMessages, params);
 			if (this.activeRequest !== request) return;
 
