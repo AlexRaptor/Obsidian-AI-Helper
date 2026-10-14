@@ -21,6 +21,7 @@ import { createContextWindowConnection } from "./context-window";
 import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
 
 export class AiHelperPlugin extends Plugin {
+	currentNote: TFile | null = null;
 	folderDescriptions = new FolderDescriptions(this.app, () => this.settings.folderDescriptionName, key => this.t(key));
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
 	models: string[] = [];
@@ -48,6 +49,17 @@ export class AiHelperPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		this.unloading = false;
+		const rememberNote = () => {
+			const file = this.app.workspace.getActiveViewOfType?.(MarkdownView)?.file;
+			if (file?.extension === "md") this.currentNote = file;
+		};
+		rememberNote();
+		if (this.app.workspace.on) {
+			this.registerEvent(this.app.workspace.on("active-leaf-change", rememberNote));
+			this.registerEvent(this.app.workspace.on("file-open", file => {
+				if (file?.extension === "md") this.currentNote = file;
+			}));
+		}
 		await this.loadSettings();
 		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();

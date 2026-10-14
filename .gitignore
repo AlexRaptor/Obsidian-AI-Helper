@@ -4,3 +4,7 @@ main.js.map
 *.map
 data.json
 .DS_Store
+
+# Сгенерированные хранилища ручной проверки упоминаний
+docs/testing/note-mentions/*-vault/
+docs/testing/note-mentions/*-vault-reset-*/

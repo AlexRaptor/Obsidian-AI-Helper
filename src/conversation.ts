@@ -1,8 +1,10 @@
+import type { NoteSnapshot } from "./note-attachments";
 export type Role = "user" | "model";
 
 export interface Message {
 	role: Role;
 	content: string;
+	snapshots?: NoteSnapshot[];
 }
 
 export interface TokenUsage {

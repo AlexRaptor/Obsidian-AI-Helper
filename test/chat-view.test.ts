@@ -70,7 +70,7 @@ describe("chat view request lifecycle", () => {
 		input.value = "Черновик";
 		const event = { type: "keydown", key: "Enter", shiftKey: true, preventDefault: vi.fn() };
 		input.dispatchEvent(event); await flushPromises();
-		expect(input.tagName).toBe("TEXTAREA");
+		expect(input.attributes["aria-multiline"]).toBe("true");
 		expect(event.preventDefault).not.toHaveBeenCalled();
 		expect(chat).not.toHaveBeenCalled();
 		expect(input.value).toBe("Черновик");

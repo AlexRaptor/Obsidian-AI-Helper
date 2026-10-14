@@ -1,10 +1,11 @@
-import { ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType } from "obsidian";
+import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
 import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
-import { MessageInput } from "./message-input";
+import { readNoteSnapshot, snapshotMessage, type NoteSnapshot } from "./note-attachments";
+import { MessageInput, draftText, renderDraft, type MessageDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
@@ -24,7 +25,7 @@ function formatNumber(value: number): string {
 	return value.toLocaleString(getLanguage());
 }
 
-type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; sources?: ChatSource[]; folderSearch?: boolean };
+type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; sources?: ChatSource[]; folderSearch?: boolean; draft?: MessageDraft };
 type MessageRow = {
 	div: HTMLElement; branch: HTMLElement; body: HTMLElement; content: HTMLElement;
 	revision: number; signature: string; component?: Component;
@@ -71,7 +72,9 @@ export class ChatView extends ItemView implements HoverParent {
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
 		this.plugin = plugin;
-		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration());
+		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration(), () => {
+			return this.app.workspace?.getActiveViewOfType?.(MarkdownView)?.file ?? this.plugin.currentNote ?? null;
+		});
 	}
 
 	getViewType(): string {
@@ -375,7 +378,7 @@ export class ChatView extends ItemView implements HoverParent {
 			.getMessages()
 			.map((m) => ({
 				role: (m.role === "model" ? "assistant" : m.role) as ChatMessage["role"],
-				content: m.content,
+				content: snapshotMessage(m.content, m.snapshots),
 			}));
 	}
 
@@ -563,7 +566,8 @@ export class ChatView extends ItemView implements HoverParent {
 				} else if (kind === "error") {
 					staging.createSpan({ cls: "ai-helper-error-prefix", text: this.t("chat-error-prefix") });
 					staging.createSpan({ text: ` ${content}` });
-				} else staging.createSpan({ cls: kind === "thinking" ? "ai-helper-thinking" : "", text: content });
+				} else if (message.draft) renderDraft(staging, message.draft);
+				else staging.createSpan({ cls: kind === "thinking" ? "ai-helper-thinking" : "", text: content });
 				if (stopped) staging.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
 				if (error) staging.createDiv({ cls: "ai-helper-error-prefix ai-helper-inline-error", text: `${this.t("chat-error-prefix")}: ${error}` });
 				if (revision !== this.renderRevision || current.revision !== rowRevision || this.messagesEl !== el) return;
@@ -612,18 +616,28 @@ export class ChatView extends ItemView implements HoverParent {
 
 	private async handleSend(): Promise<void> {
 		if (this.thinking) return;
-		const text = this.messageInput.getDraft().trim();
+		const draft = this.messageInput.getDraft();
+		const text = draftText(draft).trim();
+		const files = [...new Set(draft.parts.flatMap(part => typeof part === "string" ? [] : [part.file]))];
+		const hasSnapshots = files.length > 0 || this.conversation.getMessages().some(message => message.snapshots?.length);
+		if (files.length && !draft.parts.some(part => typeof part === "string" && part.trim())) {
+			showStatusNotice(this.t("mention-question-required"), "warning"); return;
+		}
+		if (hasSnapshots && this.searchEnabled) {
+			showStatusNotice(this.t("mention-search-unavailable"), "warning"); return;
+		}
 		if (!text) return;
 		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
 
 		this.messageInput.clear();
-		this.messages.push({ role: "user", content: text, kind: "text" });
+		this.messages.push({ role: "user", content: text, kind: "text", draft: files.length ? draft : undefined });
 		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
 		this.messages.push(pending);
 		this.activeMessage = pending;
 		const request = new AbortController();
 		this.activeRequest = request;
 		const { settings, serverClient } = this.plugin;
+		let snapshots: NoteSnapshot[] = [];
 		const requestMessages: ChatMessage[] = [
 			...this.toRequestMessages(), { role: "user", content: text },
 		];
@@ -664,6 +678,20 @@ export class ChatView extends ItemView implements HoverParent {
 			if (this.activeRequest !== request) return;
 			if (!settings.contextWindow.trim()) await this.plugin.contextWindowConnection?.refresh();
 			if (this.activeRequest !== request) return;
+			if (hasSnapshots) {
+				try { snapshots = await Promise.all(files.map(file => readNoteSnapshot(this.app, file))); }
+				catch { throw new Error(this.t("mention-file-unavailable")); }
+				if (this.activeRequest !== request) return;
+				requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
+				const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
+				if (window === undefined) throw new Error(this.t("mention-window-unknown"));
+				const reserve = settings.maxTokens.trim() ? Number(settings.maxTokens) : 1024;
+				const fullMessages: ChatMessage[] = params.systemPrompt ? [{ role: "system", content: params.systemPrompt }, ...requestMessages] : requestMessages;
+				const count = serverClient.countPromptTokens ? await serverClient.countPromptTokens(serverUrl, model, fullMessages, settings.apiKey, request.signal) : conservativePromptTokens(fullMessages);
+				if (this.activeRequest !== request) return;
+				if (!Number.isSafeInteger(reserve) || reserve <= 0 || count.tokens + reserve + 256 > window) throw new Error(this.t("mention-budget"));
+				params.maxTokens = String(reserve);
+			}
 			if (useSearch) {
 				const instruction = useMixed ? MIXED_SEARCH_INSTRUCTION : useFolders ? FOLDER_SEARCH_INSTRUCTION : NOTE_SEARCH_INSTRUCTION;
 				const contextWindow = () => effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value) ?? (settings.contextWindow ? NaN : 8192);
@@ -752,7 +780,7 @@ export class ChatView extends ItemView implements HoverParent {
 			if (result.ok) {
 				const { content, usage } = result.value;
 				// Commit the turn together so failed attempts never enter request history.
-				this.conversation.addMessage({ role: "user", content: text });
+				this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text });
 				this.conversation.addMessage({ role: "model", content });
 				this.conversation.recordUsage(usage);
 				// A completion can load a previously cold model; refresh its runtime limit.
@@ -769,14 +797,14 @@ export class ChatView extends ItemView implements HoverParent {
 					: result.error.code === "invalid-response-wait" ? this.t("setting-response-wait-invalid") : result.error.message;
 				if (pending.kind === "text") pending.error = message;
 				else { pending.content = message; pending.kind = "error"; }
-				this.messageInput.restoreIfEmpty(text);
+				this.messageInput.restoreIfEmpty(draft);
 			}
 		} catch (error) {
 			if (this.activeRequest !== request) return;
 			const message = error instanceof NoteSearchError ? this.t(hasFolders && error.code === "search-budget" ? (useMixed ? "search-mixed-budget" : "search-folder-budget") : useFolders && error.code === "search-rebuild" ? "search-folder-changed" : error.code) : error instanceof Error ? error.message : String(error);
 			if (pending.kind === "text") pending.error = message;
 			else { pending.content = message; pending.kind = "error"; }
-			this.messageInput.restoreIfEmpty(text);
+			this.messageInput.restoreIfEmpty(draft);
 		} finally {
 			priority?.release();
 			if (this.activeRequest === request) {

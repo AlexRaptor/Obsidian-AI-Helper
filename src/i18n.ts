@@ -14,6 +14,13 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"mention-current": "Current note",
+	"mention-question-required": "Add a question or instruction alongside the note mention.",
+	"mention-search-unavailable": "Note attachments cannot be combined with search yet. Turn off search to send this draft.",
+	"mention-file-unavailable": "The mentioned note is unavailable. The draft has been preserved.",
+	"mention-window-unknown": "The model context window is unknown. Set its supported size in settings before sending note attachments.",
+	"mention-budget": "The full conversation with note attachments, response reserve and safety margin does not fit the model context window.",
+
 	"review-title": "Note review",
 	"review-folder": "Review notes",
 	"review-recursive": "Include subfolders",
@@ -324,6 +331,13 @@ export const en = {
 } as const;
 
 export const ru = {
+	"mention-current": "Текущая заметка",
+	"mention-question-required": "Добавьте вопрос или инструкцию к упоминанию заметки.",
+	"mention-search-unavailable": "Вложения заметок пока нельзя сочетать с поиском. Выключите поиск для отправки этого черновика.",
+	"mention-file-unavailable": "Упомянутая заметка недоступна. Черновик сохранён.",
+	"mention-window-unknown": "Окно контекста модели неизвестно. Укажите поддерживаемый размер в настройках перед отправкой вложений заметок.",
+	"mention-budget": "Полный диалог с вложениями заметок, резервом ответа и дополнительным запасом не помещается в окно контекста модели.",
+
 	"review-title": "Разбор заметок",
 	"review-folder": "Разобрать заметки",
 	"review-recursive": "Включить вложенные папки",

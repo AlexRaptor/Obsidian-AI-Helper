@@ -34,7 +34,13 @@ export class TestElement {
 	classes = new Set<string>();
 	attributes: Record<string, string> = {};
 	style: Record<string, string> = {};
-	value = "";
+	private inputValue = "";
+ get value(): string { return this.attributes.contenteditable === "true" || this.attributes.contenteditable === "plaintext-only" ? this.getText() : this.inputValue; }
+ set value(value: string) { if (this.attributes.contenteditable === "true" || this.attributes.contenteditable === "plaintext-only") { this.empty(); this.text = value; } else this.inputValue = value; }
+ get textContent(): string { return this.getText(); }
+ set textContent(value: string) { this.empty(); this.text = value; }
+ get lastChild(): TestElement | TestText | undefined { return this.childNodes.at(-1); }
+ focus(): void {}
 	disabled = false;
 	checked = false;
 	text = "";
@@ -47,6 +53,8 @@ export class TestElement {
 	addClass(...values: string[]): void { values.flatMap(value => value.split(" ")).forEach((cls) => this.classes.add(cls)); }
 	setText(value: string): void { this.text = value; }
 	setAttribute(name: string, value: string): void { this.attributes[name] = value; }
+	getAttribute(name: string): string | null { return this.attributes[name] ?? null; }
+	removeAttribute(name: string): void { delete this.attributes[name]; }
 	createEl(_tag: string, options: ElementOptions = {}): TestElement {
 		const child = new TestElement();
 		child.tagName = _tag.toUpperCase();
