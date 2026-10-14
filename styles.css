@@ -181,6 +181,14 @@
 	margin-top: 4px;
 }
 
+.ai-helper-message-model.ai-helper-message-kind-text .ai-helper-markdown {
+	white-space: normal;
+}
+
+.ai-helper-message-model.ai-helper-message-kind-text .ai-helper-markdown pre {
+	white-space: pre-wrap;
+}
+
 .ai-helper-markdown p:first-child {
 	margin-top: 0;
 }
