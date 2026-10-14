@@ -690,9 +690,12 @@ export class ChatView extends ItemView implements HoverParent {
 			await this.renderMessages();
 			if (!useFolders) await priority?.ready;
 			if (this.activeRequest !== request) return;
+			if (!settings.contextWindow.trim()) await this.plugin.contextWindowConnection?.refresh();
+			if (this.activeRequest !== request) return;
 			if (useSearch) {
 				const instruction = useMixed ? MIXED_SEARCH_INSTRUCTION : useFolders ? FOLDER_SEARCH_INSTRUCTION : NOTE_SEARCH_INSTRUCTION;
-				const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value) ?? (settings.contextWindow ? NaN : 8192);
+				const contextWindow = () => effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value) ?? (settings.contextWindow ? NaN : 8192);
+				let window = contextWindow();
 				const reserve = settings.maxTokens ? Number(settings.maxTokens) : 1024;
 				const baseMessages = [...requestMessages];
 				baseMessages.splice(baseMessages.length - 1, 0, { role: "system", content: instruction });
@@ -709,9 +712,9 @@ export class ChatView extends ItemView implements HoverParent {
 					if (this.activeRequest !== request) throw new Error("Request cancelled.");
 					return value.tokens;
 				};
-				const configuredBudget = hasFolders ? window : sourceBudgetBytes(settings.noteSourceBudget);
+				let configuredBudget = hasFolders ? window : sourceBudgetBytes(settings.noteSourceBudget);
 				if (configuredBudget === undefined) throw new NoteSearchError("search-budget");
-				const available = Math.min(configuredBudget, window - await count(withSources("")) - reserve - 256);
+				let available = Math.min(configuredBudget, window - await count(withSources("")) - reserve - 256);
 				if (available <= 0) throw new NoteSearchError("search-budget");
 				let query = text;
 				if (!useFolders && requestMessages.length > 1) {
@@ -725,6 +728,15 @@ export class ChatView extends ItemView implements HoverParent {
 					if (this.activeRequest !== request) return;
 					if (!result.ok || !result.value.content.trim()) throw new NoteSearchError("search-query-failed");
 					query = result.value.content.trim();
+					if (!settings.contextWindow.trim()) {
+						await this.plugin.contextWindowConnection?.refresh();
+						if (this.activeRequest !== request) return;
+						window = contextWindow();
+						if (!Number.isSafeInteger(window)) throw new NoteSearchError("search-budget");
+						configuredBudget = hasFolders ? window : configuredBudget;
+						available = Math.min(configuredBudget, window - await count(withSources("")) - reserve - 256);
+						if (available <= 0) throw new NoteSearchError("search-budget");
+					}
 				}
 				let sources: ChatSource[];
 				let data: string;
@@ -772,7 +784,7 @@ export class ChatView extends ItemView implements HoverParent {
 				this.conversation.addMessage({ role: "model", content });
 				this.conversation.recordUsage(usage);
 				// A completion can load a previously cold model; refresh its runtime limit.
-				void this.plugin.contextWindowConnection?.refresh();
+				if (!settings.contextWindow.trim()) void this.plugin.contextWindowConnection?.refresh();
 				pending.content = content;
 				pending.kind = "text";
 			} else {

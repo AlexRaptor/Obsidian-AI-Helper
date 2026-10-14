@@ -135,6 +135,27 @@ it("does not open a used source after the note changes", async () => {
 	expect(open).not.toHaveBeenCalled(); await view.onClose();
 });
 
+it("обновляет окно между уточнением поискового запроса и основным ответом", async () => {
+	const { view, root, bodies, send } = await setup();
+	let limit = 65536;
+	const connection = createContextWindowConnection(createServerClient(async () => new Response(JSON.stringify({ data: [{ id: "chat", max_model_len: limit }] }))));
+	connection.configure(view.plugin.settings);
+	view.plugin.contextWindowConnection = connection;
+	await send("Вопрос о поезде");
+	const chat = view.plugin.serverClient.chat;
+	const spy = vi.spyOn(view.plugin.serverClient, "chat").mockImplementation(async (...args) => {
+		const result = await chat(...args); limit = 1100; return result;
+	});
+	try {
+		view.toggleSearch(); bodies.length = 0;
+		await send("Уточни время");
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(bodies).toHaveLength(1);
+		expect(root.getText()).toContain("Not enough context");
+		expect(connection.value?.tokens).toBe(1100);
+	} finally { spy.mockRestore(); await view.onClose(); }
+});
+
 it.each(["unrelated", "offline"] as const)("does not fall back to general knowledge when search is %s", async (mode) => {
 	const { view, root, bodies, send } = await setup(mode); root.find("ai-helper-search-toggle").click();
 	await send("When?"); expect(bodies).toHaveLength(1); expect(view.getMessages()).toEqual([]);

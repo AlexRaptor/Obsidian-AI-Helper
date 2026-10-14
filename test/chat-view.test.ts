@@ -50,6 +50,43 @@ it("uses the detected window for the progress bar and lets manual settings overr
 });
 
 describe("chat view request lifecycle", () => {
+	it.each(["", "2000"])("обновляет серверный лимит перед каждым сообщением только в автоматическом режиме (%s)", async manual => {
+		const client = createServerClient(async () => new Response("{}"));
+		const get = vi.spyOn(client, "getContextWindow").mockResolvedValue({ ok: true, value: { tokens: 4000, source: "vLLM" } });
+		const connection = createContextWindowConnection(client);
+		const { view, input, send, root } = await setup(async () => {
+			expect(connection.value?.tokens).toBe(manual ? 4000 : 8000);
+			return { ok: true, value: { content: "Ответ", usage: { promptTokens: 900, completionTokens: 100, totalTokens: 1000 } } };
+		});
+		view.plugin.contextWindowConnection = connection;
+		view.plugin.settings.contextWindow = manual;
+		const unsubscribe = connection.subscribe(() => view.updateContextIndicators());
+		connection.configure(view.plugin.settings); await connection.refresh(); get.mockClear();
+		get.mockResolvedValue({ ok: true, value: { tokens: 8000, source: "vLLM" } });
+		for (const text of ["Вопрос", "Уточнение"]) {
+			input.value = text; send.click(); await flushPromises();
+			await vi.waitFor(() => expect(send.attributes["aria-label"]).toBe(t("send")));
+			await vi.waitFor(() => expect(root.find("ai-helper-context-label").getText()).toBe(manual ? "50% - 1,000 / 2,000" : "13% - 1,000 / 8,000"));
+		}
+		expect(get.mock.calls.length).toBe(manual ? 0 : 4);
+		unsubscribe(); await view.onClose();
+	});
+
+	it("остановка во время обновления окна не отправляет сообщение после позднего результата", async () => {
+		const client = createServerClient(async () => new Response("{}"));
+		const pending = deferred<ServerClientResult<import("../src/context-window").ContextWindow | undefined>>();
+		const get = vi.spyOn(client, "getContextWindow").mockReturnValue(pending.promise);
+		const chat = vi.fn(async () => success("Ответ"));
+		const { view, input, send } = await setup(chat);
+		view.plugin.contextWindowConnection = createContextWindowConnection(client);
+		view.plugin.contextWindowConnection.configure(view.plugin.settings);
+		input.value = "Вопрос"; send.click();
+		await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+		send.click(); pending.resolve({ ok: true, value: { tokens: 8000, source: "vLLM" } });
+		await flushPromises(); expect(chat).not.toHaveBeenCalled();
+		await view.onClose();
+	});
+
 	it.each([
 		["en", "Generation parameters must be numbers. Correct the settings and try again."],
 		["ru", "Параметры генерации должны быть числами. Исправьте настройки и повторите запрос."],

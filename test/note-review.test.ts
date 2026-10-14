@@ -163,6 +163,7 @@ it.each(["stay", "none", "insufficient"] as const)("показывает доп�
 
 it("пропускает полный запрос по токенизатору, хотя оценка по байтам превышает окно", async () => {
 	const s = await setup(); s.plugin.settings.contextWindow = "1780";
+	vi.mocked(s.plugin.serverClient.getContextWindow).mockClear();
 	vi.mocked(s.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
 	await s.start();
 	expect(s.chat).toHaveBeenCalledTimes(1);
@@ -171,6 +172,36 @@ it("пропускает полный запрос по токенизатору
 	expect(s.plugin.serverClient.countPromptTokens).toHaveBeenCalledWith("http://model/v1", "диалог", messages, "", expect.any(AbortSignal));
 	expect(JSON.parse(messages[1].content).folders).toHaveLength(4);
 	expect(s.chat.mock.calls[0][3]?.maxTokens).toBe("1024");
+	expect(s.plugin.serverClient.getContextWindow).not.toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it("перед каждым запуском рекомендации обновляет автоматическое окно после перезапуска модели", async () => {
+	const s = await setup(); s.plugin.settings.contextWindow = "";
+	const get = vi.mocked(s.plugin.serverClient.getContextWindow);
+	get.mockResolvedValue({ ok: true, value: { tokens: 1000, source: "vLLM" } });
+	await s.plugin.contextWindowConnection.refresh(); get.mockClear();
+	vi.mocked(s.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
+	get.mockResolvedValue({ ok: true, value: { tokens: 1780, source: "vLLM" } });
+	await s.start();
+	expect(s.chat).toHaveBeenCalledTimes(1);
+	expect(get).toHaveBeenCalledTimes(1);
+	get.mockResolvedValue({ ok: true, value: { tokens: 1779, source: "vLLM" } });
+	s.root.find("ai-helper-review-refresh").click();
+	await vi.waitFor(() => expect(s.root.getText()).toContain("Текущее окно контекста: 1779 токенов"));
+	expect(s.chat).toHaveBeenCalledTimes(1);
+	expect(get).toHaveBeenCalledTimes(2);
+	await s.view.onClose();
+});
+
+it("остановка рекомендации во время определения окна не запускает ответ модели", async () => {
+	const s = await setup(); s.plugin.settings.contextWindow = "";
+	const pending = deferred<ServerClientResult<import("../src/context-window").ContextWindow | undefined>>();
+	const get = vi.mocked(s.plugin.serverClient.getContextWindow).mockClear().mockReturnValue(pending.promise);
+	s.command.callback!(); await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+	s.root.find("ai-helper-review-stop").click();
+	pending.resolve({ ok: true, value: { tokens: 32768, source: "vLLM" } });
+	await flushPromises(); expect(s.chat).not.toHaveBeenCalled();
 	await s.view.onClose();
 });
 

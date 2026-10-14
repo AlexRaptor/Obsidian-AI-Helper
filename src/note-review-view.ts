@@ -228,6 +228,8 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			if (this.request !== active) return;
 			const note = snapshot(file, editor); this.analyzed = note;
 			const settings = { ...this.plugin.settings };
+			if (!settings.contextWindow.trim()) await this.plugin.contextWindowConnection.refresh();
+			if (this.request !== active) return;
 			const sources = await this.plugin.folderDescriptions.sources(active.signal);
 			if (this.request !== active) return;
 			this.sources = sources;
