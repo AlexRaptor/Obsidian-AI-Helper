@@ -157,7 +157,9 @@ export class MessageInput {
 		this.candidates.forEach((file, index) => {
 			const selected = index === this.selectedIndex;
 			const id = `${this.suggestionId}-${index}`;
-			const option = this.suggestion!.createEl("button", { cls: `suggestion-item${selected ? " is-selected" : ""}`, text: `${file.basename} — ${file.path}`, attr: { type: "button", id, role: "option", "aria-selected": String(selected) } });
+			const option = this.suggestion!.createEl("button", { cls: `suggestion-item${selected ? " is-selected" : ""}`, attr: { type: "button", id, role: "option", "aria-selected": String(selected) } });
+			option.createSpan({ cls: "ai-helper-mention-suggest-name", text: file.basename });
+			option.createSpan({ text: ` — ${file.path}` });
 			option.addEventListener("mousedown", event => event.preventDefault());
 			option.addEventListener("click", () => { this.selectedIndex = index; this.confirmMention(); });
 			if (selected) this.inputEl?.setAttribute("aria-activedescendant", id);

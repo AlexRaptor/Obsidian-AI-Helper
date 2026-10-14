@@ -565,8 +565,13 @@
 }
 
 .ai-helper-mention-suggest button {
+	display: block;
 	width: 100%;
 	height: auto;
 	white-space: normal;
-	text-align: start;
+	text-align: left;
+}
+
+.ai-helper-mention-suggest-name {
+	color: var(--color-blue);
 }
