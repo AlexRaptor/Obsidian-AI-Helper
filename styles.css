@@ -547,7 +547,7 @@
 }
 
 .ai-helper-mention {
-	background: var(--text-highlight-bg);
+	background: var(--highlight-background, var(--text-highlight-bg, var(--text-selection)));
 	color: var(--text-normal);
 	border-radius: var(--radius-s);
 	padding: 0 0.2em;
