@@ -575,3 +575,7 @@
 .ai-helper-mention-suggest-name {
 	color: var(--color-blue);
 }
+
+.ai-helper-mention-match {
+	background: var(--text-highlight-bg);
+}

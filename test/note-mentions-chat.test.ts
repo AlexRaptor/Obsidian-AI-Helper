@@ -377,6 +377,30 @@ it("релевантность фильтра важнее текущей зам
 	await s.view.onClose();
 });
 
+it.each([
+	["promo", "Project/Monexa.md", ["Pro", "Mo"], ["Mo"]],
+	["MONEXA project", "Project/Monexa.md", ["Project", "Monexa"], ["Monexa"]],
+	["прктплн", "Проекты/План.md", ["Пр", "кт", "Пл", "н"], ["Пл", "н"]],
+	["план", "П---л/План.md", ["План"], ["План"]],
+	["плн", "П----------л/Пл-ан.md", ["Пл", "н"], ["Пл", "н"]],
+	["план", "İ/План.md", ["План"], ["План"]],
+])("подсвечивает совпавшие части имени и пути для %s", async (query, path, pathMatches, nameMatches) => {
+	const s = await setup([path], false);
+	s.type(`Объясни @${query}`);
+	const option = s.root.find("ai-helper-mention-suggest").children[0];
+	const highlights = (element: TestElement): string[] => element.children.flatMap(child => child.classes.has("ai-helper-mention-match") ? [child.getText()] : highlights(child));
+	expect(highlights(option.children[0])).toEqual(nameMatches);
+	expect(highlights(option.children[1])).toEqual(pathMatches);
+	expect(option.getText()).toBe(`${path.split("/").pop()!.slice(0, -3)} — ${path}`);
+	s.input.keydown("ArrowDown");
+	expect(highlights(s.root.find("ai-helper-mention-suggest").children[0].children[1])).toEqual(pathMatches);
+	s.input.keydown("Enter"); s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2][0].content).toContain(path);
+	s.type("@");
+	expect(highlights(s.root.find("ai-helper-mention-suggest"))).toEqual([]);
+	await s.view.onClose();
+});
+
 it.each(["Enter", "Tab", "click"])("выбирает исключённую заметку без текущей вкладки через %s и сохраняет её снимок", async action => {
 	const s = await setup(["Исключённые/План.md", "Архив/План.md"], false);
 	s.view.plugin.settings.excludedFolders = ["Исключённые"];

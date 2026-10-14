@@ -3,25 +3,49 @@ import type { LocaleKey } from "./i18n";
 
 let inputSequence = 0;
 
-/** Minimum skipped characters in an ordered match; Infinity means no match. */
-function tokenGaps(path: string, token: string): number {
-	if (path.includes(token)) return 0;
+/** Positions of the most compact ordered match, or null when absent. */
+function matchToken(path: string, token: string): number[] | null {
 	const letters = Array.from(token);
+	const exact = path.indexOf(token);
+	if (exact >= 0) {
+		const start = Array.from(path.slice(0, exact)).length;
+		return letters.map((_, index) => start + index);
+	}
+	const characters = Array.from(path);
 	const starts = new Array<number>(letters.length).fill(-1);
 	let best = Infinity;
-	let position = 0;
-	for (const letter of path) {
+	let bestStart = -1;
+	for (const [position, letter] of characters.entries()) {
 		// Walk backwards so a path character cannot satisfy two token characters.
 		for (let index = letters.length - 1; index >= 0; index--) {
 			if (letter !== letters[index]) continue;
 			if (index === 0) starts[index] = position;
 			else if (starts[index - 1] >= 0) starts[index] = starts[index - 1];
 			else continue;
-			if (index === letters.length - 1) best = Math.min(best, position - starts[index] + 1 - letters.length);
+			if (index === letters.length - 1 && position - starts[index] < best) {
+				best = position - starts[index];
+				bestStart = starts[index];
+			}
 		}
-		position++;
 	}
-	return best;
+	if (bestStart < 0) return null;
+	const positions: number[] = [];
+	for (let position = bestStart; positions.length < letters.length; position++) {
+		if (characters[position] === letters[positions.length]) positions.push(position);
+	}
+	return positions;
+}
+
+function renderMatchedText(container: HTMLElement, text: string, positions: Set<number>, offset = 0): void {
+	const characters = Array.from(text);
+	let start = 0;
+	while (start < characters.length) {
+		const matched = positions.has(start + offset);
+		let end = start + 1;
+		while (end < characters.length && positions.has(end + offset) === matched) end++;
+		container.createSpan({ cls: matched ? "ai-helper-mention-match" : undefined, text: characters.slice(start, end).join("") });
+		start = end;
+	}
 }
 
 export type DraftPart = string | { file: TFile };
@@ -50,6 +74,7 @@ export class MessageInput {
 	private mentionSequence = 0;
 	private suggestion: HTMLElement | null = null;
 	private candidates: TFile[] = [];
+	private matchedPositions = new Map<TFile, Set<number>>();
 	private selectedIndex = 0;
 	private suggestionOpen = false;
 	private mentionStart = 0;
@@ -74,6 +99,7 @@ export class MessageInput {
 		this.suggestion?.empty();
 		if (this.suggestion) this.suggestion.style.display = "none";
 		this.candidates = [];
+		this.matchedPositions.clear();
 		this.selectedIndex = 0;
 		this.suggestionOpen = false;
 		this.inputEl?.setAttribute("aria-expanded", "false");
@@ -133,7 +159,11 @@ export class MessageInput {
 		if (tokens.length) {
 			this.candidates = this.candidates.map(file => {
 				const path = file.path.toLocaleLowerCase();
-				const gaps = tokens.map(token => tokenGaps(path, token));
+				const matches = tokens.map(token => matchToken(path, token));
+				const gaps = matches.map(positions => positions ? positions[positions.length - 1] - positions[0] + 1 - positions.length : Infinity);
+				// Case conversion can expand a character (e.g. İ); highlight the original positions.
+				const originalPositions = Array.from(file.path).flatMap((letter, index) => Array.from(letter.toLocaleLowerCase(), () => index));
+				this.matchedPositions.set(file, new Set(matches.flatMap(positions => positions?.map(position => originalPositions[position]) ?? [])));
 				return { file, fuzzyTokens: gaps.filter(gap => gap > 0).length, gaps: gaps.reduce((sum, gap) => sum + gap, 0) };
 			}).filter(match => Number.isFinite(match.gaps))
 				.sort((a, b) => a.fuzzyTokens - b.fuzzyTokens || a.gaps - b.gaps || a.file.path.localeCompare(b.file.path))
@@ -158,8 +188,12 @@ export class MessageInput {
 			const selected = index === this.selectedIndex;
 			const id = `${this.suggestionId}-${index}`;
 			const option = this.suggestion!.createEl("button", { cls: `suggestion-item${selected ? " is-selected" : ""}`, attr: { type: "button", id, role: "option", "aria-selected": String(selected) } });
-			option.createSpan({ cls: "ai-helper-mention-suggest-name", text: file.basename });
-			option.createSpan({ text: ` — ${file.path}` });
+			const positions = this.matchedPositions.get(file) ?? new Set<number>();
+			const name = option.createSpan({ cls: "ai-helper-mention-suggest-name" });
+			renderMatchedText(name, file.basename, positions, Array.from(file.path.slice(0, file.path.lastIndexOf("/") + 1)).length);
+			const path = option.createSpan();
+			path.createSpan({ text: " — " });
+			renderMatchedText(path, file.path, positions);
 			option.addEventListener("mousedown", event => event.preventDefault());
 			option.addEventListener("click", () => { this.selectedIndex = index; this.confirmMention(); });
 			if (selected) this.inputEl?.setAttribute("aria-activedescendant", id);
