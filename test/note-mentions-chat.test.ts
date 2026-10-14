@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { MarkdownView, TFile, type WorkspaceLeaf } from "obsidian";
+import { MarkdownView, TFile, TFolder, type WorkspaceLeaf } from "obsidian";
+import { IDBFactory } from "fake-indexeddb";
+import { createNoteSearch } from "../src/note-index";
+import { FolderDescriptions } from "../src/folder-descriptions";
 import { ChatView } from "../src/chat-view";
 import type { AiHelperPlugin } from "../src/main";
 import type { ServerClient, ServerClientResult, ChatCompletionResult } from "../src/server-client";
@@ -55,6 +58,261 @@ function appendMention(s: Awaited<ReturnType<typeof setup>>, text: string): void
 function attachments(content: string) {
 	return JSON.parse(content.split("\n\nNote attachments (context data):\n")[1]) as { title: string; path: string; markdown: string }[];
 }
+
+async function setupSearch(mode: "notes" | "folders" | "mixed") {
+	const s = await setup(["Личное/План.md", "Знания/План.md", "Поиск/Материал.md", "Поиск/_folder.md"], false);
+	const texts = new Map([
+		["Личное/План.md", "---\nстатус: готов\n---\nЛичный план целиком [[Связь]]"],
+		["Знания/План.md", "Учебный план целиком ![[Изображение]]"],
+		["Поиск/Материал.md", "Дополнительный найденный материал"],
+		["Поиск/_folder.md", "Справочные материалы для планирования"],
+	]);
+	for (const file of s.files) Object.assign(file, { name: `${file.basename}.md`, parent: Object.assign(new TFolder(), { path: file.path.split("/")[0] }) });
+	s.read.mockImplementation(async file => texts.get(file.path)!);
+	s.view.app.vault.getAbstractFileByPath = path => s.files.find(file => file.path === path) ?? null;
+	Object.assign(s.view.plugin.settings, { embeddingServerUrl: "http://s", embeddingModel: "представления", excludedFolders: ["Личное", "Знания"], autoUpdateNotes: false });
+	const embeddings = vi.fn(async (_url: string, _model: string, input: string[]) => ({ ok: true as const, value: input.map(() => [1, 0]) }));
+	Object.assign(s.view.plugin.serverClient, { embeddings });
+	const noteSearch = createNoteSearch({ factory: new IDBFactory(), vaultPath: "/упоминания-поиск", client: s.view.plugin.serverClient, read: async path => texts.get(path) ?? null, open: vi.fn(async () => {}) });
+	noteSearch.configure(s.view.plugin.settings); await noteSearch.index("Поиск/Материал.md");
+	s.view.plugin.noteSearch = noteSearch;
+	s.view.plugin.folderDescriptions = new FolderDescriptions(s.view.app, () => "_folder.md", t);
+	s.root.find("ai-helper-search-toggle").click();
+	const select = s.root.find("ai-helper-search-type"); select.value = mode; select.dispatchEvent({ type: "change" });
+	const send = async () => { s.send.click(); await vi.waitFor(() => expect(s.send.attributes["aria-label"]).toBe(t("send"))); await flushPromises(); };
+	return { ...s, texts, noteSearch, embeddings, submit: send, select };
+}
+
+it.each(["notes", "folders", "mixed"] as const)("%s: дополняет несколько полных снимков свежими источниками, сохраняя историю", async mode => {
+	const s = await setupSearch(mode);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	await s.submit();
+	expect(s.select.value).toBe(mode);
+	expect(s.chat).toHaveBeenCalledOnce();
+	const first = s.chat.mock.calls[0][2];
+	expect(first.some(message => message.role === "system" && message.content.includes("note attachments") && message.content.includes("untrusted"))).toBe(true);
+	const original = first.at(-1)!.content;
+	expect(attachments(original)).toEqual([
+		{ title: "План", path: "Личное/План.md", markdown: s.texts.get("Личное/План.md") },
+		{ title: "План", path: "Знания/План.md", markdown: s.texts.get("Знания/План.md") },
+	]);
+	expect(first.at(-2)!.content).toContain(mode === "notes" ? "Дополнительный найденный материал" : "Справочные материалы для планирования");
+	if (mode === "mixed") expect(first.at(-2)!.content).toContain("Дополнительный найденный материал");
+	s.texts.set("Личное/План.md", "Изменённый личный план");
+	s.texts.set("Поиск/Материал.md", "Свежий найденный материал");
+	s.texts.set("Поиск/_folder.md", "Свежие правила хранения");
+	await s.noteSearch.index("Поиск/Материал.md");
+	s.type("Продолжи сравнение"); await s.submit();
+	const final = s.chat.mock.calls.at(-1)![2];
+	expect(final[0].content).toBe(original);
+	expect(final.at(-1)!.content).toBe("Продолжи сравнение");
+	expect(final.at(-2)!.content).toContain(mode === "notes" ? "Свежий найденный материал" : "Свежие правила хранения");
+	expect(final.filter(message => message.content.includes("Дополнительный найденный материал"))).toHaveLength(0);
+	expect(s.view.getMessages()).toHaveLength(4);
+	if (mode !== "folders") {
+		const preparation = s.chat.mock.calls[1];
+		expect(preparation[2][1].content).toBe(original);
+		expect(preparation[3]?.maxTokens).toBe("256");
+	}
+	await s.view.onClose();
+});
+
+it.each(["stop", "clear"] as const)("%s: отмена подготовки запроса с историческими снимками исключает позднюю отправку", async action => {
+	const s = await setupSearch("mixed");
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	const original = s.chat.mock.calls[0][2].at(-1)!.content;
+	const preparation = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockImplementationOnce(() => preparation.promise);
+	s.type("Продолжи сравнение"); s.send.click();
+	await vi.waitFor(() => expect(s.chat).toHaveBeenCalledTimes(2));
+	expect(s.chat.mock.calls[1][2][1].content).toBe(original);
+	const signal = s.chat.mock.calls[1][3]!.signal!;
+	if (action === "stop") s.send.click();
+	else { s.type("Новый черновик"); s.root.find("ai-helper-clear-btn").click(); }
+	expect(signal.aborted).toBe(true);
+	preparation.resolve({ ok: true, value: { content: "Поздний поисковый запрос" } });
+	await flushPromises();
+	expect(s.chat).toHaveBeenCalledTimes(2);
+	expect(s.view.getMessages()).toHaveLength(action === "stop" ? 2 : 0);
+	expect(s.input.getText()).toBe(action === "stop" ? "" : "Новый черновик");
+	await s.view.onClose();
+});
+
+it("бюджет промежуточного запроса включает старые и новые снимки и собственный резерв", async () => {
+	const s = await setupSearch("notes");
+	appendMention(s, "Обсуди @Личное"); await s.submit();
+	s.view.plugin.settings.contextWindow = "2000"; s.view.plugin.settings.maxTokens = "100";
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async (_url, _model, messages) => ({
+		tokens: messages[0].content.includes("search query") ? 1489 : 500, method: "lmstudio",
+	}));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	appendMention(s, "Сравни с @Знания"); await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	const preparation = count.mock.calls.at(-1)![2];
+	expect(attachments(preparation[1].content)[0].path).toBe("Личное/План.md");
+	expect(attachments(preparation.at(-1)!.content)[0].path).toBe("Знания/План.md");
+	expect(s.input.getText()).toBe("Сравни с @План");
+	expect(s.root.getText()).toContain(t("search-budget"));
+	await s.view.onClose();
+});
+
+it.each(["automatic", "manual", "invalid-manual"] as const)("%s: для снимков использует известное окно с приоритетом ручного значения", async limit => {
+	const s = await setupSearch("notes");
+	Object.assign(s.view.plugin, { contextWindowConnection: { value: { tokens: limit === "manual" ? 100 : 20000, source: "vLLM" }, refresh: vi.fn(async () => {}) } });
+	s.view.plugin.settings.contextWindow = limit === "automatic" ? "" : limit === "manual" ? "20000" : "не число";
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	if (limit === "invalid-manual") {
+		expect(s.chat).not.toHaveBeenCalled();
+		expect(s.root.getText()).toContain(t("mention-window-unknown"));
+		expect(s.input.getText()).toBe("Сравни @План с @План");
+	} else expect(s.chat).toHaveBeenCalledOnce();
+	await s.view.onClose();
+});
+
+it.each(["notes", "folders", "mixed"] as const)("%s: обязательные снимки и резервы блокируют поиск до запросов подготовки", async mode => {
+	const s = await setupSearch(mode);
+	Object.assign(s.view.plugin.settings, { contextWindow: "1355", maxTokens: "100" });
+	s.view.plugin.serverClient.countPromptTokens = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 1000, method: "lmstudio" }));
+	const search = vi.spyOn(s.noteSearch, "searchSources");
+	const folders = vi.spyOn(s.view.plugin.folderDescriptions, "sources");
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	expect(s.chat).not.toHaveBeenCalled(); expect(search).not.toHaveBeenCalled(); expect(folders).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Сравни @План с @План");
+	expect(s.root.getText()).toContain("Недостаточно контекста");
+	await s.view.onClose();
+});
+
+it("ограничивает дополнительные заметки свободным контекстом даже при большом бюджете источников", async () => {
+	const s = await setupSearch("notes");
+	Object.assign(s.view.plugin.settings, { contextWindow: "1800", maxTokens: "100", noteSourceBudget: "12000" });
+	s.view.plugin.serverClient.countPromptTokens = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 1000, method: "lmstudio" }));
+	const search = vi.spyOn(s.noteSearch, "searchSources");
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	// 1800 total - 1000 prompt - 100 answer - 256 safety = 444 bytes for extra sources.
+	expect(search.mock.calls[0][2]).toBe(444);
+	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)).toHaveLength(2);
+	await s.view.onClose();
+});
+
+it("отправляет обязательные снимки даже когда поиск не нашёл дополнительных заметок", async () => {
+	const s = await setupSearch("notes");
+	vi.spyOn(s.noteSearch, "searchSources").mockResolvedValue([]);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)).toHaveLength(2);
+	expect(s.chat.mock.calls[0][2].at(-2)!.content).toBe("[]");
+	expect(s.view.getMessages()).toHaveLength(2);
+	await s.view.onClose();
+});
+
+it.each(["notes", "folders", "mixed"] as const)("%s: переименование во время подготовки обновляет снимок и бюджет", async mode => {
+	const s = await setupSearch(mode);
+	const file = s.files[0];
+	appendMention(s, "Обсуди @Личное");
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => {
+		if (file.path === "Личное/План.md") {
+			s.texts.set("Личное/Новый план.md", s.texts.get(file.path)!);
+			s.rename(file, "Личное/Новый план.md");
+			return { tokens: 50000, method: "lmstudio" };
+		}
+		return { tokens: 1000, method: "lmstudio" };
+	});
+	s.view.plugin.serverClient.countPromptTokens = count;
+	await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)[0]).toMatchObject({ title: "Новый план", path: "Личное/Новый план.md" });
+	expect(count.mock.calls.at(-1)![2].at(-1)!.content).toContain("Личное/Новый план.md");
+	await s.view.onClose();
+});
+
+it.each(["notes", "mixed"] as const)("%s: не помещающийся найденный фрагмент не блокирует обязательные снимки", async mode => {
+	const s = await setupSearch(mode);
+	s.view.plugin.settings.noteSourceBudget = "1";
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)).toHaveLength(2);
+	expect(s.chat.mock.calls[0][2].at(-2)!.content).not.toContain("Дополнительный найденный материал");
+	if (mode === "mixed") expect(s.chat.mock.calls[0][2].at(-2)!.content).toContain("Справочные материалы для планирования");
+	await s.view.onClose();
+});
+
+it.each(["notes", "mixed"] as const)("%s: нулевой остаток бюджета дополнительных заметок позволяет ответить по полным снимкам", async mode => {
+	const s = await setupSearch(mode);
+	Object.assign(s.view.plugin.settings, { contextWindow: "1356", maxTokens: "100" });
+	s.view.plugin.serverClient.countPromptTokens = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 1000, method: "lmstudio" }));
+	const search = vi.spyOn(s.noteSearch, "searchSources");
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
+	expect(search).not.toHaveBeenCalled();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)).toHaveLength(2);
+	await s.view.onClose();
+});
+
+it("ошибка повторного чтения после переименования завершает подготовку и восстанавливает черновик", async () => {
+	const s = await setupSearch("notes");
+	const file = s.files[0];
+	appendMention(s, "Обсуди @Личное");
+	s.view.plugin.serverClient.countPromptTokens = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => {
+		if (file.path === "Личное/План.md") {
+			s.texts.set("Личное/Новый план.md", s.texts.get(file.path)!);
+			s.rename(file, "Личное/Новый план.md");
+			s.read.mockRejectedValueOnce(new Error("Не удалось прочитать переименованную заметку"));
+		}
+		return { tokens: 1000, method: "lmstudio" };
+	});
+	await s.submit();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.view.getMessages()).toEqual([]);
+	expect(s.input.getText()).toBe("Обсуди @Новый план");
+	expect(s.root.getText()).toContain(t("mention-file-unavailable"));
+	await s.view.onClose();
+});
+
+it.each(["notes", "folders", "mixed"] as const)("%s: блокирует неизвестное окно и перепроверяет историю без новых упоминаний", async mode => {
+	const s = await setupSearch(mode);
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	s.view.plugin.settings.contextWindow = "";
+	await s.submit();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.root.getText()).toContain(t("mention-window-unknown"));
+	expect(s.input.getText()).toBe("Сравни @План с @План");
+	s.view.plugin.settings.contextWindow = "20000";
+	await s.submit();
+	expect(s.view.getMessages()).toHaveLength(2);
+	s.view.plugin.settings.contextWindow = "";
+	s.type("Продолжи сравнение"); await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(s.input.getText()).toBe("Продолжи сравнение");
+	expect(s.root.getText()).toContain(t("mention-window-unknown"));
+	await s.view.onClose();
+});
+
+it.each(["notes", "folders", "mixed"] as const)("%s: считает окончательный запрос и резерв ответа, выделяя только оставшийся бюджет источникам", async mode => {
+	const s = await setupSearch(mode);
+	Object.assign(s.view.plugin.settings, { contextWindow: "4000", maxTokens: "100", systemPrompt: "Обсуди полные планы", noteSourceBudget: "300" });
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async (_url, _model, messages) => ({
+		tokens: messages.some(message => message.content.includes("Дополнительный найденный материал") || mode === "folders" && message.content.includes('"ancestors"')) ? 3644 : 1000,
+		method: "lmstudio",
+	}));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	const search = vi.spyOn(s.noteSearch, "searchSources");
+	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
+	await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(s.chat.mock.calls[0][3]?.maxTokens).toBe("100");
+	const messages = s.chat.mock.calls[0][2];
+	expect(count.mock.calls.at(-1)![2]).toEqual([{ role: "system", content: "Обсуди полные планы" }, ...messages]);
+	if (mode !== "folders") expect(search.mock.calls[0][2]).toBeLessThanOrEqual(300);
+	// One more reserved token crosses the final limit; snapshots and draft remain intact.
+	s.view.plugin.settings.maxTokens = "101";
+	s.type("Продолжи сравнение"); await s.submit();
+	expect(s.view.getMessages()).toHaveLength(2);
+	expect(s.chat.mock.calls.filter(call => call[3]?.maxTokens !== "256")).toHaveLength(1);
+	expect(s.input.getText()).toBe("Продолжи сравнение");
+	expect(s.root.getText()).toContain("Недостаточно контекста");
+	await s.view.onClose();
+});
 
 it.each([1, 2])("удаление %i повторений оставляет только явно выбранные вложения", async removed => {
 	const s = await setup(["Личное/План.md", "Знания/План.md"], false);
@@ -337,15 +595,14 @@ it("переключение вкладки не меняет выбранную
 	await s.view.onClose();
 });
 
-it.each(["unknown", "budget", "unavailable", "search"])("блокирует %s и сохраняет весь черновик", async reason => {
+it.each(["unknown", "budget", "unavailable"])("блокирует %s и сохраняет весь черновик", async reason => {
 	const s = await setup(); s.mention(); s.input.createSpan({ text: " Объясни" });
 	if (reason === "unknown") s.view.plugin.settings.contextWindow = "";
 	if (reason === "budget") s.view.plugin.settings.contextWindow = "100";
 	if (reason === "unavailable") s.view.app.vault.getFileByPath = () => null;
-	if (reason === "search") s.view.toggleSearch();
 	s.send.click(); await flushPromises();
 	expect(s.chat).not.toHaveBeenCalled();
-	const key = reason === "unknown" ? "mention-window-unknown" : reason === "budget" ? "mention-budget" : reason === "unavailable" ? "mention-file-unavailable" : "mention-search-unavailable";
+	const key = reason === "unknown" ? "mention-window-unknown" : reason === "budget" ? "mention-budget" : "mention-file-unavailable";
 	expect(s.root.getText() + Notice.messages.join("\n")).toContain(t(key));
 	expect(s.input.getText()).toBe("@План Объясни");
 	expect(s.input.children.some(child => child.attributes.title === "Проекты/План.md")).toBe(true);
