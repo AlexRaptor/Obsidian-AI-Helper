@@ -3,6 +3,7 @@ import { setStatusTone, type StatusTone } from "./ui-status";
 import type { AiHelperPlugin } from "./main";
 import { FOLDER_DATA_INSTRUCTION, folderSourceData, type FolderSource } from "./folder-descriptions";
 import { effectiveContextWindow } from "./context-window";
+import { TOKENIZER_SERVERS, type PromptTokenCount } from "./prompt-tokens";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { NoteSearchError } from "./note-index";
 
@@ -56,7 +57,7 @@ export class NoteReviewView extends ItemView implements HoverParent {
 	private sources: FolderSource[] = [];
 	private stale = false;
 	private status: LocaleKey = "review-empty";
-	private contextBudget?: { required: number; available: number; method: "lmstudio" | "bytes" };
+	private contextBudget?: { required: number; available: number; method: PromptTokenCount["method"] };
 	private closed = false;
 	private moving = false;
 	private conflictPath?: string;
@@ -404,8 +405,10 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			: ["review-empty", "review-opening", "review-loading", "review-stopped", "review-ready", "review-stay"].includes(this.status) ? "info" : "error";
 		let statusText = this.plugin.t(this.status);
 		if (this.status === "review-budget" && this.contextBudget) {
-			statusText += " " + this.plugin.t(this.contextBudget.method === "lmstudio" ? "review-budget-details-tokenizer" : "review-budget-details")
-				.replace("{required}", String(this.contextBudget.required)).replace("{available}", String(this.contextBudget.available));
+			const method = this.contextBudget.method;
+			statusText += " " + this.plugin.t(method === "bytes" ? "review-budget-details" : "review-budget-details-tokenizer")
+				.replace("{required}", String(this.contextBudget.required)).replace("{available}", String(this.contextBudget.available))
+				.replace("{server}", method === "bytes" ? "" : TOKENIZER_SERVERS[method]);
 		}
 		const status = root.createDiv({ cls: `ai-helper-review-status${this.request ? " ai-helper-thinking" : ""}`, text: statusText,
 			attr: { role: "status", "aria-live": "polite" } });

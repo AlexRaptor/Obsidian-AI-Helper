@@ -174,13 +174,13 @@ it("пропускает полный запрос по токенизатору
 	await s.view.onClose();
 });
 
-it("при подсчёте токенизатором сохраняет резерв ответа и показывает правильный способ оценки", async () => {
+it.each([["lmstudio", "LM Studio"], ["vllm", "vLLM"], ["llamacpp", "llama.cpp"]] as const)("при подсчёте %s сохраняет резерв ответа и показывает правильный способ оценки", async (method, server) => {
 	const s = await setup(); s.plugin.settings.contextWindow = "1779";
-	vi.mocked(s.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method: "lmstudio" });
+	vi.mocked(s.plugin.serverClient.countPromptTokens).mockResolvedValue({ tokens: 500, method });
 	await s.start();
 	expect(s.chat).not.toHaveBeenCalled();
 	expect(s.root.getText()).toContain("По оценке требуется: 1780 токенов");
-	expect(s.root.getText()).toContain("Запрос посчитан токенизатором выбранной модели в LM Studio");
+	expect(s.root.getText()).toContain(`Запрос посчитан токенизатором выбранной модели в ${server}`);
 	expect(s.root.getText()).not.toContain("каждый байт UTF-8 запроса");
 	await s.view.onClose();
 });

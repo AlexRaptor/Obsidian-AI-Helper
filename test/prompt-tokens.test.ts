@@ -106,3 +106,125 @@ it("для некорректного адреса и заранее отмен�
 	expect(await client.countPromptTokens("file:///заметки", "модель", messages)).toEqual(conservativePromptTokens(messages));
 	expect(fetch).not.toHaveBeenCalled(); expect(sdk.create).not.toHaveBeenCalled();
 });
+
+function nativeServer(kind: "vllm" | "llamacpp", overrides: Record<string, unknown> = {}) {
+	const routes: Record<string, unknown> = {
+		"https://s/proxy/v1/models": { data: [{ id: "другая" }, { id: "модель/русская", ...(kind === "vllm" ? { max_model_len: 8192 } : {}) }] },
+		["https://s/proxy/props?model=" + encodeURIComponent("модель/русская") + "&autoload=false"]: { default_generation_settings: { n_ctx: 8192 } },
+		"https://s/proxy/apply-template?autoload=false": { prompt: "<bos>Диалог с началом ответа" },
+		[kind === "vllm" ? "https://s/proxy/tokenize" : "https://s/proxy/tokenize?autoload=false"]: { tokens: [1, 2, 3], count: 3 },
+		...overrides,
+	};
+	const fetch = vi.fn(async (url: string, _init?: RequestInit) => url in routes
+		? new Response(JSON.stringify(routes[url])) : new Response("Не найдено", { status: 404 }));
+	return { fetch, client: createServerClient(fetch) };
+}
+
+it("vLLM применяет шаблон и считает все сообщения одним запросом без генерации", async () => {
+	const { client, fetch } = nativeServer("vllm");
+	expect(await client.countPromptTokens("https://s/proxy/v1/", "модель/русская", messages, "ключ")).toEqual({ tokens: 3, method: "vllm" });
+	const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+	expect(posts).toHaveLength(1);
+	expect(posts[0][0]).toBe("https://s/proxy/tokenize");
+	expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ model: "модель/русская", messages, add_generation_prompt: true, add_special_tokens: false });
+	expect(fetch.mock.calls.every(([url, init]) => url.startsWith("https://s/proxy/") &&
+		(init?.headers as Record<string, string>).Authorization === "Bearer ключ" && init?.signal instanceof AbortSignal)).toBe(true);
+	expect(sdk.create).not.toHaveBeenCalled();
+});
+
+it("llama.cpp токенизирует серверный шаблон с теми же специальными токенами, что запрос ответа", async () => {
+	const { client, fetch } = nativeServer("llamacpp");
+	expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages, "ключ")).toEqual({ tokens: 3, method: "llamacpp" });
+	const posts = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+	expect(posts.map(([url]) => url)).toEqual(["https://s/proxy/apply-template?autoload=false", "https://s/proxy/tokenize?autoload=false"]);
+	expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ model: "модель/русская", messages });
+	expect(JSON.parse(String(posts[1][1]?.body))).toEqual({ model: "модель/русская", content: "<bos>Диалог с началом ответа",
+		add_special: true, parse_special: true, with_pieces: false });
+	expect(fetch.mock.calls.every(([url, init]) => url.startsWith("https://s/proxy/") &&
+		(init?.headers as Record<string, string>).Authorization === "Bearer ключ")).toBe(true);
+	expect(sdk.create).not.toHaveBeenCalled();
+});
+
+it.each(["vllm", "llamacpp"] as const)("%s не отправляет текст без однозначного соответствия выбранной модели", async kind => {
+	for (const data of [[{ id: "чужая", max_model_len: 8192 }], [{ id: "модель/русская" }, { id: "модель/русская" }]]) {
+		const { client, fetch } = nativeServer(kind, { "https://s/proxy/v1/models": { data } });
+		expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toEqual(conservativePromptTokens(messages));
+		expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+	}
+});
+
+it.each([{}, { tokens: [] }, { tokens: ["1"], count: 1 }, { tokens: [-1], count: 1 }, { tokens: [1.5], count: 1 },
+	{ tokens: [1], count: 2 }, { tokens: [1], count: "1" }, { tokens: [Number.MAX_SAFE_INTEGER + 1], count: 1 }])(
+	"vLLM не доверяет некорректному результату токенизации %j", async body => {
+		const { client } = nativeServer("vllm", { "https://s/proxy/tokenize": body });
+		expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toEqual(conservativePromptTokens(messages));
+	}
+);
+
+it.each([{}, { tokens: [] }, { tokens: ["1"] }, { tokens: [-1] }, { tokens: [1.5] }, { tokens: [Number.MAX_SAFE_INTEGER + 1] }])(
+	"llama.cpp не доверяет некорректному результату токенизации %j", async body => {
+		const { client } = nativeServer("llamacpp", { "https://s/proxy/tokenize?autoload=false": body });
+		expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toEqual(conservativePromptTokens(messages));
+	}
+);
+
+it.each([{}, { prompt: "" }, { prompt: 12 }])("llama.cpp не считает сообщения как простой текст без серверного шаблона %j", async body => {
+	const { client, fetch } = nativeServer("llamacpp", { "https://s/proxy/apply-template?autoload=false": body });
+	expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toEqual(conservativePromptTokens(messages));
+	expect(fetch.mock.calls.some(([url]) => url.endsWith("/tokenize?autoload=false"))).toBe(false);
+});
+
+it("llama.cpp не использует глобальный токенизатор при недоступных свойствах выбранной модели", async () => {
+	const { client, fetch } = nativeServer("llamacpp", {
+		["https://s/proxy/props?model=" + encodeURIComponent("модель/русская") + "&autoload=false"]: { default_generation_settings: { n_ctx: 0 } },
+	});
+	expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toEqual(conservativePromptTokens(messages));
+	expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+});
+
+it.each(["vllm", "llamacpp"] as const)("ошибка метаданных LM Studio не мешает доступному адаптеру %s", async kind => {
+	const { fetch } = nativeServer(kind);
+	const client = createServerClient(async (url, init) => {
+		if (url.endsWith("/api/v1/models")) throw new Error("Маршрут недоступен");
+		return fetch(url, init);
+	});
+	expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toMatchObject({ tokens: 3, method: kind });
+});
+
+it.each(["vllm", "llamacpp"] as const)("таймаут %s отменяет запрос и не продолжает обработку позднего результата", async kind => {
+	vi.useFakeTimers();
+	const { fetch } = nativeServer(kind); const pending = deferred<Response>();
+	let countingSignal: AbortSignal | undefined;
+	const blocked = kind === "vllm" ? "/tokenize" : "/apply-template?autoload=false";
+	const client = createServerClient(async (url, init) => {
+		if (url.endsWith(blocked)) { countingSignal = init?.signal ?? undefined; return pending.promise; }
+		return fetch(url, init);
+	});
+	const count = client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages);
+	await vi.waitFor(() => expect(countingSignal).toBeDefined());
+	await vi.advanceTimersByTimeAsync(5000);
+	expect(await count).toEqual(conservativePromptTokens(messages)); expect(countingSignal?.aborted).toBe(true);
+	pending.resolve(new Response(JSON.stringify({ prompt: "Поздний шаблон", count: 3, tokens: [1, 2, 3] }))); await flushPromises();
+	expect(fetch.mock.calls.some(([url]) => url.endsWith("/tokenize?autoload=false"))).toBe(false);
+});
+
+it("Ollama сохраняет оценку по байтам и не запускает пробную генерацию или скрытый токенизатор", async () => {
+	const calls: string[] = [];
+	const client = createServerClient(async (url, init) => {
+		calls.push(url); expect(init?.method).not.toBe("POST");
+		if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "модель" }] }));
+		return new Response("Не поддерживается", { status: 404 });
+	});
+	expect(await client.countPromptTokens("http://127.0.0.1:11434/v1", "модель", messages)).toEqual(conservativePromptTokens(messages));
+	expect(calls.every(url => url.startsWith("http://127.0.0.1:11434/"))).toBe(true);
+	expect(calls.some(url => url.includes("/chat") || url.includes("/generate") || url.includes("/tokenize"))).toBe(false);
+});
+
+it.each(["vllm", "llamacpp"] as const)("HTTP-ошибки и некорректный JSON токенизации %s сохраняют оценку по байтам", async kind => {
+	for (const status of [200, 401, 404, 500]) {
+		const { fetch } = nativeServer(kind);
+		const client = createServerClient(async (url, init) => url.includes("/tokenize")
+			? new Response("Некорректный ответ", { status }) : fetch(url, init));
+		expect(await client.countPromptTokens("https://s/proxy/v1", "модель/русская", messages)).toEqual(conservativePromptTokens(messages));
+	}
+});
