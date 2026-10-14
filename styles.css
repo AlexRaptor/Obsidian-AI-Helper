@@ -577,5 +577,6 @@
 }
 
 .ai-helper-mention-match {
-	background: var(--text-highlight-bg);
+	color: var(--text-accent);
+	font-weight: var(--font-semibold, 600);
 }
