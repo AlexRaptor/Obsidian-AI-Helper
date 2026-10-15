@@ -15,6 +15,7 @@ export class TranslationModal extends Modal {
 			status.setText(`${this.plugin.t(operation.stage)}${operation.detail ? `: ${this.plugin.t(operation.detail)}` : ""}${operation.savedPath ? `\n${operation.savedPath}` : ""}`);
 			setStatusTone(status, operation.stage === "translation-error" ? "error" : operation.stage === "translation-saved" ? "success" : "info");
 			cancel.setButtonText(this.plugin.t(operation.busy ? "translation-stop" : "translation-finish"));
+			cancel.setDisabled(operation.stage === "translation-saving");
 		};
 		this.unsubscribe = this.plugin.translation.subscribe(update); update();
 	}

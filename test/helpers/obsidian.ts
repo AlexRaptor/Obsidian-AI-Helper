@@ -267,6 +267,7 @@ export class ProgressBarComponent {
 export class Keymap { static isModEvent(evt: { button?: number; ctrlKey?: boolean; metaKey?: boolean }): boolean { return evt.button === 1 || !!evt.ctrlKey || !!evt.metaKey; } }
 
 export class ButtonComponent {
+	setDisabled(disabled: boolean): this { this.buttonEl.disabled = disabled; return this; }
 	setButtonText(text: string): this { this.buttonEl.setText(text); return this; }
 	buttonEl: TestElement;
 	constructor(parent: TestElement) { this.buttonEl = parent.createEl("button"); }

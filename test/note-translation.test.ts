@@ -164,7 +164,7 @@ it("чат сохраняет черновик и не отправляет вт
 	} finally { await chat.onClose(); }
 });
 
-it.each(["Текст с ==выделением==", "Текст %%скрытый комментарий%%", ":::блок\\nСодержимое\\n:::"])("не переводит неподдерживаемый синтаксис Obsidian: %s", async text => {
+it.each(["Текст с ==выделением==", "Текст %%скрытый комментарий%%", ":::блок\nСодержимое\n:::"])("не переводит неподдерживаемый синтаксис Obsidian: %s", async text => {
 	const env = await setup({ text }); env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.requests).toHaveLength(0);
@@ -198,4 +198,32 @@ it("открывает только перевод при отключённом
 	await vi.waitFor(() => expect(env.opened).toHaveLength(1));
 	expect(env.app.workspace.createLeafBySplit).not.toHaveBeenCalled();
 	expect(env.leaf.openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "Заметки/Статья — en.md" }), expect.objectContaining({ state: { mode: "preview" }, active: true }));
+});
+
+it("после отмены чтения закрытой заметки сразу разрешает новую операцию", async () => {
+	const reading = deferred<string>();
+	const env = await setup();
+	Object.assign(env.app.workspace, { getLeavesOfType: () => [], getActiveViewOfType: () => null });
+	vi.mocked(env.app.vault.read).mockReturnValueOnce(reading.promise);
+	env.commands.get("translate-current-note")!();
+	button("Остановить").click();
+	Object.assign(env.app.workspace, { getActiveViewOfType: (type: unknown) => type === MarkdownView ? env.view : null });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	reading.resolve("Поздно прочитанный текст.");
+	expect(env.requests).toHaveLength(1);
+});
+it("не предлагает отмену уже начатой записи и сообщает путь сохранённого файла", async () => {
+	const writing = deferred<void>();
+	const env = await setup();
+	vi.mocked(env.app.vault.create).mockImplementation(async (path, text) => {
+		await writing.promise; env.files.set(path, text); return Object.assign(new TFile(), { path, extension: "md" });
+	});
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.app.vault.create).toHaveBeenCalled());
+	expect(button("Остановить").disabled).toBe(true);
+	button("Остановить").click();
+	writing.resolve();
+	await vi.waitFor(() => expect(Modal.opened[0].contentEl.getText()).toContain("Перевод сохранён"));
+	expect(Modal.opened[0].contentEl.getText()).toContain("Заметки/Статья — en.md");
 });
