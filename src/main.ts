@@ -18,6 +18,8 @@ import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { StorageProbeModal } from "./storage-probe-modal";
 import { createContextWindowConnection } from "./context-window";
 
+import { chatEditorSelection } from "./editor-selection";
+
 import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
 
 export class AiHelperPlugin extends Plugin {
@@ -50,6 +52,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		this.unloading = false;
+		this.registerEditorExtension(chatEditorSelection);
 		const rememberNote = () => {
 			const view = this.app.workspace.getActiveViewOfType?.(MarkdownView);
 			if (view) this.currentMarkdownView = view;

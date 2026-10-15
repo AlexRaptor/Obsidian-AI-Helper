@@ -588,3 +588,16 @@
 	color: var(--text-accent);
 	font-weight: var(--font-semibold, 600);
 }
+
+/* Obsidian draws the primary selection natively, so it vanishes on blur. */
+.ai-helper-editor-selection-layer {
+	display: none;
+}
+
+body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(.cm-focused) .ai-helper-editor-selection-layer {
+	display: block;
+}
+
+.ai-helper-editor-selection {
+	background-color: var(--text-selection);
+}

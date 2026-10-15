@@ -7,7 +7,7 @@ const prod = process.argv[2] === "production";
 const options = {
 	bundle: true,
 	entryPoints: ["src/main.ts"],
-	external: ["obsidian", "electron"],
+	external: ["obsidian", "electron", "@codemirror/view", "@codemirror/state"],
 	loader: { ".js": "js", ".ts": "ts" },
 	outfile: "main.js",
 	sourcemap: prod ? false : "inline",

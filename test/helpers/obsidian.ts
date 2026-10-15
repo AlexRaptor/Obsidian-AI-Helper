@@ -139,6 +139,7 @@ export class Notice {
 }
 
 export class Plugin extends Component {
+	registerEditorExtension(_extension: unknown): void {}
 	constructor(public app: unknown, public manifest: any) {
 		super();
 		const testApp = app as { workspace?: { getLeavesOfType?: () => unknown[] } };
