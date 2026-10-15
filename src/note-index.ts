@@ -773,6 +773,9 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			}
 			check(version, signal);
 			if (!current.length) throw new NoteSearchError("search-rebuild");
+			// A mandatory attachment can leave no room for search results. Check index
+			// availability first, then omit optional fragments without embedding the query.
+			if (budgetBytes === 0) return [];
 			const [vector] = await embed([question], signal);
 			check(version, signal);
 			const queryMagnitude = Math.hypot(...vector);

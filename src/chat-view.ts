@@ -814,8 +814,8 @@ export class ChatView extends ItemView implements HoverParent {
 							}
 						}
 						const searchNotes = async (budget: number): Promise<NoteSource[]> => {
-							if (hasSnapshots && budget <= 0) return [];
-							try { return await this.plugin.noteSearch.searchSources(query, request.signal, budget); }
+							// Even with no room for optional fragments, the selected search mode must be available.
+							try { return await this.plugin.noteSearch.searchSources(query, request.signal, hasSnapshots ? Math.max(0, budget) : budget); }
 							catch (error) {
 								// Extra fragments are optional when full attachments already supply the mandatory context.
 								if (hasSnapshots && error instanceof NoteSearchError && error.code === "search-budget") return [];

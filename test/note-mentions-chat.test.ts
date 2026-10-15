@@ -83,6 +83,141 @@ async function setupSearch(mode: "notes" | "folders" | "mixed") {
 	return { ...s, texts, noteSearch, embeddings, submit: send, select };
 }
 
+function appendSearchFragments(s: Awaited<ReturnType<typeof setupSearch>>) {
+	const active = s.workspace.getActiveViewOfType;
+	const leaves = s.workspace.getLeavesOfType;
+	s.workspace.getActiveViewOfType = () => s.editor;
+	s.workspace.getLeavesOfType = () => [{ view: s.editor }];
+	for (const [index, markdown] of ["**Первый выбранный фрагмент** [[Связь]]", "Второй выбранный фрагмент ![[Рисунок]]"].entries()) {
+		s.editor.file = s.files[index];
+		Object.assign(s.editor.editor, {
+			listSelections: () => [{ anchor: { line: index, ch: 2 }, head: { line: index, ch: 8 } }],
+			getRange: () => markdown,
+		});
+		appendMention(s, index ? " и @@" : "Сравни @@");
+	}
+	s.workspace.getActiveViewOfType = active;
+	s.workspace.getLeavesOfType = leaves;
+	appendMention(s, " с @Знания");
+}
+
+it.each(["notes", "folders", "mixed"] as const)("%s: несколько фрагментов и целая заметка сохраняются в запросах и истории вместе со свежим поиском", async mode => {
+	const s = await setupSearch(mode);
+	Object.assign(s.view.plugin.settings, { systemPrompt: "Сравни выбранные тексты без сокращения", maxTokens: "128" });
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async (_url, _model, messages) => ({
+		tokens: new TextEncoder().encode(JSON.stringify(messages)).length, method: "bytes",
+	}));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	appendSearchFragments(s);
+	await s.submit();
+	const original = s.chat.mock.calls[0][2].at(-1)!.content;
+	expect(attachments(original)).toEqual([
+		{ title: "План", path: "Личное/План.md", markdown: "**Первый выбранный фрагмент** [[Связь]]", range: { from: { line: 0, ch: 2 }, to: { line: 0, ch: 8 } } },
+		{ title: "План", path: "Знания/План.md", markdown: "Второй выбранный фрагмент ![[Рисунок]]", range: { from: { line: 1, ch: 2 }, to: { line: 1, ch: 8 } } },
+		{ title: "План", path: "Знания/План.md", markdown: "Учебный план целиком ![[Изображение]]" },
+	]);
+	expect(s.chat.mock.calls[0][3]?.maxTokens).toBe("128");
+	expect(count.mock.calls.at(-1)![2]).toEqual([
+		{ role: "system", content: "Сравни выбранные тексты без сокращения" }, ...s.chat.mock.calls[0][2],
+	]);
+	s.texts.set("Личное/План.md", "Изменённый первый оригинал");
+	s.texts.set("Знания/План.md", "Изменённый второй оригинал");
+	s.texts.set("Поиск/Материал.md", "Свежий найденный материал");
+	s.texts.set("Поиск/_folder.md", "Свежие правила хранения");
+	await s.noteSearch.index("Поиск/Материал.md");
+	s.read.mockClear();
+	s.type("Продолжи сравнение"); await s.submit();
+	const final = s.chat.mock.calls.at(-1)!;
+	expect(final[2][0].content).toBe(original);
+	expect(final[2].at(-2)!.content).toContain(mode === "notes" ? "Свежий найденный материал" : "Свежие правила хранения");
+	if (mode === "mixed") expect(final[2].at(-2)!.content).toContain("Свежий найденный материал");
+	expect(final[2].some(message => message.content.includes("Изменённый"))).toBe(false);
+	expect(s.read.mock.calls.every(([file]) => file.path === "Поиск/_folder.md")).toBe(true);
+	expect(final[3]?.maxTokens).toBe("128");
+	expect(s.view.getMessages()).toHaveLength(4);
+	if (mode !== "folders") {
+		const preparation = s.chat.mock.calls[1];
+		expect(preparation[2][1].content).toBe(original);
+		expect(preparation[2].at(-1)!.content).toBe("Продолжи сравнение");
+		expect(preparation[3]?.maxTokens).toBe("256");
+	}
+	await s.view.onClose();
+});
+
+it.each(["notes", "folders", "mixed"] as const)("%s: общий бюджет и неизвестный лимит сохраняют весь смешанный черновик для повтора", async mode => {
+	const s = await setupSearch(mode);
+	Object.assign(s.view.plugin.settings, { contextWindow: "1355", maxTokens: "100", systemPrompt: "Обсуди выбранные тексты" });
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 1000, method: "lmstudio" }));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	appendSearchFragments(s);
+	await s.submit();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Сравни План[1] и План[2] с @План");
+	const blocked = count.mock.calls[0][2];
+	expect(blocked[0]).toEqual({ role: "system", content: "Обсуди выбранные тексты" });
+	expect(attachments(blocked.at(-1)!.content)).toHaveLength(3);
+	expect(blocked.at(-2)!.content).toBe("[]");
+	s.view.plugin.settings.contextWindow = "";
+	await s.submit();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.root.getText()).toContain(t("mention-window-unknown"));
+	expect(s.input.getText()).toBe("Сравни План[1] и План[2] с @План");
+	// A valid manual limit takes priority over the smaller automatic window.
+	s.view.plugin.contextWindowConnection = { value: { tokens: 100, source: "vLLM" }, refresh: async () => {} } as any;
+	s.view.plugin.settings.contextWindow = "2000";
+	await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(s.chat.mock.calls[0][2].at(-1)!.content).toBe(blocked.at(-1)!.content);
+	expect(s.chat.mock.calls[0][3]?.maxTokens).toBe("100");
+	await s.view.onClose();
+});
+
+it.each(["notes", "mixed"] as const)("%s: подготовительный запрос считает прежние и новые фрагменты с целыми заметками и собственным резервом", async mode => {
+	const s = await setupSearch(mode);
+	appendSearchFragments(s); await s.submit();
+	const original = s.chat.mock.calls[0][2].at(-1)!.content;
+	Object.assign(s.view.plugin.settings, { contextWindow: "2000", maxTokens: "100" });
+	let preparationTokens = 1489;
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async (_url, _model, messages) => ({
+		tokens: messages[0].content.includes("search query") ? preparationTokens : 1000, method: "lmstudio",
+	}));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	appendSearchFragments(s); await s.submit();
+	expect(s.chat).toHaveBeenCalledOnce();
+	expect(s.view.getMessages()).toHaveLength(2);
+	expect(s.input.getText()).toBe("Сравни План[1] и План[2] с @План");
+	const blocked = count.mock.calls.at(-1)![2];
+	expect(blocked[1].content).toBe(original);
+	expect(attachments(blocked.at(-1)!.content)).toHaveLength(3);
+	preparationTokens = 1488; // 1488 + 256 answer tokens + 256 safety tokens = 2000.
+	await s.submit();
+	expect(s.chat.mock.calls[1][2]).toEqual(blocked);
+	expect(s.chat.mock.calls[1][3]?.maxTokens).toBe("256");
+	expect(s.chat.mock.calls[2][3]?.maxTokens).toBe("100");
+	expect(s.chat.mock.calls[2][2][0].content).toBe(original);
+	expect(s.chat.mock.calls[2][2].at(-1)!.content).toBe(blocked.at(-1)!.content);
+	expect(s.view.getMessages()).toHaveLength(4);
+	await s.view.onClose();
+});
+
+it.each(["notes", "mixed"] as const)("%s: нулевой остаток не отменяет требование готового индекса и сохраняет все упоминания", async mode => {
+	const s = await setupSearch(mode);
+	await s.noteSearch.clear();
+	Object.assign(s.view.plugin.settings, { contextWindow: "1356", maxTokens: "100" });
+	s.view.plugin.serverClient.countPromptTokens = vi.fn(async () => ({ tokens: 1000, method: "lmstudio" as const }));
+	appendSearchFragments(s);
+	await s.submit();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.root.getText()).toContain(t("search-rebuild"));
+	expect(s.input.getText()).toBe("Сравни План[1] и План[2] с @План");
+	expect(s.view.getMessages()).toEqual([]);
+	await s.noteSearch.index("Поиск/Материал.md");
+	await s.submit();
+	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)).toHaveLength(3);
+	expect(s.chat.mock.calls[0][2].at(-2)!.content).not.toContain("Дополнительный найденный материал");
+	await s.view.onClose();
+});
+
 it.each(["notes", "folders", "mixed"] as const)("%s: дополняет несколько полных снимков свежими источниками, сохраняя историю", async mode => {
 	const s = await setupSearch(mode);
 	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания");
@@ -241,9 +376,9 @@ it.each(["notes", "mixed"] as const)("%s: нулевой остаток бюдж
 	const s = await setupSearch(mode);
 	Object.assign(s.view.plugin.settings, { contextWindow: "1356", maxTokens: "100" });
 	s.view.plugin.serverClient.countPromptTokens = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 1000, method: "lmstudio" }));
-	const search = vi.spyOn(s.noteSearch, "searchSources");
+	s.embeddings.mockClear();
 	appendMention(s, "Сравни @Личное"); appendMention(s, " с @Знания"); await s.submit();
-	expect(search).not.toHaveBeenCalled();
+	expect(s.embeddings).not.toHaveBeenCalled();
 	expect(s.chat).toHaveBeenCalledOnce();
 	expect(attachments(s.chat.mock.calls[0][2].at(-1)!.content)).toHaveLength(2);
 	await s.view.onClose();
