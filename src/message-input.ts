@@ -59,15 +59,27 @@ export interface MessageDraft { parts: DraftPart[]; }
 export function draftText(draft: MessageDraft): string {
 	return draft.parts.map(part => typeof part === "string" ? part : mentionLabel(part)).join("");
 }
-export type DisplayDraft = { parts: (string | { file: Pick<TFile, "basename" | "path">; fragment?: SelectedFragmentSnapshot })[] };
+export type DisplayDraft = { parts: (string | { file: Pick<TFile, "basename" | "path">; fragment?: SelectedFragmentSnapshot; originalFile?: TFile })[] };
 
-export function renderDraft(container: HTMLElement, draft: DisplayDraft): void {
+export type OpenFragment = (snapshot: SelectedFragmentSnapshot, file: TFile | undefined, trigger: HTMLElement) => void;
+
+export function renderDraft(container: HTMLElement, draft: DisplayDraft, openFragment?: OpenFragment): void {
 	for (const part of draft.parts) {
 		if (typeof part === "string") container.createSpan({ text: part });
 		else {
 			const path = part.fragment?.path ?? part.file.path;
 			const chip = container.createSpan({ cls: "ai-helper-mention", text: mentionLabel(part), attr: { contenteditable: "false", title: path, "aria-label": `${mentionLabel(part)}: ${path}` } });
 			setTooltip(chip, path);
+			if (part.fragment) {
+				chip.setAttribute("role", "button");
+				chip.setAttribute("tabindex", "0");
+				if (!openFragment) continue;
+				const open = () => openFragment(part.fragment!, part.originalFile, chip);
+				chip.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); open(); });
+				chip.addEventListener("keydown", event => {
+					if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); open(); }
+				});
+			}
 		}
 	}
 }
@@ -100,6 +112,7 @@ export class MessageInput {
 		private currentNote: () => TFile | null = () => null,
 		private markdownFiles: () => TFile[] = () => [],
 		private selectedFragment: () => SelectedFragmentResult = () => null,
+		private openFragment?: OpenFragment,
 	) {}
 
 	private handleClick = (): void => {
@@ -280,8 +293,21 @@ export class MessageInput {
 		}
 	}
 
+	private activateFragment(event: MouseEvent | KeyboardEvent): boolean {
+		const chip = (event.target as HTMLElement | null)?.closest?.("[data-ai-mention]") as HTMLElement | null;
+		const id = chip?.getAttribute("data-ai-mention");
+		const mention = id ? this.bindings.get(id) : undefined;
+		if (!mention?.fragment || !chip || !this.openFragment) return false;
+		event.preventDefault(); event.stopPropagation();
+		this.openFragment(mention.fragment, mention.file, chip);
+		return true;
+	}
+
+	private handleMentionClick = (event: MouseEvent): void => { this.activateFragment(event); };
+
 	private handleKeydown = (event: KeyboardEvent): void => {
 		if (event.isComposing) return;
+		if ((event.key === "Enter" || event.key === " ") && this.activateFragment(event)) return;
 		if (this.suggestionOpen) {
 			if (event.key === "Escape") { event.preventDefault(); this.closeSuggestion(); return; }
 			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -315,6 +341,7 @@ export class MessageInput {
 		this.suggestion = row.createDiv({ cls: "ai-helper-mention-suggest suggestion-container", attr: { id: this.suggestionId, role: "listbox", "aria-label": this.t("mention-notes") } });
 		this.closeSuggestion();
 		this.inputEl.addEventListener("input", this.handleInput);
+		this.inputEl.addEventListener("click", this.handleMentionClick);
 		this.inputEl.addEventListener("paste", this.handlePaste);
 		this.inputEl.addEventListener("blur", this.closeOnBlur);
 		this.sendBtn = row.createEl("button", {
@@ -330,6 +357,7 @@ export class MessageInput {
 		this.draft = this.getDraft();
 		this.inputEl?.removeEventListener("keydown", this.handleKeydown);
 		this.inputEl?.removeEventListener("input", this.handleInput);
+		this.inputEl?.removeEventListener("click", this.handleMentionClick);
 		this.inputEl?.removeEventListener("paste", this.handlePaste);
 		this.inputEl?.removeEventListener("blur", this.closeOnBlur);
 		this.closeSuggestion(); this.suggestion = null;

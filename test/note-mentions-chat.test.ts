@@ -8,10 +8,10 @@ import type { AiHelperPlugin } from "../src/main";
 import type { ServerClient, ServerClientResult, ChatCompletionResult } from "../src/server-client";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import { setLanguage, t } from "../src/i18n";
-import { Notice, TestElement, deferred, flushPromises } from "./helpers/obsidian";
+import { Modal, Notice, TestElement, deferred, flushPromises } from "./helpers/obsidian";
 
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { for (const modal of [...Modal.opened]) modal.close(); vi.restoreAllMocks(); });
 
 async function setup(paths?: string[], hasCurrent = true) {
 	setLanguage("ru");
@@ -1614,5 +1614,170 @@ it("обновление файлов не заменяет уже показа�
 	expect(s.chat).not.toHaveBeenCalled();
 	s.type("Объясни @@"); s.input.keydown("Tab"); s.send.click(); await flushPromises();
 	expect(attachments(s.chat.mock.calls[0][2][0].content)[0]).toMatchObject({ path: "Архив/План.md", markdown: "Второй выбор" });
+	await s.view.onClose();
+});
+
+
+it("открывает точный снимок из черновика и истории без изменения запроса", async () => {
+	const s = await setup();
+	const markdown = "часть **строки** [[Ссылка]] ![[Фото.png]]\n  конец\n";
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 11, ch: 3 }, head: { line: 13, ch: 0 } }],
+		getRange: () => markdown,
+	});
+	s.type("Объясни @@"); s.input.keydown("Tab");
+	const draft = s.input.getText();
+	s.edit("Новый текст оригинала");
+	s.input.find("ai-helper-mention").click();
+	let modal = Modal.opened.at(-1)!;
+	expect(modal).toBeDefined();
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe(markdown);
+	expect(modal.contentEl.getText()).toContain("Проекты/План.md");
+	expect(modal.contentEl.getText()).toContain("План[12-13]");
+	expect(modal.contentEl.find("ai-helper-fragment-text").children).toHaveLength(0);
+	modal.contentEl.find("ai-helper-fragment-close").click();
+	expect(s.input.getText()).toBe(draft);
+	expect(s.view.getMessages()).toHaveLength(0);
+	s.send.click(); await flushPromises();
+	const request = s.chat.mock.calls[0][2][0].content;
+	expect(attachments(request)[0].markdown).toBe(markdown);
+	s.root.find("ai-helper-messages").find("ai-helper-mention").click();
+	modal = Modal.opened.at(-1)!;
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe(markdown);
+	modal.close();
+	s.type("Продолжи"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2][0].content).toBe(request);
+	await s.view.onClose();
+});
+
+it.each(["правки", "закрытие", "переименование", "удаление", "замена файла"])("сохраняет просмотр и отправку после события: %s", async scenario => {
+	const s = await setup(["Проекты/План.md", "Архив/План.md"]);
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 3, ch: 2 }, head: { line: 3, ch: 8 } }],
+		getRange: () => "Снимок",
+	});
+	const openFile = vi.fn(async (_file: TFile) => {});
+	Object.assign(s.workspace, { getLeaf: () => ({ openFile }) });
+	s.type("Объясни @@"); s.input.keydown("Tab");
+	s.input.find("ai-helper-mention").click();
+	let modal = Modal.opened.at(-1)!;
+	expect(modal.contentEl.find("ai-helper-fragment-open").disabled).toBe(false);
+	if (scenario === "правки") { s.edit("Изменённый оригинал"); s.emit("modify", s.file); }
+	if (scenario === "закрытие") { s.workspace.getActiveViewOfType = () => null; s.workspace.getLeavesOfType = () => []; }
+	if (scenario === "переименование") s.rename(s.file, "Архив/Новое имя.md");
+	if (scenario === "удаление" || scenario === "замена файла") {
+		s.files.splice(s.files.indexOf(s.file), 1); s.emit("delete", s.file);
+		if (scenario === "замена файла") {
+			s.files.push(Object.assign(new TFile(), { path: "Проекты/План.md", basename: "План", extension: "md" }));
+			s.emit("create", s.files.at(-1));
+		}
+	}
+	const unavailable = scenario === "удаление" || scenario === "замена файла";
+	expect(modal.contentEl.find("ai-helper-fragment-open").disabled).toBe(unavailable);
+	expect(modal.contentEl.getText()).toContain("Проекты/План.md");
+	expect(modal.contentEl.getText()).toContain("План[4]");
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe("Снимок");
+	modal.contentEl.find("ai-helper-fragment-open").click(); await flushPromises();
+	if (unavailable) { expect(openFile).not.toHaveBeenCalled(); modal.close(); }
+	else expect(openFile.mock.calls[0][0]).toBe(s.file);
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([{
+		title: "План", path: "Проекты/План.md", markdown: "Снимок",
+		range: { from: { line: 3, ch: 2 }, to: { line: 3, ch: 8 } },
+	}]);
+	s.root.find("ai-helper-messages").find("ai-helper-mention").click();
+	modal = Modal.opened.at(-1)!;
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe("Снимок");
+	expect(modal.contentEl.find("ai-helper-fragment-open").disabled).toBe(unavailable);
+	modal.contentEl.find("ai-helper-fragment-open").click(); await flushPromises();
+	if (unavailable) expect(openFile).not.toHaveBeenCalled();
+	else expect(openFile.mock.calls.at(-1)![0]).toBe(s.file);
+	await s.view.onClose();
+});
+
+it.each(["Enter", " "])("открывает просмотр клавишей %s и переводит его без изменения снимка", async key => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 2 }, head: { line: 0, ch: 9 } }],
+		getRange: () => "**Текст**",
+	});
+	s.type("Объясни @@"); s.input.keydown("Tab");
+	const chip = s.input.find("ai-helper-mention");
+	expect(chip.attributes.role).toBe("button"); expect(chip.attributes.tabindex).toBe("0");
+	const focus = vi.spyOn(chip, "focus");
+	chip.keydown(key);
+	const modal = Modal.opened.at(-1)!;
+	expect(modal.titleEl.getText()).toBe("Сохранённый фрагмент");
+	setLanguage("en"); await s.view.refreshLocale();
+	expect(modal.titleEl.getText()).toBe("Saved fragment");
+	expect(modal.contentEl.find("ai-helper-fragment-open").getText()).toBe("Open original note");
+	expect(modal.contentEl.find("ai-helper-fragment-close").getText()).toBe("Close");
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe("**Текст**");
+	expect(s.input.getText()).toBe("Объясни План[1]");
+	modal.contentEl.find("ai-helper-fragment-close").click();
+	expect(focus).toHaveBeenCalled();
+	expect(s.chat).not.toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it("различает одноимённые заметки полным путём и сохраняет просмотр при ошибке перехода", async () => {
+	const s = await setup(["Проекты/План.md", "Архив/План.md"]);
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }], getRange: () => "Первый",
+	});
+	s.type("Сравни @@"); s.input.keydown("Tab");
+	const first = s.input.find("ai-helper-mention");
+	first.click(); let modal = Modal.opened.at(-1)!;
+	expect(modal.contentEl.find("ai-helper-fragment-path").getText()).toBe("Проекты/План.md");
+	modal.close();
+	s.editor.file = s.files[1];
+	Object.assign(s.editor.editor, { getRange: () => "Второй" });
+	appendMention(s, " и @@");
+	const chips = s.input.children.filter(child => child.classes.has("ai-helper-mention"));
+	chips[1].click(); modal = Modal.opened.at(-1)!;
+	expect(modal.contentEl.find("ai-helper-fragment-path").getText()).toBe("Архив/План.md");
+	Object.assign(s.workspace, { getLeaf: () => ({ openFile: async () => { throw new Error("Недоступен"); } }) });
+	modal.contentEl.find("ai-helper-fragment-open").click(); await flushPromises();
+	expect(modal.contentEl.getText()).toContain("Исходная заметка недоступна");
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe("Второй");
+	modal.close();
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content).map(snapshot => snapshot.markdown)).toEqual(["Первый", "Второй"]);
+	await s.view.onClose();
+});
+
+it("сохраняет цель возврата фокуса при переводе истории", async () => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }], getRange: () => "Снимок",
+	});
+	s.type("Объясни @@"); s.input.keydown("Tab"); s.send.click(); await flushPromises();
+	const chip = s.root.find("ai-helper-messages").find("ai-helper-mention");
+	chip.click();
+	const modal = Modal.opened.at(-1)!;
+	setLanguage("en"); await s.view.refreshLocale();
+	expect(s.root.find("ai-helper-messages").find("ai-helper-mention")).toBe(chip);
+	const focus = vi.spyOn(chip, "focus");
+	modal.close(); expect(focus).toHaveBeenCalled();
+	await s.view.onClose();
+});
+
+it.each(["click", "Enter", " "])("восстановленное браузером упоминание открывает снимок через %s", async action => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }], getRange: () => "Снимок",
+	});
+	s.type("Объясни @@"); s.input.keydown("Tab");
+	const chip = s.input.find("ai-helper-mention");
+	const restored = s.input.createSpan({ cls: "ai-helper-mention", text: chip.getText(), attr: { ...chip.attributes } });
+	chip.remove();
+	const event = { type: action === "click" ? "click" : "keydown", key: action, target: restored, preventDefault() {}, stopPropagation() {} };
+	// A browser-restored node carries attributes, but no direct event listeners.
+	s.input.dispatchEvent(event);
+	const modal = Modal.opened.at(-1)!;
+	expect(modal).toBeDefined();
+	expect(modal.contentEl.find("ai-helper-fragment-text").getText()).toBe("Снимок");
+	expect(s.chat).not.toHaveBeenCalled();
+	modal.close();
 	await s.view.onClose();
 });

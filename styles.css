@@ -601,3 +601,28 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 .ai-helper-editor-selection {
 	background-color: var(--text-selection);
 }
+
+.ai-helper-mention[role="button"] {
+	cursor: pointer;
+}
+
+.ai-helper-mention[role="button"]:focus-visible {
+	outline: var(--input-border-width) solid var(--background-modifier-border-focus);
+	outline-offset: 2px;
+}
+
+.ai-helper-fragment-path {
+	overflow-wrap: anywhere;
+}
+
+.ai-helper-fragment-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 50vh;
+	overflow-y: auto;
+	user-select: text;
+}
+
+.ai-helper-fragment-status {
+	color: var(--text-warning);
+}

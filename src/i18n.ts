@@ -14,6 +14,11 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"fragment-view-title": "Saved fragment",
+	"fragment-view-open": "Open original note",
+	"fragment-view-location": "The original note may have changed. The saved range may no longer match.",
+	"fragment-view-unavailable": "The original note is unavailable. The saved fragment is still readable.",
+	"fragment-view-close": "Close",
 	"mention-current": "Current note",
 	"mention-no-selection": "Select a fragment in the note editor.",
 	"mention-multiple-selections": "Leave only one selection in the note editor.",
@@ -334,6 +339,11 @@ export const en = {
 } as const;
 
 export const ru = {
+	"fragment-view-title": "Сохранённый фрагмент",
+	"fragment-view-open": "Открыть исходную заметку",
+	"fragment-view-location": "Исходная заметка могла измениться. Сохранённый диапазон может больше не совпадать.",
+	"fragment-view-unavailable": "Исходная заметка недоступна. Сохранённый фрагмент остаётся доступным для чтения.",
+	"fragment-view-close": "Закрыть",
 	"mention-current": "Текущая заметка",
 	"mention-no-selection": "Выделите фрагмент в редакторе заметки.",
 	"mention-multiple-selections": "Оставьте одно выделение в редакторе заметки.",

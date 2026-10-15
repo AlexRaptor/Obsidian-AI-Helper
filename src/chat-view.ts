@@ -4,7 +4,8 @@ import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
-import { readNoteSnapshot, readSelectedFragment, snapshotMessage, type NoteSnapshot } from "./note-attachments";
+import { readNoteSnapshot, readSelectedFragment, snapshotMessage, type NoteSnapshot, type SelectedFragmentSnapshot } from "./note-attachments";
+import { FragmentSnapshotModal } from "./fragment-snapshot-modal";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
@@ -59,6 +60,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private contextLabelEl: HTMLElement | null = null;
 	private contextTitleEl: HTMLElement | null = null;
 	private messageInput: MessageInput;
+	private fragmentModal?: FragmentSnapshotModal;
 	private clearBtn: HTMLElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
@@ -76,8 +78,14 @@ export class ChatView extends ItemView implements HoverParent {
 		this.plugin = plugin;
 		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration(), () => {
 			return this.app.workspace?.getActiveViewOfType?.(MarkdownView)?.file ?? this.plugin.currentNote ?? null;
-		}, () => this.app.vault.getMarkdownFiles?.() ?? [], () => readSelectedFragment(this.app, this.plugin.currentMarkdownView));
+		}, () => this.app.vault.getMarkdownFiles?.() ?? [], () => readSelectedFragment(this.app, this.plugin.currentMarkdownView), this.openFragment);
 	}
+
+	private openFragment = (snapshot: SelectedFragmentSnapshot, file: TFile | undefined, trigger: HTMLElement): void => {
+		this.fragmentModal?.close();
+		this.fragmentModal = new FragmentSnapshotModal(this.app, snapshot, file, key => this.t(key), trigger);
+		this.fragmentModal.open();
+	};
 
 	getViewType(): string {
 		return VIEW_TYPE_CHAT;
@@ -185,6 +193,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.clearBtn?.setAttribute("aria-label", this.t("clear-conversation"));
 		if (this.clearBtn) setTooltip(this.clearBtn, this.t("clear-conversation"));
 		this.messageInput.refreshLocale();
+		this.fragmentModal?.refreshLocale();
 		for (const message of this.messages) {
 			if (message.kind === "thinking") message.content = this.t("thinking");
 		}
@@ -199,6 +208,8 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	async onClose(): Promise<void> {
+		this.fragmentModal?.close();
+		this.fragmentModal = undefined;
 		this.detachVaultEvents();
 		this.hoverPopover?.unload();
 		this.hoverPopover = null;
@@ -479,7 +490,8 @@ export class ChatView extends ItemView implements HoverParent {
 				this.messageResizeObserver?.observe(div);
 			}
 			this.updateCopyButton(message, row);
-			const signature = `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}\0${this.t("search-folder-description")}\0${this.t("search-fragment")}\0${JSON.stringify(message.sources)}\0${this.t("search-similarity")}\0${(message.sources?.[0] && !isFolderSource(message.sources[0]) ? message.sources[0].similarity : "") ?? ""}\0${message.sources?.some(source => !isFolderSource(source) && source.partial) ?? ""}\0${this.t("search-partial")}\0${this.t("search-partial-answer")}\0${JSON.stringify(this.plugin.settings.similarityAppearance)}`;
+			// Draft labels and provenance are immutable and contain no localized UI.
+			const signature = message.draft ? `${message.kind}\0${message.content}` : `${message.kind}\0${message.content}\0${message.error ?? ""}\0${message.stopped ? this.t("chat-stopped") : ""}\0${this.t("chat-error-prefix")}\0${this.t("search-folder-description")}\0${this.t("search-fragment")}\0${JSON.stringify(message.sources)}\0${this.t("search-similarity")}\0${(message.sources?.[0] && !isFolderSource(message.sources[0]) ? message.sources[0].similarity : "") ?? ""}\0${message.sources?.some(source => !isFolderSource(source) && source.partial) ?? ""}\0${this.t("search-partial")}\0${this.t("search-partial-answer")}\0${JSON.stringify(this.plugin.settings.similarityAppearance)}`;
 			if (row.signature === signature) continue;
 			row.signature = signature;
 			const current = row;
@@ -583,7 +595,7 @@ export class ChatView extends ItemView implements HoverParent {
 				} else if (kind === "error") {
 					staging.createSpan({ cls: "ai-helper-error-prefix", text: this.t("chat-error-prefix") });
 					staging.createSpan({ text: ` ${content}` });
-				} else if (message.draft) renderDraft(staging, message.draft);
+				} else if (message.draft) renderDraft(staging, message.draft, this.openFragment);
 				else staging.createSpan({ cls: kind === "thinking" ? "ai-helper-thinking" : "", text: content });
 				if (stopped) staging.createDiv({ cls: "ai-helper-stopped", text: this.t("chat-stopped") });
 				if (error) staging.createDiv({ cls: "ai-helper-error-prefix ai-helper-inline-error", text: `${this.t("chat-error-prefix")}: ${error}` });
@@ -669,6 +681,7 @@ export class ChatView extends ItemView implements HoverParent {
 			parts: draft.parts.map(part => typeof part === "string" ? part : {
 				file: { basename: part.file.basename, path: part.file.path },
 				fragment: part.fragment,
+				originalFile: part.file,
 			}),
 		} : undefined;
 		this.messages.push({ role: "user", content: text, kind: "text", draft: displayDraft });

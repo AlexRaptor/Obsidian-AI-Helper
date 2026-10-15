@@ -6,7 +6,7 @@ export class TestElement {
 	get firstChild(): TestElement | TestText | undefined { return this.childNodes[0]; }
 	get childNodes(): Array<TestElement | TestText> { return [...(this.text ? [new TestText(this)] : []), ...this.children]; }
 	closest(tags: string): TestElement | null {
-		if (tags.split(", ").includes(this.tagName.toLowerCase())) return this;
+		if (tags.split(", ").includes(this.tagName.toLowerCase()) || (tags.startsWith("[") && this.getAttribute(tags.slice(1, -1)) !== null)) return this;
 		return this.parent?.closest(tags) ?? null;
 	}
 	insertBefore(child: TestElement, before?: TestElement | TestText): void {
@@ -76,11 +76,15 @@ export class TestElement {
 	dispatchEvent(event: { type: string }): void {
 		this.listeners.get(event.type)?.forEach((callback) => callback(event));
 	}
+	private bubble(event: any): void {
+		this.listeners.get(event.type)?.forEach(callback => callback(event));
+		if (!event.cancelBubble) this.parent?.bubble(event);
+	}
 	click(): void {
-		if (!this.disabled) this.listeners.get("click")?.forEach((callback) => callback({ preventDefault() {}, stopPropagation() {} }));
+		if (!this.disabled) this.bubble({ type: "click", target: this, preventDefault() {}, stopPropagation() { this.cancelBubble = true; }, cancelBubble: false });
 	}
 	keydown(key: string, shiftKey = false): void {
-		this.listeners.get("keydown")?.forEach((callback) => callback({ key, shiftKey, preventDefault() {} }));
+		this.bubble({ type: "keydown", target: this, key, shiftKey, preventDefault() {}, stopPropagation() { this.cancelBubble = true; }, cancelBubble: false });
 	}
 	find(cls: string): TestElement {
 		if (this.classes.has(cls)) return this;
@@ -207,6 +211,8 @@ export class PluginSettingTab {
 
 export class Modal {
 	static opened: Modal[] = [];
+	titleEl = new TestElement();
+	setTitle(title: string): this { this.titleEl.setText(title); return this; }
 	contentEl = new TestElement();
 	constructor(public app: unknown) {}
 	open(): void { Modal.opened.push(this); this.onOpen(); }
