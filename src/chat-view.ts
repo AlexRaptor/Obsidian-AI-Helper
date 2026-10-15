@@ -4,7 +4,7 @@ import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
-import { readNoteSnapshot, snapshotMessage, type NoteSnapshot } from "./note-attachments";
+import { readNoteSnapshot, readSelectedFragment, snapshotMessage, type NoteSnapshot } from "./note-attachments";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import type { ChatMessage } from "./server-client";
@@ -76,7 +76,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.plugin = plugin;
 		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration(), () => {
 			return this.app.workspace?.getActiveViewOfType?.(MarkdownView)?.file ?? this.plugin.currentNote ?? null;
-		}, () => this.app.vault.getMarkdownFiles?.() ?? []);
+		}, () => this.app.vault.getMarkdownFiles?.() ?? [], () => readSelectedFragment(this.app, this.plugin.currentMarkdownView));
 	}
 
 	getViewType(): string {
@@ -639,18 +639,21 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.thinking) return;
 		const draft = this.messageInput.getDraft();
 		const text = draftText(draft).trim();
-		const files = [...new Set(draft.parts.flatMap(part => typeof part === "string" ? [] : [part.file]))];
-		const hasSnapshots = files.length > 0 || this.conversation.getMessages().some(message => message.snapshots?.length);
-		if (files.length && !draft.parts.some(part => typeof part === "string" && part.trim())) {
+		const files = [...new Set(draft.parts.flatMap(part => typeof part === "string" || part.fragment ? [] : [part.file]))];
+		const fragments = draft.parts.flatMap(part => typeof part === "string" || !part.fragment ? [] : [part.fragment]);
+		const hasAttachments = files.length > 0 || fragments.length > 0;
+		const hasSnapshots = hasAttachments || this.conversation.getMessages().some(message => message.snapshots?.length);
+		if (hasAttachments && !draft.parts.some(part => typeof part === "string" && part.trim())) {
 			showStatusNotice(this.t("mention-question-required"), "warning"); return;
 		}
 		if (!text) return;
 		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
 
 		this.messageInput.clear();
-		const displayDraft: DisplayDraft | undefined = files.length ? {
+		const displayDraft: DisplayDraft | undefined = hasAttachments ? {
 			parts: draft.parts.map(part => typeof part === "string" ? part : {
 				file: { basename: part.file.basename, path: part.file.path },
+				fragment: part.fragment,
 			}),
 		} : undefined;
 		this.messages.push({ role: "user", content: text, kind: "text", draft: displayDraft });
@@ -712,6 +715,7 @@ export class ChatView extends ItemView implements HoverParent {
 								catch { throw this.unavailableNote(file); }
 							}));
 							if (this.activeRequest !== request) return;
+							snapshots.push(...fragments);
 							requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
 							const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
 							if (window === undefined) throw new Error(this.t("mention-window-unknown"));

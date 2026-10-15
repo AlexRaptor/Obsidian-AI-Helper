@@ -22,6 +22,7 @@ import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descr
 
 export class AiHelperPlugin extends Plugin {
 	currentNote: TFile | null = null;
+	currentMarkdownView: MarkdownView | null = null;
 	folderDescriptions = new FolderDescriptions(this.app, () => this.settings.folderDescriptionName, key => this.t(key));
 	settings: AiHelperSettings = DEFAULT_SETTINGS;
 	models: string[] = [];
@@ -50,7 +51,9 @@ export class AiHelperPlugin extends Plugin {
 	async onload(): Promise<void> {
 		this.unloading = false;
 		const rememberNote = () => {
-			const file = this.app.workspace.getActiveViewOfType?.(MarkdownView)?.file;
+			const view = this.app.workspace.getActiveViewOfType?.(MarkdownView);
+			if (view) this.currentMarkdownView = view;
+			const file = view?.file;
 			if (file?.extension === "md") this.currentNote = file;
 		};
 		rememberNote();

@@ -1,5 +1,6 @@
 import { setIcon, setTooltip, type TFile } from "obsidian";
 import type { LocaleKey } from "./i18n";
+import { fragmentLabel, type SelectedFragmentSnapshot } from "./note-attachments";
 
 let inputSequence = 0;
 
@@ -48,20 +49,25 @@ function renderMatchedText(container: HTMLElement, text: string, positions: Set<
 	}
 }
 
-export type DraftPart = string | { file: TFile };
+type Mention = { file: TFile; fragment?: SelectedFragmentSnapshot };
+export type DraftPart = string | Mention;
+function mentionLabel(part: { file: Pick<TFile, "basename">; fragment?: SelectedFragmentSnapshot }): string {
+	return part.fragment ? fragmentLabel(part.fragment) : `@${part.file.basename}`;
+}
 export interface MessageDraft { parts: DraftPart[]; }
 
 export function draftText(draft: MessageDraft): string {
-	return draft.parts.map(part => typeof part === "string" ? part : `@${part.file.basename}`).join("");
+	return draft.parts.map(part => typeof part === "string" ? part : mentionLabel(part)).join("");
 }
-export type DisplayDraft = { parts: (string | { file: Pick<TFile, "basename" | "path"> })[] };
+export type DisplayDraft = { parts: (string | { file: Pick<TFile, "basename" | "path">; fragment?: SelectedFragmentSnapshot })[] };
 
 export function renderDraft(container: HTMLElement, draft: DisplayDraft): void {
 	for (const part of draft.parts) {
 		if (typeof part === "string") container.createSpan({ text: part });
 		else {
-			const chip = container.createSpan({ cls: "ai-helper-mention", text: `@${part.file.basename}`, attr: { contenteditable: "false", title: part.file.path, "aria-label": `${part.file.basename}: ${part.file.path}` } });
-			setTooltip(chip, part.file.path);
+			const path = part.fragment?.path ?? part.file.path;
+			const chip = container.createSpan({ cls: "ai-helper-mention", text: mentionLabel(part), attr: { contenteditable: "false", title: path, "aria-label": `${mentionLabel(part)}: ${path}` } });
+			setTooltip(chip, path);
 		}
 	}
 }
@@ -72,10 +78,12 @@ export class MessageInput {
 	private readonly suggestionId = `ai-helper-mentions-${++inputSequence}`;
 	private sendBtn: HTMLButtonElement | null = null;
 	private draft: MessageDraft = { parts: [] };
-	private bindings = new Map<string, TFile>();
+	private bindings = new Map<string, Mention>();
 	private mentionSequence = 0;
 	private suggestion: HTMLElement | null = null;
 	private candidates: TFile[] = [];
+	private fragment: SelectedFragmentSnapshot | null = null;
+	private fragmentMode = false;
 	private matchedPositions = new Map<TFile, Set<number>>();
 	private selectedIndex = 0;
 	private suggestionOpen = false;
@@ -90,6 +98,7 @@ export class MessageInput {
 		private onStop: () => void,
 		private currentNote: () => TFile | null = () => null,
 		private markdownFiles: () => TFile[] = () => [],
+		private selectedFragment: () => SelectedFragmentSnapshot | null = () => null,
 	) {}
 
 	private handleClick = (): void => {
@@ -100,6 +109,7 @@ export class MessageInput {
 	private closeSuggestion(): void {
 		this.suggestion?.empty();
 		if (this.suggestion) this.suggestion.style.display = "none";
+		this.fragment = null;
 		this.candidates = [];
 		this.matchedPositions.clear();
 		this.selectedIndex = 0;
@@ -128,13 +138,13 @@ export class MessageInput {
 		this.closeSuggestion();
 		const draft = this.getDraft();
 		const text = draftText(draft).slice(0, this.caretOffset());
-		const match = /(?:^|[ \t\n])@([^\n@]*)$/.exec(text);
+		const match = /(?:^|\s)(@@|@)([^\n@]*)$/.exec(text);
 		if (!match) return;
-		const start = text.length - match[1].length - 1;
+		const start = text.length - match[2].length - match[1].length;
 		// A confirmed mention is an atomic attachment, never a new filter trigger.
 		let offset = 0;
 		for (const part of draft.parts) {
-			const length = typeof part === "string" ? part.length : `@${part.file.basename}`.length;
+			const length = typeof part === "string" ? part.length : mentionLabel(part).length;
 			if (typeof part !== "string" && offset < text.length && offset + length > start) return;
 			offset += length;
 		}
@@ -157,9 +167,17 @@ export class MessageInput {
 			}
 		}
 		if (fence || inline || indented) return;
+		this.fragmentMode = match[1] === "@@";
+		if (this.fragmentMode) {
+			this.fragment = match[2] ? null : this.selectedFragment();
+			this.mentionStart = start; this.mentionEnd = text.length;
+			this.suggestionOpen = true;
+			this.renderSuggestion();
+			return;
+		}
 		const current = this.currentNote();
 		this.candidates = this.markdownFiles().slice().sort((a, b) => a.path.localeCompare(b.path));
-		const tokens = match[1].toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+		const tokens = match[2].toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
 		if (current?.extension === "md" && this.candidates.includes(current) && !tokens.length) {
 			this.candidates = [current, ...this.candidates.filter(file => file.path !== current.path)];
 		}
@@ -187,6 +205,17 @@ export class MessageInput {
 		this.suggestion.style.display = "";
 		this.inputEl?.setAttribute("aria-expanded", "true");
 		this.inputEl?.removeAttribute("aria-activedescendant");
+		if (this.fragmentMode) {
+			if (!this.fragment) {
+				this.suggestion.createDiv({ cls: "suggestion-item", text: this.t("mention-no-selection"), attr: { role: "status" } });
+				return;
+			}
+			const option = this.suggestion.createEl("button", { cls: "suggestion-item is-selected", text: `${fragmentLabel(this.fragment)} — ${this.fragment.markdown.slice(0, 120)}`, attr: { type: "button", role: "option", "aria-selected": "true", id: `${this.suggestionId}-fragment` } });
+			this.inputEl?.setAttribute("aria-activedescendant", `${this.suggestionId}-fragment`);
+			option.addEventListener("mousedown", event => event.preventDefault());
+			option.addEventListener("click", () => this.confirmMention());
+			return;
+		}
 		if (!this.candidates.length) {
 			this.suggestion.createDiv({ cls: "suggestion-item", text: this.t("mention-no-results"), attr: { role: "status" } });
 			return;
@@ -209,17 +238,19 @@ export class MessageInput {
 	}
 
 	private confirmMention(): void {
-		const file = this.candidates[this.selectedIndex];
-		if (!file) return;
+		if (this.fragmentMode && !this.fragment) return;
+		const fragment = this.fragmentMode ? this.selectedFragment() : null;
+		const file = this.fragmentMode ? this.markdownFiles().find(file => file.path === fragment?.path) : this.candidates[this.selectedIndex];
+		if (!file || (this.fragmentMode && !fragment)) return;
 		const draft = this.getDraft();
 		const parts: DraftPart[] = [];
 		let offset = 0;
 		let selectedPart = 0;
 		for (const part of draft.parts) {
-			const length = typeof part === "string" ? part.length : `@${part.file.basename}`.length;
+			const length = typeof part === "string" ? part.length : mentionLabel(part).length;
 			if (typeof part === "string" && offset <= this.mentionStart && offset + length >= this.mentionEnd) {
 				selectedPart = parts.length + 1;
-				parts.push(part.slice(0, this.mentionStart - offset), { file }, part.slice(this.mentionEnd - offset));
+				parts.push(part.slice(0, this.mentionStart - offset), { file, ...(fragment ? { fragment } : {}) }, part.slice(this.mentionEnd - offset));
 			} else parts.push(part);
 			offset += length;
 		}
@@ -299,8 +330,9 @@ export class MessageInput {
 			if (node.nodeType !== 1) return;
 			const chip = node as HTMLElement;
 			const id = chip.getAttribute?.("data-ai-mention");
-			const file = id ? this.bindings.get(id) : undefined;
-			if (file) {
+			const mention = id ? this.bindings.get(id) : undefined;
+			const file = mention?.file;
+			if (file && !mention?.fragment) {
 				chip.setText(`@${file.basename}`);
 				chip.setAttribute("title", file.path);
 				chip.setAttribute("aria-label", `${file.basename}: ${file.path}`);
@@ -330,8 +362,8 @@ export class MessageInput {
 		};
 		const visit = (node: Node) => {
 			const id = (node as HTMLElement).getAttribute?.("data-ai-mention");
-			const file = id ? this.bindings.get(id) : undefined;
-			if (file) { parts.push({ file }); return; }
+			const mention = id ? this.bindings.get(id) : undefined;
+			if (mention) { parts.push(mention); return; }
 			if (node.nodeType === 3) { append(node.textContent ?? ""); return; }
 			const tag = (node as HTMLElement).tagName;
 			if (tag === "BR") { append("\n"); return; }
@@ -355,7 +387,7 @@ export class MessageInput {
 				// Browser undo may restore a cloned node; its id retains the selected file.
 				const id = String(++this.mentionSequence);
 				(this.inputEl.lastChild as HTMLElement).setAttribute("data-ai-mention", id);
-				this.bindings.set(id, part.file);
+				this.bindings.set(id, part);
 			}
 		}
 	}

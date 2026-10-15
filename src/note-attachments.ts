@@ -1,6 +1,33 @@
-import { MarkdownView, type App, type TFile } from "obsidian";
+import { MarkdownView, type App, type EditorPosition, type TFile } from "obsidian";
 
 export interface NoteSnapshot { title: string; path: string; markdown: string; }
+export interface SelectedFragmentSnapshot extends NoteSnapshot {
+	range: { from: EditorPosition; to: EditorPosition };
+}
+
+export function fragmentLabel(snapshot: SelectedFragmentSnapshot): string {
+	const { from, to } = snapshot.range;
+	const first = from.line + 1;
+	const last = to.line + (to.ch === 0 ? 0 : 1);
+	return `${snapshot.title}[${first}${last > first ? `-${last}` : ""}]`;
+}
+
+/** Read only the last used, still-open Markdown editor; never search other tabs. */
+export function readSelectedFragment(app: App, remembered?: MarkdownView | null): SelectedFragmentSnapshot | null {
+	const view = app.workspace.getActiveViewOfType(MarkdownView) ?? remembered;
+	if (!view || !app.workspace.getLeavesOfType("markdown").some(leaf => leaf.view === view)
+		|| view.getMode() !== "source" || view.file?.extension !== "md"
+		|| app.vault.getFileByPath(view.file.path) !== view.file) return null;
+	const selections = view.editor.listSelections?.();
+	if (selections?.length !== 1) return null;
+	const { anchor, head } = selections[0];
+	const ordered = anchor.line < head.line || (anchor.line === head.line && anchor.ch <= head.ch);
+	const from = ordered ? anchor : head;
+	const to = ordered ? head : anchor;
+	const markdown = view.editor.getRange(from, to);
+	if (!markdown.trim()) return null;
+	return { title: view.file.basename, path: view.file.path, markdown, range: { from: { ...from }, to: { ...to } } };
+}
 
 /** Read the bound file, preferring its live editor over the saved vault text. */
 export async function readNoteSnapshot(app: App, file: TFile): Promise<NoteSnapshot> {

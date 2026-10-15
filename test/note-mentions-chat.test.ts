@@ -45,7 +45,7 @@ async function setup(paths?: string[], hasCurrent = true) {
 	const send = root.find("ai-helper-send");
 	const type = (text: string, inputType = "insertText") => { input.value = text; input.dispatchEvent({ type: "input", inputType, data: text.slice(-1) } as any); };
 	const mention = () => { type("@"); input.keydown("Tab"); };
-	return { view, root, input, send, chat, file, files, emit, rename, listeners, workspace, read, type, mention, edit: (text: string) => { markdown = text; } };
+	return { view, root, input, send, chat, file, files, editor, emit, rename, listeners, workspace, read, type, mention, edit: (text: string) => { markdown = text; } };
 }
 
 // Append through the field so choosing another note preserves earlier elements.
@@ -1068,5 +1068,203 @@ it("переименование во время проверки контекс
 		{ title: "Актуальный план", path: "Архив/Актуальный план.md", markdown: "Актуальный текст после перемещения" },
 	]);
 	expect(counter.mock.calls[1][2][0].content).toBe(s.chat.mock.calls[0][2][0].content);
+	await s.view.onClose();
+});
+
+
+it("передаёт точный выделенный Markdown и сохраняет снимок при правках и следующем вопросе", async () => {
+	const s = await setup();
+	s.edit("Снаружи\nДо **важного** [[План]] после\nХвост");
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 1, ch: 3 }, head: { line: 1, ch: 22 } }],
+		getRange: () => "**важного** [[План]]",
+	});
+	s.type("Объясни @");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toContain("План");
+	s.type("Объясни @@");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toContain("**важного** [[План]]");
+	s.input.keydown("Tab");
+	expect(s.input.getText()).toBe("Объясни План[2]");
+	expect(s.chat).not.toHaveBeenCalled();
+	s.edit("Уже изменённая заметка");
+	s.send.click(); await flushPromises();
+	const request = s.chat.mock.calls[0][2][0].content;
+	expect(attachments(request)).toEqual([{
+		title: "План", path: "Проекты/План.md", markdown: "**важного** [[План]]",
+		range: { from: { line: 1, ch: 3 }, to: { line: 1, ch: 22 } },
+	}]);
+	expect(s.root.find("ai-helper-messages").getText()).toContain("Объясни План[2]");
+	s.type("Продолжи"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2][0].content).toBe(request);
+	await s.view.onClose();
+});
+
+it("после переноса фокуса использует последний редактор и фиксирует выбор на момент подтверждения", async () => {
+	const s = await setup(["Проекты/План.md", "Архив/Другая.md"]);
+	let selected = "Первый выбор";
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 11, ch: 4 }, head: { line: 16, ch: 0 } }],
+		getRange: () => selected,
+	});
+	s.view.plugin.currentMarkdownView = s.editor;
+	s.view.plugin.currentNote = s.files[1];
+	s.workspace.getActiveViewOfType = () => null;
+	s.type("Объясни @@");
+	selected = "Новый **выбор**\nдо границы\n";
+	s.root.find("ai-helper-mention-suggest").children[0].click();
+	expect(s.input.getText()).toBe("Объясни План[12-16]");
+	expect(s.input.children.find(child => child.attributes.contenteditable === "false")?.attributes.title).toBe("Проекты/План.md");
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([{
+		title: "План", path: "Проекты/План.md", markdown: "Новый **выбор**\nдо границы\n",
+		range: { from: { line: 11, ch: 4 }, to: { line: 16, ch: 0 } },
+	}]);
+	await s.view.onClose();
+});
+
+it.each(["Enter", "Tab", "click"])("подтверждает фрагмент через %s без отправки; Escape сохраняет текст", async action => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 2, ch: 8 }, head: { line: 1, ch: 2 } }],
+		getRange: () => "Часть строки\nконец",
+	});
+	s.type("@@");
+	if (action === "click") s.root.find("ai-helper-mention-suggest").children[0].click();
+	else s.input.keydown(action);
+	expect(s.input.getText()).toBe("План[2-3]");
+	expect(s.input.children.find(child => child.attributes.contenteditable === "false")).toBeDefined();
+	s.send.click(); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(Notice.messages).toContain(t("mention-question-required"));
+	s.input.children.find(child => child.attributes.contenteditable === "false")!.remove();
+	s.type("Объясни @@"); s.input.keydown("Escape");
+	expect(s.input.getText()).toBe("Объясни @@");
+	s.input.keydown("Enter", true); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Объясни @@" }]);
+	await s.view.onClose();
+});
+
+it.each(["нет выделения", "пробелы", "несмежные", "чтение", "закрыт", "другая заметка"])("не предлагает старое или неподходящее выделение: %s", async scenario => {
+	const s = await setup();
+	const selection = { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 4 } };
+	Object.assign(s.editor.editor, {
+		listSelections: () => scenario === "нет выделения" ? [] : scenario === "несмежные" ? [selection, selection] : [selection],
+		getRange: () => scenario === "пробелы" ? " \n\t " : "Старый текст",
+	});
+	s.view.plugin.currentMarkdownView = s.editor;
+	if (scenario === "чтение") s.editor.getMode = () => "preview";
+	if (scenario === "закрыт") { s.workspace.getActiveViewOfType = () => null; s.workspace.getLeavesOfType = () => []; }
+	if (scenario === "другая заметка") {
+		const other = Object.assign(new MarkdownView({} as WorkspaceLeaf), { file: s.file, getMode: () => "source", editor: { listSelections: () => [] } });
+		s.workspace.getActiveViewOfType = () => other;
+	}
+	s.type("Объясни @@");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toBe(t("mention-no-selection"));
+	s.input.keydown("Tab"); s.input.keydown("Enter"); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe("Объясни @@");
+	await s.view.onClose();
+});
+
+it.each([
+	["Почта@@", "insertText", false], ["`@@", "insertText", false],
+	["```md\n@@", "insertText", false], ["    @@", "insertText", false],
+	["@@", "insertFromPaste", false], ["@@", "insertText", true],
+])("обычный текст, код, вставка и IME не предлагают фрагмент: %s/%s/%s", async (text, inputType, isComposing) => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 4 } }],
+		getRange: () => "Снимок",
+	});
+	s.input.value = text;
+	s.input.dispatchEvent({ type: "input", inputType, isComposing } as any);
+	expect(s.input.attributes["aria-expanded"]).toBe("false");
+	expect(s.input.children.some(child => child.attributes.contenteditable === "false")).toBe(false);
+	await s.view.onClose();
+});
+
+it.each(["неизвестен", "мал", "история"])("сохраняет снимок и черновик, когда лимит %s", async scenario => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }],
+		getRange: () => "Снимок",
+	});
+	if (scenario === "история") {
+		s.type("Предыдущий вопрос"); s.send.click(); await flushPromises();
+	}
+	s.view.plugin.settings.contextWindow = scenario === "неизвестен" ? "" : "100";
+	s.type("Объясни @@"); s.input.keydown("Tab"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls).toHaveLength(scenario === "история" ? 1 : 0);
+	expect(s.input.getText()).toBe("Объясни План[1]");
+	expect(s.root.getText()).toContain(t(scenario === "неизвестен" ? "mention-window-unknown" : "mention-budget"));
+	s.edit("Новое содержимое"); s.view.plugin.settings.contextWindow = "20000";
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls.at(-1)![2].at(-1)!.content)[0].markdown).toBe("Снимок");
+	await s.view.onClose();
+});
+
+it("удаление последнего упоминания исключает снимок из запроса", async () => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }],
+		getRange: () => "Снимок",
+	});
+	s.type("Объясни @@"); s.input.keydown("Tab");
+	s.input.children.find(child => child.attributes.contenteditable === "false")!.remove();
+	s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[0][2]).toEqual([{ role: "user", content: "Объясни" }]);
+	await s.view.onClose();
+});
+
+it.each(["ru", "en"] as const)("копирует видимую подпись без снимка; вставка и смена языка сохраняют текст (%s)", async locale => {
+	const s = await setup();
+	const writeText = vi.fn().mockResolvedValue(undefined);
+	vi.stubGlobal("navigator", { clipboard: { writeText } });
+	try {
+		Object.assign(s.editor.editor, {
+			listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }],
+			getRange: () => "Скрытый снимок",
+		});
+		s.type("Объясни @@"); s.input.keydown("Tab");
+		setLanguage(locale); await s.view.refreshLocale();
+		expect(s.input.getText()).toBe("Объясни План[1]");
+		s.send.click(); await flushPromises();
+		s.root.find("ai-helper-message-user").find("ai-helper-copy-message").click(); await flushPromises();
+		expect(writeText).toHaveBeenCalledWith("Объясни План[1]");
+		s.type("Объясни План[1]", "insertFromPaste"); s.send.click(); await flushPromises();
+		expect(s.chat.mock.calls[1][2].at(-1)).toEqual({ role: "user", content: "Объясни План[1]" });
+		await s.view.onClose();
+	} finally { vi.unstubAllGlobals(); }
+});
+
+it("сохраняет происхождение фрагмента после переименования, удаления и повторного открытия чата", async () => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }],
+		getRange: () => "Снимок",
+	});
+	s.type("Объясни @@"); s.input.keydown("Tab");
+	s.rename(s.file, "Архив/Итог.md");
+	s.files.splice(s.files.indexOf(s.file), 1); s.emit("delete", s.file);
+	await s.view.onClose(); await s.view.onOpen();
+	const input = s.root.find("ai-helper-input");
+	expect(input.getText()).toBe("Объясни План[1]");
+	expect(input.children.find(child => child.attributes.contenteditable === "false")?.attributes.title).toBe("Проекты/План.md");
+	s.root.find("ai-helper-send").click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)[0]).toMatchObject({ title: "План", path: "Проекты/План.md", markdown: "Снимок" });
+	await s.view.onClose();
+});
+
+it("не подтверждает отсутствующее предложение после обычного текста @@", async () => {
+	const s = await setup();
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 6 } }],
+		getRange: () => "Снимок",
+	});
+	s.type("Объясни @@обычный текст"); s.input.keydown("Tab");
+	expect(s.input.getText()).toBe("Объясни @@обычный текст");
+	expect(s.input.children.some(child => child.attributes.contenteditable === "false")).toBe(false);
 	await s.view.onClose();
 });

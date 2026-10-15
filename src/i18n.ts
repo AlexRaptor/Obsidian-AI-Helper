@@ -15,6 +15,7 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 
 export const en = {
 	"mention-current": "Current note",
+	"mention-no-selection": "Select a fragment in the last used Markdown editor first.",
 	"mention-notes": "Vault notes",
 	"mention-no-results": "No matching notes.",
 	"mention-question-required": "Add a question or instruction alongside the note mention.",
@@ -333,6 +334,7 @@ export const en = {
 
 export const ru = {
 	"mention-current": "Текущая заметка",
+	"mention-no-selection": "Сначала выделите фрагмент в последнем использованном редакторе Markdown.",
 	"mention-notes": "Заметки хранилища",
 	"mention-no-results": "Подходящие заметки не найдены.",
 	"mention-question-required": "Добавьте вопрос или инструкцию к упоминанию заметки.",
