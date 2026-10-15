@@ -1099,9 +1099,9 @@ it("передаёт точный выделенный Markdown и сохран�
 	await s.view.onClose();
 });
 
-it("после переноса фокуса использует последний редактор и фиксирует выбор на момент подтверждения", async () => {
+it("после переноса фокуса подтверждает показанный текст последнего редактора", async () => {
 	const s = await setup(["Проекты/План.md", "Архив/Другая.md"]);
-	let selected = "Первый выбор";
+	const selected = "Новый **выбор**\nдо границы\n";
 	Object.assign(s.editor.editor, {
 		listSelections: () => [{ anchor: { line: 11, ch: 4 }, head: { line: 16, ch: 0 } }],
 		getRange: () => selected,
@@ -1110,7 +1110,6 @@ it("после переноса фокуса использует последн
 	s.view.plugin.currentNote = s.files[1];
 	s.workspace.getActiveViewOfType = () => null;
 	s.type("Объясни @@");
-	selected = "Новый **выбор**\nдо границы\n";
 	s.root.find("ai-helper-mention-suggest").children[0].click();
 	expect(s.input.getText()).toBe("Объясни План[12-16]");
 	expect(s.input.children.find(child => child.attributes.contenteditable === "false")?.attributes.title).toBe("Проекты/План.md");
@@ -1161,7 +1160,7 @@ it.each(["нет выделения", "пробелы", "несмежные", "�
 		s.workspace.getActiveViewOfType = () => other;
 	}
 	s.type("Объясни @@");
-	expect(s.root.find("ai-helper-mention-suggest").getText()).toBe(t("mention-no-selection"));
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toBe(t(scenario === "несмежные" ? "mention-multiple-selections" : "mention-no-selection"));
 	s.input.keydown("Tab"); s.input.keydown("Enter"); await flushPromises();
 	expect(s.chat).not.toHaveBeenCalled();
 	expect(s.input.getText()).toBe("Объясни @@");
@@ -1266,5 +1265,153 @@ it("не подтверждает отсутствующее предложен�
 	s.type("Объясни @@обычный текст"); s.input.keydown("Tab");
 	expect(s.input.getText()).toBe("Объясни @@обычный текст");
 	expect(s.input.children.some(child => child.attributes.contenteditable === "false")).toBe(false);
+	await s.view.onClose();
+});
+
+
+it("не подменяет показанный фрагмент изменённым выделением и позволяет выбрать его заново", async () => {
+	const s = await setup();
+	let selected = "Первый выбор";
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 12 } }],
+		getRange: () => selected,
+	});
+	s.type("Объясни @@");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toContain("Первый выбор");
+	selected = "Второй выбор";
+	s.input.keydown("Tab");
+	expect(s.input.getText()).toBe("Объясни @@");
+	expect(s.input.attributes["aria-expanded"]).toBe("false");
+	expect(s.chat).not.toHaveBeenCalled();
+	s.type("Объясни @@"); s.input.keydown("Enter");
+	selected = "Третий выбор";
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)[0].markdown).toBe("Второй выбор");
+	await s.view.onClose();
+});
+
+
+// Drive the public workspace/editor boundary, including the plugin's real event handlers.
+async function setupEditors() {
+	const s = await setup(["Проекты/План.md", "Итоги.md"]);
+	const callbacks = new Map<string, ((...args: any[]) => void)[]>();
+	let active: MarkdownView | null = s.editor;
+	const workspace = {
+		getActiveViewOfType: () => active,
+		getLeavesOfType: () => editors.map(view => ({ view })),
+		on: (event: string, callback: (...args: any[]) => void) => {
+			callbacks.set(event, [...(callbacks.get(event) ?? []), callback]);
+			return {} as any;
+		},
+	};
+	function editor(file: TFile, initial: string) {
+		let text = initial;
+		let ranges = [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }];
+		let mode: "source" | "preview" = "source";
+		const view = Object.assign(new MarkdownView({} as WorkspaceLeaf), {
+			file, getMode: () => mode,
+			editor: {
+				getValue: () => text,
+				listSelections: () => ranges,
+				getRange: (from: { line: number; ch: number }, to: { line: number; ch: number }) => {
+					const lines = text.split("\n");
+					const offset = (p: typeof from) => lines.slice(0, p.line).reduce((sum, line) => sum + line.length + 1, 0) + p.ch;
+					return text.slice(offset(from), offset(to));
+				},
+			},
+		});
+		return { view, select: (next: typeof ranges) => { ranges = next; }, edit: (next: string) => { text = next; }, mode: (next: typeof mode) => { mode = next; } };
+	}
+	const a = editor(s.file, "Лишнее: первый выбор. Хвост");
+	const b = editor(s.files[1], "Заголовок\nДо: второй выбор. Хвост\nСледующая строка");
+	const editors = [a.view, b.view];
+	active = a.view;
+	const { AiHelperPlugin } = await import("../src/main");
+	const plugin = new AiHelperPlugin({ workspace } as any, {} as any);
+	await plugin.onload();
+	plugin.settings = s.view.plugin.settings; plugin.serverClient = s.view.plugin.serverClient;
+	s.view.plugin = plugin; s.view.app.workspace = workspace as any;
+	const focus = (view: MarkdownView | null) => {
+		s.input.dispatchEvent({ type: "blur" });
+		active = view;
+		callbacks.get("active-leaf-change")?.forEach(callback => callback(view ? { view } : null));
+	};
+	return { ...s, a, b, focus };
+}
+
+it.each(["ru", "en"] as const)("%s: после А и Б без подходящего выделения не возвращает А, объясняет причину и сохраняет вопрос", async locale => {
+	const s = await setupEditors(); setLanguage(locale);
+	s.a.select([{ anchor: { line: 0, ch: 8 }, head: { line: 0, ch: 20 } }]);
+	s.focus(s.a.view); s.focus(null);
+	s.type("Объясни @@");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toContain("первый выбор");
+	for (const invalid of ["курсор", "пробелы", "чтение", "несмежные"]) {
+		s.focus(s.b.view);
+		s.b.mode(invalid === "чтение" ? "preview" : "source");
+		s.b.edit(invalid === "пробелы" ? "  \t" : "Текст");
+		const range = { anchor: { line: 0, ch: 0 }, head: { line: 0, ch: invalid === "курсор" ? 0 : 3 } };
+		s.b.select(invalid === "несмежные" ? [range, range] : [range]);
+		s.focus(null); s.type("Объясни @@");
+		expect(s.root.find("ai-helper-mention-suggest").getText()).toBe(locale === "ru"
+			? invalid === "несмежные" ? "Оставьте одно выделение в редакторе заметки." : "Выделите фрагмент в редакторе заметки."
+			: invalid === "несмежные" ? "Leave only one selection in the note editor." : "Select a fragment in the note editor.");
+		s.input.keydown("Enter"); await flushPromises();
+		expect(s.chat).not.toHaveBeenCalled(); expect(s.input.getText()).toBe("Объясни @@");
+		s.input.keydown("Escape"); expect(s.input.attributes["aria-expanded"]).toBe("false");
+	}
+	s.focus(s.b.view); s.b.mode("source"); s.b.edit("Исправленный выбор");
+	s.b.select([{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 18 } }]);
+	s.focus(null); s.type("Объясни @@"); s.input.keydown("Enter");
+	expect(s.input.getText()).toBe("Объясни Итоги[1]");
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)[0]).toMatchObject({ path: "Итоги.md", markdown: "Исправленный выбор" });
+	await s.view.onClose();
+});
+
+it.each([false, true])("переходы редакторов сохраняют точные границы и снимок при обратном выделении: %s", async reverse => {
+	const s = await setupEditors();
+	const from = { line: 1, ch: 4 }, to = { line: 2, ch: 0 };
+	s.focus(s.b.view); s.b.select([{ anchor: reverse ? to : from, head: reverse ? from : to }]);
+	s.focus(null); s.type("Объясни @@");
+	expect(s.root.find("ai-helper-mention-suggest").getText()).toContain("Итоги[2] — второй выбор. Хвост");
+	s.input.keydown("Tab");
+	s.focus(s.a.view); s.a.select([{ anchor: { line: 0, ch: 8 }, head: { line: 0, ch: 20 } }]);
+	s.b.edit("Заменённый оригинал"); s.focus(null);
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)[0]).toEqual({
+		title: "Итоги", path: "Итоги.md", markdown: "второй выбор. Хвост\n", range: { from, to },
+	});
+	await s.view.onClose();
+});
+
+it("возврат в редактор закрывает старое предложение; новое @@ использует новое выделение", async () => {
+	const s = await setupEditors();
+	s.a.select([{ anchor: { line: 0, ch: 8 }, head: { line: 0, ch: 20 } }]);
+	s.focus(null); s.type("Объясни @@");
+	s.focus(s.b.view);
+	expect(s.input.attributes["aria-expanded"]).toBe("false");
+	expect(s.input.getText()).toBe("Объясни @@");
+	s.b.select([{ anchor: { line: 1, ch: 4 }, head: { line: 1, ch: 16 } }]);
+	s.focus(null); s.type("Объясни @@"); s.input.keydown("Tab");
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)[0]).toMatchObject({ path: "Итоги.md", markdown: "второй выбор" });
+	await s.view.onClose();
+});
+
+
+it("обновление файлов не заменяет уже показанное предложение другим фрагментом", async () => {
+	const s = await setup();
+	let selected = "Первый выбор";
+	Object.assign(s.editor.editor, {
+		listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 12 } }],
+		getRange: () => selected,
+	});
+	s.type("Объясни @@"); selected = "Второй выбор";
+	s.rename(s.file, "Архив/План.md");
+	expect(s.input.attributes["aria-expanded"]).toBe("false");
+	expect(s.input.getText()).toBe("Объясни @@");
+	expect(s.chat).not.toHaveBeenCalled();
+	s.type("Объясни @@"); s.input.keydown("Tab"); s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)[0]).toMatchObject({ path: "Архив/План.md", markdown: "Второй выбор" });
 	await s.view.onClose();
 });

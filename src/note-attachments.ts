@@ -12,13 +12,16 @@ export function fragmentLabel(snapshot: SelectedFragmentSnapshot): string {
 	return `${snapshot.title}[${first}${last > first ? `-${last}` : ""}]`;
 }
 
+export type SelectedFragmentResult = SelectedFragmentSnapshot | "multiple-selections" | null;
+
 /** Read only the last used, still-open Markdown editor; never search other tabs. */
-export function readSelectedFragment(app: App, remembered?: MarkdownView | null): SelectedFragmentSnapshot | null {
+export function readSelectedFragment(app: App, remembered?: MarkdownView | null): SelectedFragmentResult {
 	const view = app.workspace.getActiveViewOfType(MarkdownView) ?? remembered;
 	if (!view || !app.workspace.getLeavesOfType("markdown").some(leaf => leaf.view === view)
 		|| view.getMode() !== "source" || view.file?.extension !== "md"
 		|| app.vault.getFileByPath(view.file.path) !== view.file) return null;
 	const selections = view.editor.listSelections?.();
+	if (selections && selections.length > 1) return "multiple-selections";
 	if (selections?.length !== 1) return null;
 	const { anchor, head } = selections[0];
 	const ordered = anchor.line < head.line || (anchor.line === head.line && anchor.ch <= head.ch);

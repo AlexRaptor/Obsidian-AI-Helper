@@ -1,6 +1,6 @@
 import { setIcon, setTooltip, type TFile } from "obsidian";
 import type { LocaleKey } from "./i18n";
-import { fragmentLabel, type SelectedFragmentSnapshot } from "./note-attachments";
+import { fragmentLabel, type SelectedFragmentSnapshot, type SelectedFragmentResult } from "./note-attachments";
 
 let inputSequence = 0;
 
@@ -84,6 +84,7 @@ export class MessageInput {
 	private candidates: TFile[] = [];
 	private fragment: SelectedFragmentSnapshot | null = null;
 	private fragmentMode = false;
+	private multipleSelections = false;
 	private matchedPositions = new Map<TFile, Set<number>>();
 	private selectedIndex = 0;
 	private suggestionOpen = false;
@@ -98,7 +99,7 @@ export class MessageInput {
 		private onStop: () => void,
 		private currentNote: () => TFile | null = () => null,
 		private markdownFiles: () => TFile[] = () => [],
-		private selectedFragment: () => SelectedFragmentSnapshot | null = () => null,
+		private selectedFragment: () => SelectedFragmentResult = () => null,
 	) {}
 
 	private handleClick = (): void => {
@@ -169,7 +170,9 @@ export class MessageInput {
 		if (fence || inline || indented) return;
 		this.fragmentMode = match[1] === "@@";
 		if (this.fragmentMode) {
-			this.fragment = match[2] ? null : this.selectedFragment();
+			const selection = match[2] ? null : this.selectedFragment();
+			this.multipleSelections = selection === "multiple-selections";
+			this.fragment = selection === "multiple-selections" ? null : selection;
 			this.mentionStart = start; this.mentionEnd = text.length;
 			this.suggestionOpen = true;
 			this.renderSuggestion();
@@ -207,7 +210,7 @@ export class MessageInput {
 		this.inputEl?.removeAttribute("aria-activedescendant");
 		if (this.fragmentMode) {
 			if (!this.fragment) {
-				this.suggestion.createDiv({ cls: "suggestion-item", text: this.t("mention-no-selection"), attr: { role: "status" } });
+				this.suggestion.createDiv({ cls: "suggestion-item", text: this.t(this.multipleSelections ? "mention-multiple-selections" : "mention-no-selection"), attr: { role: "status" } });
 				return;
 			}
 			const option = this.suggestion.createEl("button", { cls: "suggestion-item is-selected", text: `${fragmentLabel(this.fragment)} — ${this.fragment.markdown.slice(0, 120)}`, attr: { type: "button", role: "option", "aria-selected": "true", id: `${this.suggestionId}-fragment` } });
@@ -239,7 +242,18 @@ export class MessageInput {
 
 	private confirmMention(): void {
 		if (this.fragmentMode && !this.fragment) return;
-		const fragment = this.fragmentMode ? this.selectedFragment() : null;
+		const fragment = this.fragmentMode ? this.fragment : null;
+		// Confirm exactly the proposal the user saw; changed selection requires a new @@.
+		if (fragment) {
+			const current = this.selectedFragment();
+			if (!current || current === "multiple-selections" || current.path !== fragment.path
+				|| current.title !== fragment.title || current.markdown !== fragment.markdown
+				|| current.range.from.line !== fragment.range.from.line || current.range.from.ch !== fragment.range.from.ch
+				|| current.range.to.line !== fragment.range.to.line || current.range.to.ch !== fragment.range.to.ch) {
+				this.closeSuggestion();
+				return;
+			}
+		}
 		const file = this.fragmentMode ? this.markdownFiles().find(file => file.path === fragment?.path) : this.candidates[this.selectedIndex];
 		if (!file || (this.fragmentMode && !fragment)) return;
 		const draft = this.getDraft();
@@ -340,7 +354,9 @@ export class MessageInput {
 			} else for (const child of Array.from(node.childNodes)) visit(child);
 		};
 		if (this.inputEl) visit(this.inputEl);
-		if (this.suggestionOpen) {
+		if (this.suggestionOpen && this.fragmentMode) {
+			this.closeSuggestion();
+		} else if (this.suggestionOpen) {
 			const selected = this.candidates[this.selectedIndex];
 			this.updateSuggestion();
 			const index = this.candidates.indexOf(selected);
