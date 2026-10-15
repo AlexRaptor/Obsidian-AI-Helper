@@ -1,3 +1,5 @@
+import { NoteTranslation } from "./note-translation";
+import { TranslationModal } from "./translation-modal";
 import { FileSystemAdapter, Plugin, MarkdownView, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
 import { showStatusNotice } from "./ui-status";
 import {
@@ -23,6 +25,8 @@ import { chatEditorSelection } from "./editor-selection";
 import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
 
 export class AiHelperPlugin extends Plugin {
+	translation = new NoteTranslation(this);
+	private translationModal?: TranslationModal;
 	currentNote: TFile | null = null;
 	currentMarkdownView: MarkdownView | null = null;
 	folderDescriptions = new FolderDescriptions(this.app, () => this.settings.folderDescriptionName, key => this.t(key));
@@ -69,6 +73,8 @@ export class AiHelperPlugin extends Plugin {
 		await this.loadSettings();
 		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();
+		this.addCommand({ id: "translate-current-note", name: this.t("translation-command"), callback: () => this.translateNote() });
+
 		const adapter = this.app.vault?.adapter;
 		this.noteSearch = createNoteSearch({
 			vaultPath: adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "",
@@ -116,6 +122,7 @@ export class AiHelperPlugin extends Plugin {
 				void updating.catch(updateError);
 			}));
 			this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("translation-command")).setIcon("languages").onClick(() => this.translateNote(file)));
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
 				if (file instanceof TFolder) {
 					menu.addItem(item => item.setTitle(this.t("review-folder")).setIcon("folder-search").onClick(() => {
@@ -216,6 +223,8 @@ export class AiHelperPlugin extends Plugin {
 
 	onunload(): void {
 		this.unloading = true;
+		this.translation.dispose();
+		this.translationModal?.close();
 		this.indexStorageListeners.clear();
 		this.noteSearch?.dispose();
 		this.noteSearchConnection.cancel();
@@ -230,11 +239,18 @@ export class AiHelperPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const saved = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+		if (!["auto", "en", "ru"].includes(this.settings.language)) this.settings.language = "auto";
+		const locale = resolveLanguage(this.settings.language, getAppLanguage());
+		const stored = saved as Partial<AiHelperSettings> | null;
+		if (typeof stored?.translationLanguage !== "string") this.settings.translationLanguage = locale === "ru" ? "Русский" : "English";
+		if (typeof stored?.translationSuffix !== "string") this.settings.translationSuffix = ` — ${locale}`;
+		if (typeof stored?.translationPrompt !== "string") this.settings.translationPrompt = DEFAULT_SETTINGS.translationPrompt;
+		if (typeof stored?.translationOpenSideBySide !== "boolean") this.settings.translationOpenSideBySide = true;
 		if (!isValidFolderDescriptionName(this.settings.folderDescriptionName)) this.settings.folderDescriptionName = DEFAULT_SETTINGS.folderDescriptionName;
 		if (!["local", "file"].includes(this.settings.indexStorageMode)) this.settings.indexStorageMode = "local";
 		if (typeof this.settings.indexStorageGeneration !== "string") this.settings.indexStorageGeneration = "";
-		if (!["auto", "en", "ru"].includes(this.settings.language)) this.settings.language = "auto";
 		if (sourceBudgetBytes(this.settings.noteSourceBudget) === undefined) this.settings.noteSourceBudget = DEFAULT_SETTINGS.noteSourceBudget;
 		this.settings.similarityAppearance = normalizeSimilarityAppearance(this.settings.similarityAppearance);
 		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
@@ -244,6 +260,19 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearchConnection.configure(this.settings);
 		this.modelConnection.configure(this.settings);
 		this.contextWindowConnection.configure(this.settings);
+		if (["translationLanguage", "translationSuffix", "translationPrompt", "translationOpenSideBySide"].some(key => !stored || !(key in stored))) await this.saveData(this.settings);
+	}
+
+	translateNote(selected?: TFile): void {
+		if (this.unloading) return;
+		if (!this.translation.active) {
+			const file = selected ?? this.app.workspace.getActiveFile?.();
+			if (!file || file.extension !== "md") { showStatusNotice(this.t("translation-note-required"), "warning"); return; }
+			if (this.getChatView()?.isGenerating() || this.noteSearch?.chatHasPriority) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
+			this.translation.start(file);
+		}
+		this.translationModal?.close();
+		this.translationModal = new TranslationModal(this); this.translationModal.open();
 	}
 
 	async indexActiveNote(): Promise<void> {

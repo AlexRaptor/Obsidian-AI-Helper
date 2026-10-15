@@ -649,6 +649,7 @@ export class ChatView extends ItemView implements HoverParent {
 
 	private async handleSend(): Promise<void> {
 		if (this.thinking) return;
+		if (this.plugin.translation?.busy) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
 		const draft = this.messageInput.getDraft();
 		const text = draftText(draft).trim();
 		const fragmentKeys = new Set<string>();

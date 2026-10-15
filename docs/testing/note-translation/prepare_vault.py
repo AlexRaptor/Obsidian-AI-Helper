@@ -10,6 +10,7 @@ if vault.exists() and any(vault.iterdir()):
     parser.error('Папка назначения не пуста. Для восстановления используйте новую пустую папку.')
 
 files = {
+    'Статьи/Короткая статья.md': 'Good notes preserve context. A useful translation preserves the meaning of the original.\n\nЭтот абзац уже написан на русском языке и должен остаться без изменений.\n',
     'Статьи/How to take notes.md': '''---
 title: How to take notes
 статус: проверка

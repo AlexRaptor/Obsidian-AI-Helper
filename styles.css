@@ -626,3 +626,13 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 .ai-helper-fragment-status {
 	color: var(--text-warning);
 }
+
+.ai-helper-translation-setting .setting-item-control {
+	flex-wrap: wrap;
+	flex: 1 1 50%;
+}
+.ai-helper-translation-setting textarea {
+	flex: 1 1 50%;
+	min-width: 50%;
+	min-height: 12em;
+}

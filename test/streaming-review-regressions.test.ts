@@ -41,7 +41,7 @@ it("retains terminal usage in the finishing transport chunk", async () => {
 	const transport = controlled();
 	const result = createServerClient(async () => transport.response).chat("http://s", "m", []);
 	transport.send(data(delta("answer", "stop")) + data({ choices: [], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } }) + "data: [DONE]\n\n");
-	expect(await result).toEqual({ ok: true, value: { content: "answer", usage: { promptTokens: 2, completionTokens: 3, totalTokens: 5 } } });
+	expect(await result).toEqual({ ok: true, value: { content: "answer", finishReason: "stop", usage: { promptTokens: 2, completionTokens: 3, totalTokens: 5 } } });
 	transport.handshake.resolve();
 });
 

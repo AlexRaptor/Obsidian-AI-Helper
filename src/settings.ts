@@ -1,3 +1,4 @@
+import { DEFAULT_TRANSLATION_PROMPT } from "./translation-settings";
 import { isEmbeddingConfigured } from "./note-search";
 import { App, PluginSettingTab, Setting, ProgressBarComponent, type ColorComponent, type SliderComponent, type TextComponent, type SettingDefinition, type SettingDefinitionItem, type SettingDefinitionGroup, type SettingDefinitionList } from "obsidian";
 import { setStatusTone, indexStatusTone } from "./ui-status";
@@ -20,6 +21,10 @@ import {
 } from "./i18n";
 
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
+	translationLanguage: string;
+	translationPrompt: string;
+	translationSuffix: string;
+	translationOpenSideBySide: boolean;
 	folderDescriptionName: string;
 	indexStorageMode: IndexStorageMode;
 	indexStorageGeneration: string;
@@ -43,6 +48,10 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
+	translationLanguage: "English",
+	translationPrompt: DEFAULT_TRANSLATION_PROMPT,
+	translationSuffix: " — en",
+	translationOpenSideBySide: true,
 	folderDescriptionName: DEFAULT_FOLDER_DESCRIPTION_NAME,
 	indexStorageMode: "local",
 	indexStorageGeneration: "",
@@ -102,6 +111,20 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			{ name: this.t("setting-language"), desc: this.t("setting-language-desc"), control: {
 				type: "dropdown", key: "language", options: { auto: this.t("language-auto"), ...LOCALE_NAMES },
 			} },
+			this.group("translation-title", [
+				{ name: this.t("translation-language"), desc: this.t("translation-language-desc"), control: { type: "text", key: "translationLanguage", validate: value => { if (!value.trim()) return this.t("translation-config"); } } },
+				this.row("translation-prompt", "translation-prompt-desc", setting => {
+					setting.setClass("ai-helper-translation-setting");
+					let input: import("obsidian").TextAreaComponent;
+					setting.addTextArea(text => { input = text; text.setValue(this.plugin.settings.translationPrompt).onChange(value => this.setControlValue("translationPrompt", value)); });
+					setting.addButton(button => button.setButtonText(this.t("translation-reset")).onClick(async () => {
+						input.setValue(DEFAULT_TRANSLATION_PROMPT);
+						await this.setControlValue("translationPrompt", DEFAULT_TRANSLATION_PROMPT);
+					}));
+				}),
+				{ name: this.t("translation-suffix"), desc: this.t("translation-suffix-desc"), control: { type: "text", key: "translationSuffix" } },
+				{ name: this.t("translation-side-by-side"), control: { type: "toggle", key: "translationOpenSideBySide" } },
+			]),
 			{ type: "page", name: this.t("settings-page-conversation"), desc: this.t("settings-page-conversation-desc"), items: [
 				{ name: "", desc: this.t("settings-page-conversation-desc") },
 				this.group("settings-group-connection", [
@@ -250,12 +273,13 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		if (key === "language") {
 			if (value !== "auto" && value !== "en" && value !== "ru") return;
 			this.plugin.settings.language = value;
-		} else if (key === "autoUpdateNotes") {
+		} else if (key === "autoUpdateNotes" || key === "translationOpenSideBySide") {
 			if (typeof value !== "boolean") return;
-			this.plugin.settings.autoUpdateNotes = value;
+			Object.assign(this.plugin.settings, { [key]: value });
 		} else {
 			if (typeof value !== "string" || typeof this.getControlValue(key) !== "string") return;
-			let normalized = key === "systemPrompt" ? value : value.trim();
+			let normalized = ["systemPrompt", "translationPrompt", "translationSuffix"].includes(key) ? value : value.trim();
+			if (key === "translationLanguage" && !normalized) return;
 			if (key === "noteSourceBudget" && sourceBudgetBytes(value) === undefined) return;
 			if (key === "responseWait") { const parsed = parseResponseWait(value); if (!parsed.valid) return; normalized = parsed.value; }
 			Object.assign(this.plugin.settings, { [key]: normalized });

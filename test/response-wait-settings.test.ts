@@ -962,3 +962,36 @@ it("объясняет отсутствие embeddings в настройках �
 	expect(Notice.messages).toEqual(Array(2).fill(t("search-setup-required")));
 	tab.hide();
 });
+
+it("инициализирует язык и суффикс перевода один раз и различает отсутствующий и пустой промпт", async () => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	let stored: unknown = { language: "ru" };
+	vi.spyOn(plugin, "loadData").mockImplementation(async () => stored);
+	const save = vi.fn(async (value: unknown) => { stored = structuredClone(value); });
+	Object.assign(plugin, { saveData: save });
+	await plugin.loadSettings();
+	expect(plugin.settings.translationLanguage).toBe("Русский");
+	expect(plugin.settings.translationSuffix).toBe(" — ru");
+	expect(plugin.settings.translationPrompt).toContain("You are a professional translator and editor.");
+	expect(save).toHaveBeenCalled();
+	stored = { ...plugin.settings, language: "en", translationPrompt: "" };
+	await plugin.loadSettings();
+	expect(plugin.settings.translationLanguage).toBe("Русский"); expect(plugin.settings.translationSuffix).toBe(" — ru");
+	expect(plugin.settings.translationPrompt).toBe("");
+});
+it("сброс промпта сразу меняет поле и сохраняет встроенный текст, пустые пожелания допустимы", async () => {
+	setLanguage("ru");
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS, translationPrompt: "Пользовательский стиль" }, modelStatus: "idle", t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const setting = controls.find(control => control.name === "Промпт перевода")!;
+	await setting.input!.change(""); expect(plugin.settings.translationPrompt).toBe("");
+	await setting.button!.click();
+	expect(plugin.settings.translationPrompt).toBe(DEFAULT_SETTINGS.translationPrompt);
+	expect(setting.input!.value).toBe(DEFAULT_SETTINGS.translationPrompt);
+	expect(saveSettings).toHaveBeenCalledTimes(2);
+	await tab.setControlValue("translationLanguage", "Японский"); expect(plugin.settings.translationLanguage).toBe("Японский");
+	await tab.setControlValue("translationLanguage", " "); expect(plugin.settings.translationLanguage).toBe("Японский");
+	await tab.setControlValue("translationSuffix", " — ja"); expect(plugin.settings.translationSuffix).toBe(" — ja");
+	await tab.setControlValue("translationOpenSideBySide", false); expect(plugin.settings.translationOpenSideBySide).toBe(false);
+});

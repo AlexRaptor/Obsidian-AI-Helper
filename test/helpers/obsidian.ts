@@ -153,6 +153,7 @@ export class Plugin extends Component {
 	register(_callback: () => void): void {}
 	registerEvent(_event: unknown): void {}
 	async loadData(): Promise<unknown> { return {}; }
+	async saveData(_data: unknown): Promise<void> {}
 	registerHoverLinkSource(): void {}
 	registerView(): void {}
 	addRibbonIcon(): void {}
@@ -266,6 +267,7 @@ export class ProgressBarComponent {
 export class Keymap { static isModEvent(evt: { button?: number; ctrlKey?: boolean; metaKey?: boolean }): boolean { return evt.button === 1 || !!evt.ctrlKey || !!evt.metaKey; } }
 
 export class ButtonComponent {
+	setButtonText(text: string): this { this.buttonEl.setText(text); return this; }
 	buttonEl: TestElement;
 	constructor(parent: TestElement) { this.buttonEl = parent.createEl("button"); }
 	setIcon(icon: string): this { setIcon(this.buttonEl, icon); return this; }

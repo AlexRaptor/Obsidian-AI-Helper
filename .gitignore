@@ -8,3 +8,6 @@ data.json
 # Сгенерированные хранилища ручной проверки упоминаний
 docs/testing/note-mentions/*-vault/
 docs/testing/note-mentions/*-vault-reset-*/
+
+# Сгенерированное хранилище ручной проверки перевода
+docs/testing/note-translation/translation-vault/

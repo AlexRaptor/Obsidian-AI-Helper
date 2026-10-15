@@ -57,11 +57,12 @@ export interface ChatCompletionUsage {
 }
 
 export interface ChatCompletionBody {
-	choices?: Array<{ message?: { content?: string } }>;
+	choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
 	usage?: ChatCompletionUsage;
 }
 
 export interface ChatCompletionResult {
+	finishReason?: string;
 	content: string;
 	usage?: TokenUsage;
 }
@@ -309,7 +310,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					if (signal.aborted) return fail("incomplete");
 					resetWait();
 					params?.onText?.(content);
-					return { ok: true, value: { content, usage: parseUsage(data.usage) } };
+					return { ok: true, value: { content, usage: parseUsage(data.usage), finishReason: typeof data.choices[0].finish_reason === "string" ? data.choices[0].finish_reason : undefined } };
 				}
 				if (!response.body) return fail("incomplete");
 				const reader = response.body.getReader();
@@ -319,6 +320,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				let dataLines: string[] = [];
 				let content = "";
 				let usage: TokenUsage | undefined;
+				let finishReason: string | undefined;
 				let completed = false;
 				let done = false;
 				const event = (data: string) => {
@@ -351,7 +353,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 						content += choice.delta.content;
 						if (!signal.aborted) { resetWait(); params?.onText?.(content); }
 					}
-					if (typeof choice.finish_reason === "string" && choice.finish_reason) completed = true;
+					if (typeof choice.finish_reason === "string" && choice.finish_reason) { finishReason = choice.finish_reason; completed = true; }
 				};
 				const endLine = () => {
 					if (line === "") {
@@ -386,7 +388,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					}
 					if (signal.aborted || !completed) return fail("incomplete");
 					if (!content.trim()) return fail("empty");
-					return { ok: true, value: { content, usage } };
+					return { ok: true, value: { content, usage, finishReason } };
 				} finally {
 					signal.removeEventListener("abort", onAbort);
 					// Do not make confirmed completion wait for the transport cancellation handshake.
