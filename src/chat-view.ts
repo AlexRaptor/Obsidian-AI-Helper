@@ -639,9 +639,24 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.thinking) return;
 		const draft = this.messageInput.getDraft();
 		const text = draftText(draft).trim();
-		const files = [...new Set(draft.parts.flatMap(part => typeof part === "string" || part.fragment ? [] : [part.file]))];
-		const fragments = draft.parts.flatMap(part => typeof part === "string" || !part.fragment ? [] : [part.fragment]);
-		const hasAttachments = files.length > 0 || fragments.length > 0;
+		const fragmentKeys = new Set<string>();
+		const mentionedFiles = new Set<TFile>();
+		// Deduplicate within this message only, preserving the first mention's order.
+		const attachments = draft.parts.flatMap(part => {
+			if (typeof part === "string") return [];
+			if (!part.fragment) {
+				if (mentionedFiles.has(part.file)) return [];
+				mentionedFiles.add(part.file);
+				return [part];
+			}
+			const { path, range: { from, to }, markdown } = part.fragment;
+			const key = JSON.stringify([path, from.line, from.ch, to.line, to.ch, markdown]);
+			if (fragmentKeys.has(key)) return [];
+			fragmentKeys.add(key);
+			return [part];
+		});
+		const files = attachments.flatMap(part => part.fragment ? [] : [part.file]);
+		const hasAttachments = attachments.length > 0;
 		const hasSnapshots = hasAttachments || this.conversation.getMessages().some(message => message.snapshots?.length);
 		if (hasAttachments && !draft.parts.some(part => typeof part === "string" && part.trim())) {
 			showStatusNotice(this.t("mention-question-required"), "warning"); return;
@@ -664,6 +679,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.activeRequest = request;
 		const { settings, serverClient } = this.plugin;
 		let snapshots: NoteSnapshot[] = [];
+		let fileSnapshots: NoteSnapshot[] = [];
 		const requestMessages: ChatMessage[] = [
 			...this.toRequestMessages(), { role: "user", content: text },
 		];
@@ -710,12 +726,13 @@ export class ChatView extends ItemView implements HoverParent {
 						while (true) {
 							// A failed reread must not leave a stale snapshot eligible for another rename retry.
 							snapshots = [];
-							snapshots = await Promise.all(files.map(async file => {
+							fileSnapshots = [];
+							fileSnapshots = await Promise.all(files.map(async file => {
 								try { return await readNoteSnapshot(this.app, file); }
 								catch { throw this.unavailableNote(file); }
 							}));
 							if (this.activeRequest !== request) return;
-							snapshots.push(...fragments);
+							snapshots = attachments.map(part => part.fragment ?? fileSnapshots[files.indexOf(part.file)]);
 							requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
 							const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
 							if (window === undefined) throw new Error(this.t("mention-window-unknown"));
@@ -726,7 +743,7 @@ export class ChatView extends ItemView implements HoverParent {
 							const count = serverClient.countPromptTokens ? await serverClient.countPromptTokens(serverUrl, model, fullMessages, settings.apiKey, request.signal) : conservativePromptTokens(fullMessages);
 							if (this.activeRequest !== request) return;
 							// A rename while counting changes the serialized context and its budget.
-							if (files.some((file, index) => file.path !== snapshots[index].path)) continue;
+							if (files.some((file, index) => file.path !== fileSnapshots[index].path)) continue;
 							if (!Number.isSafeInteger(reserve) || reserve <= 0 || count.tokens + reserve + 256 > window) throw new Error(this.t("mention-budget"));
 							params.maxTokens = String(reserve);
 							break;
@@ -832,10 +849,10 @@ export class ChatView extends ItemView implements HoverParent {
 				} catch (error) {
 					if (this.activeRequest !== request) return;
 					// An error counted against a renamed snapshot may disappear when the context is rebuilt.
-					if (!useSearch || !files.some((file, index) => snapshots[index] && file.path !== snapshots[index].path)
+					if (!useSearch || !files.some((file, index) => fileSnapshots[index] && file.path !== fileSnapshots[index].path)
 						|| files.some(file => this.app.vault.getFileByPath(file.path) !== file)) throw error;
 				}
-				if (useSearch && files.some((file, index) => file.path !== snapshots[index].path)) {
+				if (useSearch && files.some((file, index) => file.path !== fileSnapshots[index].path)) {
 					// Rebuild the search context and its budget if a selected note was renamed during preparation.
 					requestMessages.splice(0, requestMessages.length, ...this.toRequestMessages(), { role: "user", content: text });
 					continue;

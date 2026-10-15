@@ -56,7 +56,7 @@ function appendMention(s: Awaited<ReturnType<typeof setup>>, text: string): void
 }
 
 function attachments(content: string) {
-	return JSON.parse(content.split("\n\nNote attachments (context data):\n")[1]) as { title: string; path: string; markdown: string }[];
+	return JSON.parse(content.split("\n\nNote attachments (context data):\n")[1]) as { title: string; path: string; markdown: string; range?: { from: { line: number; ch: number }; to: { line: number; ch: number } } }[];
 }
 
 async function setupSearch(mode: "notes" | "folders" | "mixed") {
@@ -1338,6 +1338,207 @@ async function setupEditors() {
 	};
 	return { ...s, a, b, focus };
 }
+
+function appendFragment(s: Awaited<ReturnType<typeof setupEditors>>, editor: typeof s.a, from: { line: number; ch: number }, to: typeof from, text = " @@"): void {
+	s.focus(editor.view); editor.select([{ anchor: from, head: to }]); s.focus(null);
+	appendMention(s, text);
+}
+
+it("повтор точного выделения передаёт один снимок, сохраняя оба упоминания", async () => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 });
+	expect(s.input.getText()).toBe("Сравни План[1] План[1]");
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([{
+		title: "План", path: "Проекты/План.md", markdown: "первый выбор",
+		range: { from: { line: 0, ch: 8 }, to: { line: 0, ch: 20 } },
+	}]);
+	await s.view.onClose();
+});
+
+it("сохраняет порядок смешанных вложений и различает прежний фрагмент и актуальную целую заметку", async () => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+	appendMention(s, " и @План");
+	s.a.edit("Изменённая целая заметка");
+	appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 });
+	expect(s.input.getText()).toBe("Сравни План[1] и @План Итоги[2]");
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([
+		{ title: "План", path: "Проекты/План.md", markdown: "первый выбор", range: { from: { line: 0, ch: 8 }, to: { line: 0, ch: 20 } } },
+		{ title: "План", path: "Проекты/План.md", markdown: "Изменённая целая заметка" },
+		{ title: "Итоги", path: "Итоги.md", markdown: "второй выбор", range: { from: { line: 1, ch: 4 }, to: { line: 1, ch: 16 } } },
+	]);
+	await s.view.onClose();
+});
+
+it("собирает точные фрагменты Плана и Итогов и использует прежние снимки в следующем вопросе", async () => {
+	const s = await setupEditors();
+	s.a.edit([...Array.from({ length: 11 }, () => "Лишняя строка"), "До: первый", "второй", "третий", "четвёртый", "пятый: хвост", "Лишний конец"].join("\n"));
+	s.b.edit([...Array.from({ length: 7 }, () => "Лишняя строка"), "До: другой выбор. Хвост"].join("\n"));
+	appendFragment(s, s.a, { line: 11, ch: 4 }, { line: 15, ch: 5 }, "Сравни эти предложения @@");
+	appendFragment(s, s.b, { line: 7, ch: 4 }, { line: 7, ch: 16 }, " и @@");
+	expect(s.input.getText()).toBe("Сравни эти предложения План[12-16] и Итоги[8]");
+	s.a.edit("Изменённый План"); s.b.edit("Изменённые Итоги");
+	s.send.click(); await flushPromises();
+	const request = s.chat.mock.calls[0][2][0].content;
+	expect(attachments(request)).toEqual([
+		{ title: "План", path: "Проекты/План.md", markdown: "первый\nвторой\nтретий\nчетвёртый\nпятый", range: { from: { line: 11, ch: 4 }, to: { line: 15, ch: 5 } } },
+		{ title: "Итоги", path: "Итоги.md", markdown: "другой выбор", range: { from: { line: 7, ch: 4 }, to: { line: 7, ch: 16 } } },
+	]);
+	s.type("Продолжи сравнение"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2]).toEqual([
+		{ role: "user", content: request }, { role: "assistant", content: "Ответ" }, { role: "user", content: "Продолжи сравнение" },
+	]);
+	await s.view.onClose();
+});
+
+it.each([0, 1, 2])("удаление %i повторений фрагмента сохраняет остальные вложения смешанного черновика", async removed => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, " и @@");
+	appendMention(s, " с @Итоги");
+	const repeated = s.input.children.filter(child => child.getText() === "План[1]");
+	for (const chip of repeated.slice(0, removed)) chip.remove();
+	s.input.dispatchEvent({ type: "input", inputType: "deleteContentBackward" } as any);
+	s.send.click(); await flushPromises();
+	const sent = attachments(s.chat.mock.calls[0][2][0].content);
+	expect(sent.map(snapshot => snapshot.path)).toEqual(removed === 2 ? ["Итоги.md"] : ["Проекты/План.md", "Итоги.md"]);
+	if (removed < 2) expect(sent[0].markdown).toBe("первый выбор");
+	await s.view.onClose();
+});
+
+it("не объединяет пересечения, части одной строки, одинаковый текст разных диапазонов и заметок", async () => {
+	const s = await setupEditors();
+	s.a.edit("выбор выбор"); s.b.edit("выбор выбор");
+	// Even the same basename and line labels cannot identify a snapshot.
+	Object.assign(s.files[1], { path: "Архив/План.md", basename: "План" });
+	appendFragment(s, s.a, { line: 0, ch: 0 }, { line: 0, ch: 5 }, "Сравни @@");
+	appendFragment(s, s.a, { line: 0, ch: 6 }, { line: 0, ch: 11 });
+	appendFragment(s, s.a, { line: 0, ch: 3 }, { line: 0, ch: 9 });
+	appendFragment(s, s.b, { line: 0, ch: 0 }, { line: 0, ch: 5 });
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([
+		{ title: "План", path: "Проекты/План.md", markdown: "выбор", range: { from: { line: 0, ch: 0 }, to: { line: 0, ch: 5 } } },
+		{ title: "План", path: "Проекты/План.md", markdown: "выбор", range: { from: { line: 0, ch: 6 }, to: { line: 0, ch: 11 } } },
+		{ title: "План", path: "Проекты/План.md", markdown: "ор выб", range: { from: { line: 0, ch: 3 }, to: { line: 0, ch: 9 } } },
+		{ title: "План", path: "Архив/План.md", markdown: "выбор", range: { from: { line: 0, ch: 0 }, to: { line: 0, ch: 5 } } },
+	]);
+	await s.view.onClose();
+});
+
+it("сохраняет разные версии одного диапазона и не дедуплицирует снимки между сообщениями", async () => {
+	const s = await setupEditors();
+	s.a.edit("Старый");
+	appendFragment(s, s.a, { line: 0, ch: 0 }, { line: 0, ch: 6 }, "Сравни @@");
+	s.a.edit("Новый!");
+	appendFragment(s, s.a, { line: 0, ch: 0 }, { line: 0, ch: 6 });
+	s.send.click(); await flushPromises();
+	const first = s.chat.mock.calls[0][2][0].content;
+	expect(attachments(first).map(snapshot => snapshot.markdown)).toEqual(["Старый", "Новый!"]);
+	appendFragment(s, s.a, { line: 0, ch: 0 }, { line: 0, ch: 6 }, "Объясни @@");
+	s.a.edit("Третий");
+	s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2][0].content).toBe(first);
+	expect(attachments(s.chat.mock.calls[1][2].at(-1)!.content).map(snapshot => snapshot.markdown)).toEqual(["Новый!"]);
+	await s.view.onClose();
+});
+
+it("проверяет весь смешанный набор с историей и резервом ответа, восстанавливая черновик целиком", async () => {
+	const s = await setupEditors();
+	s.type("Первый вопрос"); s.send.click(); await flushPromises();
+	Object.assign(s.view.plugin.settings, { contextWindow: "1000", maxTokens: "100", systemPrompt: "Обсуди заметки" });
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 645, method: "lmstudio" }));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+	appendMention(s, " с @План");
+	appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 }, " и @@");
+	const draft = s.input.getText();
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledTimes(1);
+	expect(s.input.getText()).toBe(draft);
+	expect(s.root.getText()).toContain(t("mention-budget"));
+	const counted = count.mock.calls[0][2];
+	expect(counted.slice(0, 3)).toEqual([
+		{ role: "system", content: "Обсуди заметки" }, { role: "user", content: "Первый вопрос" }, { role: "assistant", content: "Ответ" },
+	]);
+	expect(attachments(counted[3].content).map(snapshot => snapshot.markdown)).toEqual([
+		"первый выбор", "Лишнее: первый выбор. Хвост", "второй выбор",
+	]);
+	// 644 + 100 reserved + 256 safety margin exactly fits the window.
+	count.mockResolvedValue({ tokens: 644, method: "lmstudio" });
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledTimes(2);
+	expect(s.chat.mock.calls[1][2].at(-1)!.content).toBe(counted[3].content);
+	expect(s.chat.mock.calls[1][3]?.maxTokens).toBe("100");
+	await s.view.onClose();
+});
+
+it("ошибка чтения целой заметки блокирует весь набор и сохраняет точные фрагменты для повтора", async () => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+	appendMention(s, " с @Итоги");
+	appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 });
+	const draft = s.input.getText();
+	s.view.app.workspace.getLeavesOfType = () => [];
+	s.read.mockRejectedValueOnce(new Error("Нет доступа"));
+	s.send.click(); await flushPromises();
+	expect(s.chat).not.toHaveBeenCalled();
+	expect(s.input.getText()).toBe(draft);
+	expect(s.root.getText()).toContain(t("mention-file-unavailable"));
+	s.a.edit("Новый текст Плана"); s.b.edit("Новый текст Итогов");
+	s.read.mockResolvedValue("Новая целая заметка");
+	s.send.click(); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content).map(snapshot => snapshot.markdown)).toEqual([
+		"первый выбор", "Новая целая заметка", "второй выбор",
+	]);
+	await s.view.onClose();
+});
+
+it("переименование смешанного вложения при подсчёте обновляет целую заметку, сохраняя происхождение фрагмента", async () => {
+	const s = await setupEditors();
+	const pending = deferred<{ tokens: number; method: "bytes" }>();
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 100, method: "bytes" }));
+	count.mockImplementationOnce(() => pending.promise);
+	s.view.plugin.serverClient.countPromptTokens = count;
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+	appendMention(s, " с @План");
+	s.send.click(); await flushPromises();
+	s.rename(s.file, "Архив/Новый план.md"); s.a.edit("Актуальный текст");
+	pending.resolve({ tokens: 100, method: "bytes" }); await flushPromises();
+	expect(attachments(s.chat.mock.calls[0][2][0].content)).toEqual([
+		{ title: "План", path: "Проекты/План.md", markdown: "первый выбор", range: { from: { line: 0, ch: 8 }, to: { line: 0, ch: 20 } } },
+		{ title: "Новый план", path: "Архив/Новый план.md", markdown: "Актуальный текст" },
+	]);
+	expect(count.mock.calls.at(-1)![2].at(-1)!.content).toBe(s.chat.mock.calls[0][2][0].content);
+	await s.view.onClose();
+});
+
+it.each(["ru", "en"] as const)("%s: редактирование, удаление, смена локали и копирование сохраняют смысл смешанного сообщения", async locale => {
+	const s = await setupEditors();
+	const writeText = vi.fn().mockResolvedValue(undefined);
+	vi.stubGlobal("navigator", { clipboard: { writeText } });
+	try {
+		appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");
+		appendMention(s, " и @План");
+		appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 });
+		s.input.children.find(child => child.getText() === "План[1]")!.remove();
+		s.input.children[0].setText("Объясни ");
+		s.input.dispatchEvent({ type: "input", inputType: "deleteContentBackward" } as any);
+		setLanguage(locale); await s.view.refreshLocale();
+		expect(s.input.getText()).toBe("Объясни  и @План Итоги[2]");
+		s.send.click(); await flushPromises();
+		expect(attachments(s.chat.mock.calls[0][2][0].content).map(snapshot => snapshot.markdown)).toEqual([
+			"Лишнее: первый выбор. Хвост", "второй выбор",
+		]);
+		s.root.find("ai-helper-message-user").find("ai-helper-copy-message").click(); await flushPromises();
+		expect(writeText).toHaveBeenCalledWith("Объясни  и @План Итоги[2]");
+		s.type("Объясни  и @План Итоги[2]", "insertFromPaste"); s.send.click(); await flushPromises();
+		expect(s.chat.mock.calls[1][2].at(-1)).toEqual({ role: "user", content: "Объясни  и @План Итоги[2]" });
+		await s.view.onClose();
+	} finally { vi.unstubAllGlobals(); }
+});
 
 it.each(["ru", "en"] as const)("%s: после А и Б без подходящего выделения не возвращает А, объясняет причину и сохраняет вопрос", async locale => {
 	const s = await setupEditors(); setLanguage(locale);
