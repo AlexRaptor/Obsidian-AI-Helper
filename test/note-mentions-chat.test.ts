@@ -1344,6 +1344,143 @@ function appendFragment(s: Awaited<ReturnType<typeof setupEditors>>, editor: typ
 	appendMention(s, text);
 }
 
+it.each(["result", "throw"] as const)("%s: ошибка не возвращает старый вопрос после ввода и удаления нового черновика", async failure => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Объясни @@");
+	const response = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockImplementationOnce(async () => {
+		const result = await response.promise;
+		if (failure === "throw") throw new Error("Нет соединения");
+		return result;
+	});
+	s.send.click(); await flushPromises();
+	s.type("Новый вопрос"); s.type("", "deleteContentBackward");
+	response.resolve({ ok: false, error: { message: "Нет соединения" } });
+	await flushPromises();
+	expect(s.root.find("ai-helper-messages").getText()).toContain("Нет соединения");
+	expect(s.input.getText()).toBe("");
+	expect(s.view.getMessages()).toEqual([]);
+	await s.view.onClose();
+});
+
+it("повтор после ошибки сохраняет фрагменты удалённого оригинала, перечитывает целую заметку и проверяет бюджет с прежней историей", async () => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Объясни @@");
+	s.send.click(); await flushPromises();
+	const successful = s.chat.mock.calls[0][2][0].content;
+	appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 }, "Сравни @@");
+	appendMention(s, " с @План");
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, " и @@");
+	const draft = s.input.getText();
+	const response = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockImplementationOnce(() => response.promise);
+	s.send.click(); await flushPromises();
+	s.chat.mock.calls[1][3]?.onText?.("Частичное сравнение");
+	response.resolve({ ok: false, error: { message: "Нет соединения" } });
+	await flushPromises();
+	expect(s.root.find("ai-helper-messages").getText()).toContain("Частичное сравнение");
+	expect(s.root.find("ai-helper-messages").getText()).toContain("Нет соединения");
+	expect(s.input.getText()).toBe(draft);
+	expect(s.view.getMessages()).toHaveLength(2);
+	s.rename(s.files[1], "Архив/Итоги.md");
+	s.files.splice(1, 1); s.emit("delete", s.b.view.file);
+	s.a.edit("Новый полный План"); s.b.edit("Стертый оригинал Итогов");
+	Object.assign(s.view.plugin.settings, { contextWindow: "1000", maxTokens: "100" });
+	const count = vi.fn<Parameters<ServerClient["countPromptTokens"]>, ReturnType<ServerClient["countPromptTokens"]>>(async () => ({ tokens: 645, method: "lmstudio" }));
+	s.view.plugin.serverClient.countPromptTokens = count;
+	s.send.click(); await flushPromises();
+	expect(s.chat).toHaveBeenCalledTimes(2);
+	expect(s.root.getText()).toContain(t("mention-budget"));
+	expect(s.input.getText()).toBe(draft);
+	expect(attachments(count.mock.calls[0][2].at(-1)!.content)).toEqual([
+		{ title: "Итоги", path: "Итоги.md", markdown: "второй выбор", range: { from: { line: 1, ch: 4 }, to: { line: 1, ch: 16 } } },
+		{ title: "План", path: "Проекты/План.md", markdown: "Новый полный План" },
+		{ title: "План", path: "Проекты/План.md", markdown: "первый выбор", range: { from: { line: 0, ch: 8 }, to: { line: 0, ch: 20 } } },
+	]);
+	count.mockResolvedValue({ tokens: 644, method: "lmstudio" });
+	s.send.click(); await flushPromises();
+	const retried = s.chat.mock.calls[2][2];
+	expect(retried.slice(0, 2)).toEqual([{ role: "user", content: successful }, { role: "assistant", content: "Ответ" }]);
+	expect(retried.at(-1)!.content).toBe(count.mock.calls[0][2].at(-1)!.content);
+	s.a.edit("Ещё более новый План");
+	s.type("Продолжи"); s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[3][2]).toEqual([...retried, { role: "assistant", content: "Ответ" }, { role: "user", content: "Продолжи" }]);
+	await s.view.onClose();
+});
+
+it("ошибка сохраняет порядок и привязки смешанного нового черновика при смене языка", async () => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Старый вопрос @@");
+	const response = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockImplementationOnce(() => response.promise);
+	s.send.click(); await flushPromises();
+	appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 }, "Новый вопрос @@");
+	appendMention(s, " с @План");
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, " и @@");
+	const draft = s.input.getText();
+	setLanguage("en"); await s.view.refreshLocale();
+	expect(s.send.attributes["aria-label"]).toBe("Stop");
+	expect(s.input.getText()).toBe(draft);
+	response.resolve({ ok: false, error: { message: "Нет соединения" } }); await flushPromises();
+	expect(s.input.getText()).toBe(draft);
+	expect(s.send.attributes["aria-label"]).toBe("Send");
+	s.send.click(); await flushPromises();
+	expect(s.chat.mock.calls[1][2]).toHaveLength(1);
+	expect(attachments(s.chat.mock.calls[1][2][0].content).map(snapshot => [snapshot.path, snapshot.markdown])).toEqual([
+		["Итоги.md", "второй выбор"], ["Проекты/План.md", "Лишнее: первый выбор. Хвост"], ["Проекты/План.md", "первый выбор"],
+	]);
+	await s.view.onClose();
+});
+
+it.each(["stop-empty", "stop-draft", "clear"] as const)("%s: отмена при смене языка сохраняет черновик с фрагментами и исключает поздний результат", async action => {
+	const s = await setupEditors();
+	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Успешный вопрос @@");
+	s.send.click(); await flushPromises();
+	const successful = s.chat.mock.calls[0][2][0].content;
+	appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 }, "Прерванный вопрос @@");
+	const response = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockImplementationOnce(() => response.promise);
+	s.send.click(); await flushPromises();
+	const params = s.chat.mock.calls[1][3]!;
+	params.onText?.("Частичный ответ"); await flushPromises();
+	if (action !== "stop-empty") {
+		appendFragment(s, s.b, { line: 1, ch: 4 }, { line: 1, ch: 16 }, "Следующий вопрос @@");
+		appendMention(s, " с @План");
+	}
+	const draft = s.input.getText();
+	setLanguage("en"); await s.view.refreshLocale();
+	expect(s.send.attributes["aria-label"]).toBe("Stop");
+	expect(s.input.getText()).toBe(draft);
+	if (action === "clear") s.root.find("ai-helper-clear-btn").click();
+	else s.send.click();
+	await flushPromises();
+	expect(params.signal?.aborted).toBe(true);
+	expect(s.input.getText()).toBe(draft);
+	expect(s.send.attributes["aria-label"]).toBe("Send");
+	const messages = s.root.find("ai-helper-messages");
+	if (action === "clear") { expect(messages.getText()).toBe(""); expect(s.view.getMessages()).toEqual([]); }
+	else {
+		expect(messages.getText()).toContain("Частичный ответ");
+		expect(messages.getText()).toContain("Stopped");
+		expect(s.view.getMessages()).toHaveLength(2);
+	}
+	if (action === "stop-empty") s.type("Продолжи");
+	const next = deferred<ServerClientResult<ChatCompletionResult>>();
+	s.chat.mockImplementationOnce(() => next.promise);
+	s.send.click(); await flushPromises();
+	params.onText?.("Поздний текст");
+	response.resolve({ ok: true, value: { content: "Поздний ответ" } }); await flushPromises();
+	expect(messages.getText()).not.toContain("Поздний");
+	expect(s.send.attributes["aria-label"]).toBe("Stop");
+	const request = s.chat.mock.calls[2][2];
+	expect(request.slice(0, -1)).toEqual(action === "clear" ? [] : [{ role: "user", content: successful }, { role: "assistant", content: "Ответ" }]);
+	if (action !== "stop-empty") expect(attachments(request.at(-1)!.content).map(snapshot => snapshot.markdown)).toEqual(["второй выбор", "Лишнее: первый выбор. Хвост"]);
+	next.resolve({ ok: true, value: { content: "Новый ответ" } }); await flushPromises();
+	expect(s.view.getMessages()).toHaveLength(action === "clear" ? 2 : 4);
+	expect(messages.getText()).toContain("Новый ответ");
+	await s.view.onClose();
+});
+
 it("повтор точного выделения передаёт один снимок, сохраняя оба упоминания", async () => {
 	const s = await setupEditors();
 	appendFragment(s, s.a, { line: 0, ch: 8 }, { line: 0, ch: 20 }, "Сравни @@");

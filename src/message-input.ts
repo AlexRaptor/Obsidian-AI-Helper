@@ -90,6 +90,7 @@ export class MessageInput {
 	private readonly suggestionId = `ai-helper-mentions-${++inputSequence}`;
 	private sendBtn: HTMLButtonElement | null = null;
 	private draft: MessageDraft = { parts: [] };
+	private editedSinceClear = false;
 	private bindings = new Map<string, Mention>();
 	private mentionSequence = 0;
 	private suggestion: HTMLElement | null = null;
@@ -141,6 +142,7 @@ export class MessageInput {
 	}
 
 	private handleInput = (event: Event): void => {
+		this.editedSinceClear = true;
 		const input = event as InputEvent;
 		const editingFilter = this.suggestionOpen && (input.inputType === "deleteContentBackward" || input.inputType === "deleteContentForward");
 		this.closeSuggestion();
@@ -282,6 +284,7 @@ export class MessageInput {
 			offset += length;
 		}
 		this.setDraft({ parts });
+		this.editedSinceClear = true;
 		this.closeSuggestion();
 		this.inputEl?.focus();
 		const selection = this.inputEl?.ownerDocument?.getSelection();
@@ -436,10 +439,11 @@ export class MessageInput {
 		}
 	}
 
-	clear(): void { this.bindings.clear(); this.setDraft({ parts: [] }); this.closeSuggestion(); }
+	clear(): void { this.bindings.clear(); this.setDraft({ parts: [] }); this.editedSinceClear = false; this.closeSuggestion(); }
 
 	restoreIfEmpty(draft: MessageDraft): void {
-		if (this.inputEl && !draftText(this.getDraft())) this.setDraft(draft);
+		// An intentionally erased new draft must stay empty when an older request fails.
+		if (this.inputEl && !this.editedSinceClear && !draftText(this.getDraft())) this.setDraft(draft);
 	}
 
 	setAction(thinking: boolean, searchEnabled: boolean): void {
