@@ -484,10 +484,12 @@ it("indexes all pages without rendering, requesting models or subscribing", () =
 	const subscribe = vi.spyOn(plugin.contextWindowConnection, "subscribe");
 	const walk = (items: any[]): any[] => items.flatMap(item => [item, ...walk(item.items ?? [])]);
 	const definitions = tab.getSettingDefinitions();
-	expect(definitions.filter(def => "type" in def && def.type === "page").map(def => (def as any).name)).toEqual([en["settings-page-conversation"], en["settings-page-search"], en["settings-page-review"]]);
+	expect(definitions.filter(def => "type" in def && def.type === "page").map(def => (def as any).name)).toEqual([en["translation-title"], en["settings-page-conversation"], en["settings-page-search"], en["settings-page-review"]]);
 	const names = walk(definitions).map(def => def.name);
 	for (const key of ["setting-response-wait", "setting-model", "setting-embedding-model", "setting-fragment-size", "setting-top-p"]) expect(names).toContain(en[key as keyof typeof en]);
-	const pages = definitions.filter(def => "type" in def && def.type === "page") as any[];
+	const pages = definitions.filter(def => "type" in def && def.type === "page" && def.name !== en["translation-title"]) as any[];
+	const translation = definitions.find(def => "type" in def && def.type === "page" && def.name === en["translation-title"]);
+	expect(translation && "items" in translation ? walk(translation.items ?? []).map(def => def.name) : []).toContain(en["translation-language"]);
 	expect(pages[0].items.filter((group: any) => group.type === "group").map((group: any) => group.heading)).toEqual([en["settings-group-connection"], en["settings-group-generation"]]);
 	expect(pages[1].items.filter((group: any) => group.type === "group" || group.type === "list").map((group: any) => group.heading)).toEqual([en["settings-group-embedding"], en["settings-group-search-scope"], en["settings-group-index"], en["settings-group-search-results"], en["settings-group-fragments"]]);
 	expect(walk(pages[1].items).map(def => def.name)).toContain(en["setting-source-budget"]);

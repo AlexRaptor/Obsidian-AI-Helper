@@ -111,20 +111,22 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			{ name: this.t("setting-language"), desc: this.t("setting-language-desc"), control: {
 				type: "dropdown", key: "language", options: { auto: this.t("language-auto"), ...LOCALE_NAMES },
 			} },
-			this.group("translation-title", [
-				{ name: this.t("translation-language"), desc: this.t("translation-language-desc"), control: { type: "text", key: "translationLanguage", validate: value => { if (!value.trim()) return this.t("translation-config"); } } },
-				this.row("translation-prompt", "translation-prompt-desc", setting => {
-					setting.setClass("ai-helper-translation-setting");
-					let input: import("obsidian").TextAreaComponent;
-					setting.addTextArea(text => { input = text; text.setValue(this.plugin.settings.translationPrompt).onChange(value => this.setControlValue("translationPrompt", value)); });
-					setting.addButton(button => button.setButtonText(this.t("translation-reset")).onClick(async () => {
-						input.setValue(DEFAULT_TRANSLATION_PROMPT);
-						await this.setControlValue("translationPrompt", DEFAULT_TRANSLATION_PROMPT);
-					}));
-				}),
-				{ name: this.t("translation-suffix"), desc: this.t("translation-suffix-desc"), control: { type: "text", key: "translationSuffix" } },
-				{ name: this.t("translation-side-by-side"), control: { type: "toggle", key: "translationOpenSideBySide" } },
-			]),
+			{ type: "page", name: this.t("translation-title"), items: [
+				this.group("translation-title", [
+					{ name: this.t("translation-language"), desc: this.t("translation-language-desc"), control: { type: "text", key: "translationLanguage", validate: value => { if (!value.trim()) return this.t("translation-config"); } } },
+					this.row("translation-prompt", "translation-prompt-desc", setting => {
+						setting.setClass("ai-helper-translation-setting");
+						let input: import("obsidian").TextAreaComponent;
+						setting.addTextArea(text => { input = text; text.setValue(this.plugin.settings.translationPrompt).onChange(value => this.setControlValue("translationPrompt", value)); });
+						setting.addButton(button => button.setButtonText(this.t("translation-reset")).onClick(async () => {
+							input.setValue(DEFAULT_TRANSLATION_PROMPT);
+							await this.setControlValue("translationPrompt", DEFAULT_TRANSLATION_PROMPT);
+						}));
+					}),
+					{ name: this.t("translation-suffix"), desc: this.t("translation-suffix-desc"), control: { type: "text", key: "translationSuffix" } },
+					{ name: this.t("translation-side-by-side"), control: { type: "toggle", key: "translationOpenSideBySide" } },
+				]),
+			] },
 			{ type: "page", name: this.t("settings-page-conversation"), desc: this.t("settings-page-conversation-desc"), items: [
 				{ name: "", desc: this.t("settings-page-conversation-desc") },
 				this.group("settings-group-connection", [
