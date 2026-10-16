@@ -636,3 +636,13 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 	min-width: 50%;
 	min-height: 12em;
 }
+
+.ai-helper-translation-actions {
+	margin-top: var(--size-4-4);
+	gap: var(--size-4-2);
+	flex-wrap: wrap;
+}
+
+.ai-helper-translation-path {
+	overflow-wrap: anywhere;
+}

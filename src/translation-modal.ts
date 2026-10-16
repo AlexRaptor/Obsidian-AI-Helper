@@ -8,11 +8,20 @@ export class TranslationModal extends Modal {
 	onOpen(): void {
 		this.setTitle(this.plugin.t("translation-title"));
 		const status = this.contentEl.createDiv({ attr: { "aria-live": "polite" } });
-		const cancel = new ButtonComponent(this.contentEl).onClick(() => { this.plugin.translation.cancel(); this.close(); });
-		new ButtonComponent(this.contentEl).setButtonText(this.plugin.t("translation-hide")).onClick(() => this.close());
+		const progress = status.createDiv();
+		const detail = status.createDiv();
+		const path = status.createDiv({ cls: "ai-helper-translation-path" });
+		setStatusTone(path, "muted");
+		const actions = this.contentEl.createDiv({ cls: "modal-button-container ai-helper-translation-actions" });
+		const cancel = new ButtonComponent(actions).onClick(() => { this.plugin.translation.cancel(); this.close(); });
+		new ButtonComponent(actions).setButtonText(this.plugin.t("translation-hide")).onClick(() => this.close());
 		const update = () => {
 			const operation = this.plugin.translation;
-			status.setText(`${this.plugin.t(operation.stage)}${operation.detail ? `: ${this.plugin.t(operation.detail)}` : ""}${operation.savedPath ? `\n${operation.savedPath}` : ""}`);
+			progress.setText(this.plugin.t(operation.stage));
+			detail.setText(operation.detail ? this.plugin.t(operation.detail) : "");
+			detail.style.display = operation.detail ? "" : "none";
+			path.setText(operation.savedPath);
+			path.style.display = operation.savedPath ? "" : "none";
 			setStatusTone(status, operation.stage === "translation-error" ? "error" : operation.stage === "translation-saved" ? "success" : "info");
 			cancel.setButtonText(this.plugin.t(operation.busy ? "translation-stop" : "translation-finish"));
 			cancel.setDisabled(operation.stage === "translation-saving");
