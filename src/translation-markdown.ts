@@ -43,8 +43,11 @@ export class TranslationMarkdown {
 		let offset = this.frontmatterEnd;
 		let protectedBlock: { closing: RegExp; quoteDepth: number; indent: number } | undefined;
 		let listIndents: number[] = [];
+		let footnoteQuote: string | undefined;
+		const definitions = new Set<string>();
 		let paragraph: { start: number; end: number } | undefined;
 		let protectedUntil = 0;
+		let table: { columns: number; prefix: string } | undefined;
 		const flush = () => { if (paragraph) this.add(paragraph.start, paragraph.end); paragraph = undefined; };
 		for (const match of lines) {
 			const line = match[0].replace(/\r?\n$/, "");
@@ -65,23 +68,55 @@ export class TranslationMarkdown {
 			// Containers are local syntax. List continuation indentation is relative
 			// to the most recent item, so nested prose is not mistaken for code.
 			const quote = line.match(/^(?: {0,3}>[ \t]?)+/)?.[0] ?? "";
-			const inner = line.slice(quote.length);
+			let inner = line.slice(quote.length);
+			const definition = inner.match(/^ {0,3}\[\^([^\]\s]+)\]:[ \t]*/);
+			let footnotePrefix = 0;
+			if (definition) {
+				flush();
+				if (definitions.has(definition[1])) unsupported();
+				definitions.add(definition[1]);
+				footnoteQuote = quote; listIndents = [];
+				footnotePrefix = definition[0].length;
+			} else if (footnoteQuote !== undefined && inner.trim()) {
+				const continuation = inner.match(/^(?: {4}|\t)/);
+				if (quote === footnoteQuote && continuation) footnotePrefix = continuation[0].length;
+				else { flush(); footnoteQuote = undefined; listIndents = []; }
+			}
+			inner = inner.slice(footnotePrefix);
 			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(inner)) { flush(); continue; }
 			let item = inner.match(/^(\s*)(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/);
 			const indent = inner.match(/^[ \t]*/)![0];
-			if (!inner.trim()) { flush(); continue; }
+			if (!inner.trim()) { flush(); table = undefined; continue; }
 			while (listIndents.length && indent.length < listIndents[listIndents.length - 1]) listIndents.pop();
 			const relativeIndent = inner.slice(listIndents[listIndents.length - 1] ?? 0);
 			if (/^(?: {4}|\t)/.test(relativeIndent)) {
 				if (!paragraph) { flush(); continue; }
 				item = null;
 			}
-			let prefix = quote.length;
+			let prefix = quote.length + footnotePrefix;
 			if (item) {
 				listIndents.push(item[0].replace(/\[[ xX]\][ \t]+$/, "").length);
 				prefix += item[0].length;
 			} else if (listIndents.length) prefix += listIndents[listIndents.length - 1];
 			const content = line.slice(prefix);
+			const cells = this.tableCells(content);
+			if (table && table.prefix === line.slice(0, prefix) && cells) {
+				flush();
+				if (cells.length !== table.columns) unsupported();
+				for (const cell of cells) this.add(start + prefix + cell.start, start + prefix + cell.end);
+				continue;
+			}
+			table = undefined;
+			const nextLine = this.source.slice(offset).match(/^[^\r\n]*/)?.[0] ?? "";
+			const delimiter = nextLine.startsWith(line.slice(0, prefix)) ? this.tableCells(nextLine.slice(prefix)) : undefined;
+			if (cells && delimiter?.every(cell => /^:?-{3,}:?$/.test(nextLine.slice(prefix + cell.start, prefix + cell.end).trim()))) {
+				flush();
+				if (cells.length !== delimiter.length) unsupported();
+				table = { columns: cells.length, prefix: line.slice(0, prefix) };
+				for (const cell of cells) this.add(start + prefix + cell.start, start + prefix + cell.end);
+				protectedUntil = offset + nextLine.length;
+				continue;
+			}
 			const trimmed = content.trim();
 			if (/^(?: {4}|\t)/.test(content) && !paragraph) { flush(); continue; }
 			const opening = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
@@ -98,11 +133,14 @@ export class TranslationMarkdown {
 			if (/^ {0,3}\[(?!\^)[^\]]+\]:/.test(content)) {
 				flush(); protectedUntil = start + prefix + this.referenceLength(this.source.slice(start + prefix)); continue;
 			}
-			// Tables, footnotes, callouts, HTML and extension syntax are deliberately
-			// not guessed in this slice. No partial file is saved on this boundary.
+			const callout = content.match(/^ {0,3}\[![a-z0-9_-]+\][+-]?(?:[ \t]+|$)/i);
+			if (quote && callout) {
+				flush(); this.add(start + prefix + callout[0].length, start + line.length); continue;
+			}
+			// Unknown extensions stop before any file can be saved as complete.
 			if (/^\s*(?:\[\^|\[!|:{3,}|[|])/.test(content)) unsupported();
 			const heading = content.match(/^ {0,3}#{1,6}[ \t]+/);
-			if (heading || item || quote || listIndents.length) {
+			if (heading || item || quote || footnotePrefix || listIndents.length) {
 				flush();
 				const from = start + prefix + (heading?.[0].length ?? 0);
 				const closing = heading ? content.match(/[ \t]+#+[ \t]*$/)?.[0].length ?? 0 : 0;
@@ -114,6 +152,20 @@ export class TranslationMarkdown {
 		}
 		flush();
 		if (protectedBlock) unsupported();
+	}
+	/** Unescaped pipes are structural, even inside inline code in an Obsidian table. */
+	private tableCells(line: string): { start: number; end: number }[] | undefined {
+		const separators: number[] = [];
+		for (let i = 0; i < line.length; i++) {
+			if (line[i] === "\\") { i++; continue; }
+			if (line[i] === "|") separators.push(i);
+		}
+		if (!separators.length) return undefined;
+		const edges = [-1, ...separators, line.length];
+		const cells = edges.slice(0, -1).map((edge, index) => ({ start: edge + 1, end: edges[index + 1] }));
+		if (!line.slice(0, separators[0]).trim()) cells.shift();
+		if (!line.slice(separators[separators.length - 1] + 1).trim()) cells.pop();
+		return cells.length ? cells : undefined;
 	}
 	private referenceLength(text: string): number {
 		const label = text.match(/^ {0,3}\[(?!\^)[^\]\r\n]+\]:[ \t]*/)![0];
@@ -174,6 +226,8 @@ export class TranslationMarkdown {
 				}
 				i += wiki[0].length; continue;
 			}
+			const footnote = rest.match(/^\[\^[^\]\s]+\]/);
+			if (footnote) { result += protect(footnote[0]); i += footnote[0].length; continue; }
 			if (rest.startsWith("![") || rest[0] === "[") {
 				const open = rest.startsWith("![") ? 2 : 1;
 				let end = open; let depth = 1;

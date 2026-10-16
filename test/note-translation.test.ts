@@ -136,7 +136,7 @@ it.each([
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 });
-it.each(["<div>Текст</div>", "| Колонка |\n| --- |\n| Текст |", "Сноска[^ид]\n\n[^ид]: Текст", "> [!note] Заголовок\n> Текст"])("отклоняет неподдерживаемую разметку до запроса: %s", async text => {
+it.each(["<div>Текст</div>"])("отклоняет неподдерживаемую разметку до запроса: %s", async text => {
 	const env = await setup({ text }); env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.requests).toHaveLength(0); expect(env.app.vault.create).not.toHaveBeenCalled();
@@ -591,4 +591,88 @@ it("останавливается на неизвестном обозначе�
 	expect(env.requests).toHaveLength(0);
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 	expect(Modal.opened[0].contentEl.getText()).toContain("неподдерживаемая");
+});
+
+it("переводит ячейки таблицы, сохраняя пустые ячейки, выравнивание и экранированные разделители", async () => {
+	const source = "До таблицы.\n\n| Имя | Значение | Пусто |\n| :--- | ---: | :---: |\n| Текст | **Жирный** и `секрет` | |\n| Сноска | Путь \\| часть | |\n\nПосле таблицы.";
+	const expected = "[Оригинал](<Статья.md>)\n\nBefore table.\n\n| Name | Value | Empty |\n| :--- | ---: | :---: |\n| Text | **Bold** and `секрет` | |\n| Footnote | Path \\| part | |\n\nAfter table.";
+	const words: Record<string, string> = { "До таблицы": "Before table", "После таблицы": "After table", Имя: "Name", Значение: "Value", Пусто: "Empty", Текст: "Text", Жирный: "Bold", и: "and", Сноска: "Footnote", Путь: "Path", часть: "part" };
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/До таблицы|После таблицы|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	expect(JSON.stringify(env.requests)).not.toContain("секрет");
+});
+
+it("переводит многострочные определения сносок один раз и сохраняет повторные упоминания", async () => {
+	const source = "Текст[^ид] и снова[^ид].\n\n[^ид]: Определение **важное**.\n    Продолжение с `секретом`.\n\n    Второй абзац.\n\nКонец.";
+	const expected = "[Оригинал](<Статья.md>)\n\nText[^ид] and again[^ид].\n\n[^ид]: Definition **important**.\n    Continuation with `секретом`.\n\n    Second paragraph.\n\nEnd.";
+	const words: Record<string, string> = { Текст: "Text", и: "and", снова: "again", Определение: "Definition", важное: "important", Продолжение: "Continuation", с: "with", "Второй абзац": "Second paragraph", Конец: "End" };
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/Второй абзац|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	const sent = JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { text: string }) => unit.text).join(" ");
+	expect(sent).not.toContain("ид");
+	expect(sent.match(/Определение/g)).toHaveLength(1);
+});
+
+it("переводит вложенные callout с таблицей и сноской, сохраняя тип, сворачивание и код", async () => {
+	const source = ["Начало[^источник].", "", "> [!TIP]- **Мой заголовок**", "> Описание.", ">", "> | Имя | Значение |", "> | --- | ---: |", "> | Текст[^источник] | `секрет` |", ">", "> > [!custom]+ Вложенный", "> > - **Пункт**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> Конец.", "", "[^источник]: Источник.", "    Продолжение.", ""].join("\n");
+	const expected = ["[Оригинал](<Статья.md>)", "", "Start[^источник].", "", "> [!TIP]- **My title**", "> Description.", ">", "> | Name | Value |", "> | --- | ---: |", "> | Text[^источник] | `секрет` |", ">", "> > [!custom]+ Nested", "> > - **Item**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> End.", "", "[^источник]: Source.", "    Continuation.", ""].join("\n");
+	const words: Record<string, string> = { Начало: "Start", "Мой заголовок": "My title", Описание: "Description", Имя: "Name", Значение: "Value", Текст: "Text", Вложенный: "Nested", Пункт: "Item", Конец: "End", Источник: "Source", Продолжение: "Continuation" };
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/Мой заголовок|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	for (const secret of ["TIP", "custom", "warning", "Секретный код", "секрет", "источник"]) expect(JSON.stringify(env.requests)).not.toContain(secret);
+});
+
+it.each(["лишняя ячейка", "пропущенная ячейка", "дубль определения", "идентификатор сноски", "тип callout", "повреждённое выделение"])("не сохраняет повреждённую структуру сложных конструкций: %s", async damage => {
+	const env = await setup({ text: "Текст[^ид].\n\n| Имя | Значение |\n| --- | --- |\n| Ячейка | **Важно** |\n\n> [!tip]- Заголовок\n> Содержимое.\n\n[^ид]: Определение.", completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		if (damage === "лишняя ячейка") units.find((unit: { text: string }) => unit.text === "Ячейка").text += " | Добавка";
+		if (damage === "пропущенная ячейка") units.splice(units.findIndex((unit: { text: string }) => unit.text === "Ячейка"), 1);
+		if (damage === "дубль определения") units.push({ ...units.at(-1) });
+		if (damage === "идентификатор сноски") units[0].text = "Текст[^другой].";
+		if (damage === "тип callout") units.find((unit: { text: string }) => unit.text === "Заголовок").text = "[!warning]+ Заголовок";
+		if (damage === "повреждённое выделение") units.find((unit: { text: string }) => unit.text.includes("Важно")).text = "Важно";
+		return response(units, "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(1);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
+});
+it.each([
+	"| Имя | Значение |\n| --- | --- |\n| Лишняя | Ячейка | Третья |",
+	"| Имя | Значение |\n| --- |",
+	"Текст[^ид].\n\n[^ид]: Первое.\n\n[^ид]: Второе.",
+	"> [!tip]- Заголовок\n> :::расширение\n> Текст",
+	"| Имя | Значение |\n| --- | --- |\n| Текст | <span>Неизвестное</span> |",
+])("останавливает неизвестную или неоднозначную сложную разметку до запроса: %s", async text => {
+	const env = await setup({ text }); env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(0);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неподдерживаемая");
+});
+it("сохраняет таблицу без внешних разделителей и определения сноски с кодом", async () => {
+	const source = "Имя | Значение\r\n--- | ---\r\nТекст | [^ид]\r\n\r\n[^ид]:\r\n    Описание.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
+	const expected = "[Оригинал](<Статья.md>)\n\nName | Value\r\n--- | ---\r\nText | [^ид]\r\n\r\n[^ид]:\r\n    Description.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
+	const words: Record<string, string> = { Имя: "Name", Значение: "Value", Текст: "Text", Описание: "Description" };
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	expect(JSON.stringify(env.requests)).not.toContain("Секретный код");
+});
+
+it("не продолжает таблицу через пустую строку, скрывая неизвестную конструкцию", async () => {
+	const env = await setup({ text: "| Имя | Значение |\n| --- | --- |\n| Текст | Значение |\n\n| Неизвестная | Конструкция |" });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(0);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
 });
