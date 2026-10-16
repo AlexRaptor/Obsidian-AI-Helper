@@ -17,10 +17,10 @@ if vault.exists() and not vault.is_dir():
     parser.error('Путь назначения занят файлом, а не папкой.')
 if vault.exists() and any(vault.iterdir()):
     try:
-        answer = input(f'Хранилище {vault} не пусто. Удалить всё его содержимое, включая настройки, и создать заново? [да/НЕТ]: ')
+        answer = input(f'Хранилище {vault} не пусто. Удалить всё его содержимое, включая настройки, и создать заново? [y/N]: ')
     except (EOFError, KeyboardInterrupt):
         answer = ''
-    if answer.strip().lower() not in ('да', 'д', 'yes', 'y'):
+    if answer.strip().lower() not in ('yes', 'y'):
         print('Перезапись отменена. Хранилище не изменено.')
         raise SystemExit(0)
 
