@@ -248,6 +248,7 @@ export class AiHelperPlugin extends Plugin {
 		if (typeof stored?.translationSuffix !== "string") this.settings.translationSuffix = ` — ${locale}`;
 		if (typeof stored?.translationPrompt !== "string") this.settings.translationPrompt = DEFAULT_SETTINGS.translationPrompt;
 		if (typeof stored?.translationOpenSideBySide !== "boolean") this.settings.translationOpenSideBySide = true;
+		if (typeof stored?.translationDebugMode !== "boolean") this.settings.translationDebugMode = false;
 		if (!isValidFolderDescriptionName(this.settings.folderDescriptionName)) this.settings.folderDescriptionName = DEFAULT_SETTINGS.folderDescriptionName;
 		if (!["local", "file"].includes(this.settings.indexStorageMode)) this.settings.indexStorageMode = "local";
 		if (typeof this.settings.indexStorageGeneration !== "string") this.settings.indexStorageGeneration = "";

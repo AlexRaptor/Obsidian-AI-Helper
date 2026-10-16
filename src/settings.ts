@@ -25,6 +25,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	translationPrompt: string;
 	translationSuffix: string;
 	translationOpenSideBySide: boolean;
+	translationDebugMode: boolean;
 	folderDescriptionName: string;
 	indexStorageMode: IndexStorageMode;
 	indexStorageGeneration: string;
@@ -52,6 +53,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	translationPrompt: DEFAULT_TRANSLATION_PROMPT,
 	translationSuffix: " — en",
 	translationOpenSideBySide: true,
+	translationDebugMode: false,
 	folderDescriptionName: DEFAULT_FOLDER_DESCRIPTION_NAME,
 	indexStorageMode: "local",
 	indexStorageGeneration: "",
@@ -201,6 +203,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					}),
 					{ name: this.t("translation-suffix"), desc: this.t("translation-suffix-desc"), control: { type: "text", key: "translationSuffix" } },
 					{ name: this.t("translation-side-by-side"), control: { type: "toggle", key: "translationOpenSideBySide" } },
+					{ name: this.t("translation-debug-mode"), desc: this.t("translation-debug-mode-desc"), control: { type: "toggle", key: "translationDebugMode" } },
 				]),
 			] },
 		];
@@ -275,7 +278,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 		if (key === "language") {
 			if (value !== "auto" && value !== "en" && value !== "ru") return;
 			this.plugin.settings.language = value;
-		} else if (key === "autoUpdateNotes" || key === "translationOpenSideBySide") {
+		} else if (key === "autoUpdateNotes" || key === "translationOpenSideBySide" || key === "translationDebugMode") {
 			if (typeof value !== "boolean") return;
 			Object.assign(this.plugin.settings, { [key]: value });
 		} else {

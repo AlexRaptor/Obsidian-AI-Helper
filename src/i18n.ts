@@ -14,6 +14,12 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"translation-debug-mode": "Debug mode",
+	"translation-debug-mode-desc": "For new translations, keep the model response in memory so it can be copied for troubleshooting. Cleared on Finish, cancellation, a new translation or plugin unloading.",
+	"translation-copy-response": "Copy model response",
+	"translation-response-copied": "Model response copied",
+	"translation-copy-error": "Could not copy the model response.",
+
 	"translation-title": "Note translation",
 	"translation-command": "Translate current note",
 	"translation-language": "Target language",
@@ -373,6 +379,12 @@ export const en = {
 } as const;
 
 export const ru = {
+	"translation-debug-mode": "Режим отладки",
+	"translation-debug-mode-desc": "Для новых переводов хранить ответ модели в памяти, чтобы его можно было скопировать для разбора ошибок. Ответ удаляется по кнопке «Завершить», при отмене, новом переводе или выгрузке плагина.",
+	"translation-copy-response": "Копировать ответ модели",
+	"translation-response-copied": "Ответ модели скопирован",
+	"translation-copy-error": "Не удалось скопировать ответ модели.",
+
 	"translation-title": "Перевод заметок",
 	"translation-command": "Перевести текущую заметку",
 	"translation-language": "Язык назначения",

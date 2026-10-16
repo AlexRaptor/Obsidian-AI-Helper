@@ -997,3 +997,16 @@ it("сброс промпта сразу меняет поле и сохраня
 	await tab.setControlValue("translationSuffix", " — ja"); expect(plugin.settings.translationSuffix).toBe(" — ja");
 	await tab.setControlValue("translationOpenSideBySide", false); expect(plugin.settings.translationOpenSideBySide).toBe(false);
 });
+
+it("режим отладки перевода выключен по умолчанию и сохраняется переключателем", async () => {
+	expect(DEFAULT_SETTINGS.translationDebugMode).toBe(false);
+	setLanguage("ru");
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: "idle", t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const setting = controls.find(control => control.name === "Режим отладки")!;
+	expect(setting.toggle).toBeDefined();
+	await setting.toggle!.change(true);
+	expect(plugin.settings.translationDebugMode).toBe(true);
+	expect(saveSettings).toHaveBeenCalledOnce();
+});

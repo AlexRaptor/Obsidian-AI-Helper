@@ -1,6 +1,6 @@
 import { ButtonComponent, Modal } from "obsidian";
 import type { AiHelperPlugin } from "./main";
-import { setStatusTone } from "./ui-status";
+import { setStatusTone, showStatusNotice } from "./ui-status";
 
 export class TranslationModal extends Modal {
 	private unsubscribe?: () => void;
@@ -15,6 +15,16 @@ export class TranslationModal extends Modal {
 		const actions = this.contentEl.createDiv({ cls: "modal-button-container ai-helper-translation-actions" });
 		const cancel = new ButtonComponent(actions).onClick(() => { this.plugin.translation.cancel(); this.close(); });
 		new ButtonComponent(actions).setButtonText(this.plugin.t("translation-hide")).onClick(() => this.close());
+		const copy = this.plugin.settings.translationDebugMode ? new ButtonComponent(actions)
+			.setButtonText(this.plugin.t("translation-copy-response"))
+			.onClick(async () => {
+				const response = this.plugin.translation.debugResponse;
+				if (!response) return;
+				try {
+					await navigator.clipboard.writeText(response);
+					showStatusNotice(this.plugin.t("translation-response-copied"), "success");
+				} catch { showStatusNotice(this.plugin.t("translation-copy-error"), "error"); }
+			}) : undefined;
 		const update = () => {
 			const operation = this.plugin.translation;
 			progress.setText(this.plugin.t(operation.stage));
@@ -25,6 +35,7 @@ export class TranslationModal extends Modal {
 			setStatusTone(status, operation.stage === "translation-error" ? "error" : operation.stage === "translation-saved" ? "success" : "info");
 			cancel.setButtonText(this.plugin.t(operation.busy ? "translation-stop" : "translation-finish"));
 			cancel.setDisabled(operation.stage === "translation-saving");
+			copy?.setDisabled(!operation.debugResponse);
 		};
 		this.unsubscribe = this.plugin.translation.subscribe(update); update();
 	}

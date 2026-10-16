@@ -227,3 +227,64 @@ it("не предлагает отмену уже начатой записи и
 	await vi.waitFor(() => expect(Modal.opened[0].contentEl.getText()).toContain("Перевод сохранён"));
 	expect(Modal.opened[0].contentEl.getText()).toContain("Заметки/Статья — en.md");
 });
+
+it("режим отладки позволяет скопировать отклонённый ответ модели из окна перевода", async () => {
+	const raw = '{"units":[{"id":"чужой","text":"Перевод"}]}';
+	const writeText = vi.fn(async (_text: string) => {});
+	vi.stubGlobal("navigator", { clipboard: { writeText } });
+	const env = await setup({ settings: { translationDebugMode: true }, completion: async () => new Response(JSON.stringify({ choices: [{ message: { content: raw }, finish_reason: "stop" }] })) });
+	const actions = new Map<string, () => void>();
+	env.events.get("file-menu")!({ addItem: (render: (item: any) => void) => {
+		let title = ""; const item = { setTitle: (value: string) => { title = value; return item; }, setIcon: () => item, onClick: (action: () => void) => { actions.set(title, action); return item; } }; render(item);
+	} }, env.file);
+	actions.get("Перевести текущую заметку")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
+	button("Копировать ответ модели").click();
+	await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(raw));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+it("по умолчанию ответ не сохраняется для отладки", async () => {
+	const env = await setup({ completion: async () => response([{ id: "чужой", text: "Ответ" }], "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(() => button("Копировать ответ модели")).toThrow();
+	env.plugin.settings.translationDebugMode = true;
+	env.commands.get("translate-current-note")!();
+	expect(button("Копировать ответ модели").disabled).toBe(true);
+});
+it("ответ отладки остаётся после скрытия окна и очищается после завершения операции", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ settings: { translationDebugMode: true }, completion: () => pending.promise });
+	env.commands.get("translate-current-note")!();
+	expect(button("Копировать ответ модели").disabled).toBe(true);
+	pending.resolve(response([{ id: "чужой", text: "Ответ" }], "stop"));
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	button("Скрыть").click(); env.commands.get("translate-current-note")!();
+	expect(button("Копировать ответ модели").disabled).toBe(false);
+	button("Завершить").click();
+	env.commands.get("translate-current-note")!();
+	expect(button("Копировать ответ модели").disabled).toBe(true);
+});
+it("копирует принятый текст оборванного SSE-ответа для отладки", async () => {
+	const raw = '{"units":[{"id":"p1","text":"Часть';
+	const writeText = vi.fn(async (_text: string) => {});
+	vi.stubGlobal("navigator", { clipboard: { writeText } });
+	const env = await setup({ settings: { translationDebugMode: true }, completion: async () => new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: raw } }] })}\n\n`, { headers: { "content-type": "text/event-stream" } }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	button("Копировать ответ модели").click();
+	await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(raw));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+it("сообщает об ошибке буфера обмена и сохраняет возможность повторить копирование", async () => {
+	const writeText = vi.fn().mockRejectedValueOnce(new Error("Буфер недоступен")).mockResolvedValueOnce(undefined);
+	vi.stubGlobal("navigator", { clipboard: { writeText } });
+	const env = await setup({ settings: { translationDebugMode: true }, completion: async () => response([{ id: "чужой", text: "Ответ" }], "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	button("Копировать ответ модели").click();
+	await vi.waitFor(() => expect(Notice.messages.at(-1)).toBe("Не удалось скопировать ответ модели."));
+	button("Копировать ответ модели").click();
+	await vi.waitFor(() => expect(Notice.messages.at(-1)).toBe("Ответ модели скопирован"));
+});

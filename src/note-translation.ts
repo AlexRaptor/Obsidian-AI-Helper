@@ -56,19 +56,21 @@ export class NoteTranslation {
 	active = false;
 	busy = false;
 	private controller?: AbortController;
+	private response: string | undefined;
+	get debugResponse(): string | undefined { return this.plugin.settings.translationDebugMode ? this.response : undefined; }
 	private listeners = new Set<() => void>();
 	constructor(private plugin: AiHelperPlugin) {}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private update(stage: TranslationStage, detail?: LocaleKey): void { this.stage = stage; this.detail = detail; this.listeners.forEach(listener => listener()); }
 	cancel(): void {
-		this.controller?.abort(); this.controller = undefined; this.busy = false; this.active = false;
+		this.controller?.abort(); this.controller = undefined; this.busy = false; this.active = false; this.response = undefined;
 		this.update("translation-cancelled");
 	}
 	dispose(): void { this.cancel(); this.listeners.clear(); }
 	start(file: TFile): void {
 		if (this.active) return;
 		const { app } = this.plugin;
-		this.active = true; this.busy = true; this.savedPath = "";
+		this.active = true; this.busy = true; this.savedPath = ""; this.response = undefined;
 		const controller = new AbortController(); this.controller = controller;
 		const path = file.path;
 		const leaves = app.workspace.getLeavesOfType("markdown");
@@ -110,7 +112,9 @@ export class NoteTranslation {
 			const response = Math.max(Math.floor(available / 2), Number(s.maxTokens) || 0);
 			if (available <= 0 || input > response || tokens.tokens + response > window * 0.9 || (s.maxTokens.trim() && (!/^\d+$/.test(s.maxTokens) || Number(s.maxTokens) < input))) throw new TranslationError("translation-budget");
 			this.update("translation-running");
-			const result = await client.chat(s.serverUrl, s.model, messages, { apiKey: s.apiKey, temperature: s.temperature, topP: s.topP, maxTokens: s.maxTokens || String(response), responseWait: s.responseWait, signal }); check();
+			const result = await client.chat(s.serverUrl, s.model, messages, { apiKey: s.apiKey, temperature: s.temperature, topP: s.topP, maxTokens: s.maxTokens || String(response), responseWait: s.responseWait, signal,
+				onText: s.translationDebugMode ? content => { if (!signal.aborted) this.response = content; } : undefined,
+			}); check();
 			if (!result.ok) throw new TranslationError("translation-model-error");
 			if (result.value.finishReason !== undefined && result.value.finishReason !== "stop") throw new TranslationError("translation-incomplete");
 			const translated = translations(result.value.content, document.units);
