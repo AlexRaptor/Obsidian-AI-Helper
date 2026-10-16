@@ -1,6 +1,8 @@
+import { stripHeading, stripHeadingForLink } from "obsidian";
+import type { TranslationLinks } from "./translation-links";
 /** Reversible translation ranges. Source syntax and protected contents stay local. */
 export interface TranslationUnit { id: string; text: string }
-interface Range extends TranslationUnit { start: number; end: number; protected: string[] }
+interface Range extends TranslationUnit { start: number; end: number; protected: string[]; headingText: string[] }
 export class TranslationMarkdownError extends Error {
 	constructor(readonly kind: "unsupported" | "invalid" | "empty") { super(kind); }
 }
@@ -12,7 +14,10 @@ export class TranslationMarkdown {
 	readonly frontmatterEnd: number;
 	private ranges: Range[] = [];
 	private marker = "";
-	constructor(private source: string) {
+	private headings: { start: number; end: number; key?: string }[] = [];
+	private referenceDefinitions: { start: number; end: number; text: string }[] = [];
+	private references = new Map<string, boolean>();
+	constructor(private source: string, private links?: TranslationLinks) {
 		if (!source.trim()) throw new TranslationMarkdownError("empty");
 		let nonce = 0;
 		do { this.marker = `⟦AIH${nonce++}:`; } while (source.includes(this.marker));
@@ -20,23 +25,56 @@ export class TranslationMarkdown {
 		if (/^(?:\uFEFF)?---[ \t]*\r?\n/.test(source) && !frontmatter) unsupported();
 		this.frontmatterEnd = frontmatter?.[0].length ?? 0;
 		this.parseBlocks();
+		for (const definition of this.referenceDefinitions) {
+			const key = this.referenceKey(definition.text.match(/^ {0,3}\[([^\]]+)\]/)![1]);
+			if (this.references.has(key)) unsupported();
+			this.references.set(key, true);
+		}
+		for (const heading of this.headings) {
+			heading.key = stripHeading(this.headingRanges(heading).map(range => this.headingLabel(this.source.slice(range.start, range.end))).join(" ")).toLowerCase();
+		}
+		this.links?.setHeadings(this.headings.map(heading => heading.key!));
+		for (const definition of this.referenceDefinitions) {
+			const rewritten = this.reference(definition.text);
+			const range = this.ranges.find(range => range.start === definition.start)!;
+			range.protected[0] = rewritten;
+		}
+		for (const range of this.ranges) {
+			if (!range.text) range.text = this.inline(this.source.slice(range.start, range.end), range);
+			// Protected-only ranges still participate in local assembly.
+			if (range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, "").trim()) this.units.push({ id: range.id, text: range.text });
+		}
 	}
-	private token(range: Range, value: string): string {
+	private token(range: Range, value: string, headingText?: string): string {
 		const token = `${this.marker}${range.id}:${range.protected.length}⟧`;
 		range.protected.push(value);
+		range.headingText.push(headingText ?? this.headingToken(value));
 		return token;
+	}
+	private headingToken(value: string): string {
+		if (/^[*_~]+$|^!?\[$|^\]|^!?\[\[.*\|$/s.test(value)) return "";
+		if (/^[ \t]*\\?\r?\n/.test(value)) return " ";
+		if (value.startsWith("`")) return value.replace(/^`+|`+$/g, "");
+		return value.replace(/^\\/, "");
+	}
+	private headingRanges(heading: { start: number; end: number }): Range[] {
+		return this.ranges.filter(range => range.start >= heading.start && range.end <= heading.end);
+	}
+	private headingLabel(source: string): string {
+		const range: Range = { id: "p0", text: "", start: 0, end: source.length, protected: [], headingText: [] };
+		return this.headingProse(range, this.inline(source, range, false));
+	}
+	private headingProse(range: Range, text: string): string {
+		let index = 0;
+		return text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.headingText[index++]);
 	}
 	private add(start: number, end: number): void {
 		const value = this.source.slice(start, end);
 		const leading = value.match(/^\s*/u)![0].length;
 		const trailing = value.match(/\s*$/u)![0].length;
 		if (leading + trailing >= value.length) return;
-		const range: Range = { id: `p${this.ranges.length + 1}`, text: "", start: start + leading, end: end - trailing, protected: [] };
-		range.text = this.inline(this.source.slice(range.start, range.end), range);
-		// A range containing only protected syntax needs no model round-trip.
-		if (!range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, "").trim()) return;
+		const range: Range = { id: `p${this.ranges.length + 1}`, text: "", start: start + leading, end: end - trailing, protected: [], headingText: [] };
 		this.ranges.push(range);
-		this.units.push({ id: range.id, text: range.text });
 	}
 	private parseBlocks(): void {
 		const lines = [...this.source.slice(this.frontmatterEnd).matchAll(/[^\n]*(?:\n|$)/g)].filter(match => match[0]);
@@ -47,12 +85,14 @@ export class TranslationMarkdown {
 		const definitions = new Set<string>();
 		let paragraph: { start: number; end: number } | undefined;
 		let protectedUntil = 0;
+		let setextParagraph: { start: number; next: number; prefix: string } | undefined;
 		let table: { columns: number; prefix: string } | undefined;
 		const flush = () => { if (paragraph) this.add(paragraph.start, paragraph.end); paragraph = undefined; };
 		for (const match of lines) {
 			const line = match[0].replace(/\r?\n$/, "");
 			const start = offset; offset += match[0].length;
 			if (start < protectedUntil) continue;
+			if (setextParagraph?.next !== start) setextParagraph = undefined;
 			if (protectedBlock) {
 				let content = line;
 				for (let depth = 0; depth < protectedBlock.quoteDepth; depth++) {
@@ -131,7 +171,11 @@ export class TranslationMarkdown {
 			}
 			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*|-+[ \t]*)$/.test(content)) { flush(); continue; }
 			if (/^ {0,3}\[(?!\^)[^\]]+\]:/.test(content)) {
-				flush(); protectedUntil = start + prefix + this.referenceLength(this.source.slice(start + prefix)); continue;
+				flush(); protectedUntil = start + prefix + this.referenceLength(this.source.slice(start + prefix));
+				const original = this.source.slice(start + prefix, protectedUntil);
+				this.referenceDefinitions.push({ start: start + prefix, end: protectedUntil, text: original });
+				this.literal(start + prefix, protectedUntil, original);
+				continue;
 			}
 			const callout = content.match(/^ {0,3}\[![a-z0-9_-]+\][+-]?(?:[ \t]+|$)/i);
 			if (quote && callout) {
@@ -140,15 +184,28 @@ export class TranslationMarkdown {
 			// Unknown extensions stop before any file can be saved as complete.
 			if (/^\s*(?:\[!|:{3,}|[|])/.test(content)) unsupported();
 			const heading = content.match(/^ {0,3}#{1,6}[ \t]+/);
+			const container = line.slice(0, prefix);
+			const nextContent = nextLine.startsWith(container) ? nextLine.slice(container.length) : "";
+			if (!heading && !item && !footnotePrefix && !listIndents.length && /^ {0,3}(?:=+|-+)[ \t]*$/.test(nextContent)) {
+				const from = setextParagraph?.prefix === container ? setextParagraph.start : start + prefix;
+				if (paragraph) { paragraph.end = start + line.length; flush(); }
+				else this.add(start + prefix, start + line.length);
+				this.headings.push({ start: from, end: start + line.length });
+				protectedUntil = offset + nextLine.length; setextParagraph = undefined; continue;
+			}
 			if (heading || item || quote || footnotePrefix || listIndents.length) {
 				flush();
 				const from = start + prefix + (heading?.[0].length ?? 0);
 				const closing = heading ? content.match(/[ \t]+#+[ \t]*$/)?.[0].length ?? 0 : 0;
-				this.add(from, start + line.length - closing); continue;
+				this.add(from, start + line.length - closing);
+				if (heading) this.headings.push({ start: from, end: start + line.length - closing });
+				else if (quote && !item && !footnotePrefix && !listIndents.length) setextParagraph = { start: setextParagraph?.prefix === container ? setextParagraph.start : from, next: offset, prefix: container };
+				continue;
 			}
 			if (!trimmed) { flush(); continue; }
 			if (!paragraph) paragraph = { start, end: start + line.length };
 			else paragraph.end = start + line.length;
+			setextParagraph = { start: paragraph.start, next: offset, prefix: container };
 		}
 		flush();
 		if (protectedBlock) unsupported();
@@ -166,6 +223,37 @@ export class TranslationMarkdown {
 		if (!line.slice(0, separators[0]).trim()) cells.shift();
 		if (!line.slice(separators[separators.length - 1] + 1).trim()) cells.pop();
 		return cells.length ? cells : undefined;
+	}
+	private literal(start: number, end: number, value: string): void {
+		const range: Range = { id: `p${this.ranges.length + 1}`, text: "", start, end, protected: [], headingText: [] };
+		range.text = this.token(range, value); this.ranges.push(range);
+	}
+	private referenceKey(label: string): string { return label.trim().replace(/\s+/g, " ").toLowerCase(); }
+	private destination(text: string, start: number): { start: number; end: number; raw: string } {
+		let at = start;
+		if (text[at] === "<") {
+			const end = text.indexOf(">", at + 1); if (end < 0) unsupported();
+			return { start: at + 1, end, raw: text.slice(at + 1, end) };
+		}
+		let depth = 0;
+		for (; at < text.length; at++) {
+			const char = text[at];
+			if (char === "\\") { at++; continue; }
+			if (/\s/.test(char)) break;
+			if (char === "(") depth++;
+			if (char === ")") { if (!depth) break; depth--; }
+		}
+		if (depth) unsupported();
+		return { start, end: at, raw: text.slice(start, at) };
+	}
+	private reference(text: string): string {
+		const label = text.match(/^ {0,3}\[([^\]\r\n]+)\]:[ \t]*(?:\r?\n[ \t]*)?/);
+		if (!label) unsupported();
+		const key = this.referenceKey(label[1]);
+		const destination = this.destination(text, label[0].length);
+		const replacement = this.links?.capture(destination.raw, false);
+		this.references.set(key, !this.links || replacement !== undefined);
+		return replacement === undefined ? text : text.slice(0, destination.start) + replacement + text.slice(destination.end);
 	}
 	private referenceLength(text: string): number {
 		const label = text.match(/^ {0,3}\[(?!\^)[^\]\r\n]+\]:[ \t]*/)![0];
@@ -190,9 +278,9 @@ export class TranslationMarkdown {
 		if (at < text.length && text[at] !== "\r" && text[at] !== "\n") unsupported();
 		const newline = text.slice(at).match(/^\r?\n/); return at + (newline?.[0].length ?? 0);
 	}
-	private inline(text: string, range: Range): string {
+	private inline(text: string, range: Range, captureLinks = true): string {
 		let result = "";
-		const protect = (value: string) => this.token(range, value);
+		const protect = (value: string, headingText?: string) => this.token(range, value, headingText);
 		for (let i = 0; i < text.length;) {
 			const rest = text.slice(i);
 			if (/^[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(rest)) unsupported();
@@ -219,10 +307,14 @@ export class TranslationMarkdown {
 			const wiki = rest.match(/^(!?)\[\[([^\]\n]+)\]\]/);
 			if (wiki) {
 				const separator = wiki[2].indexOf("|");
-				if (separator < 0 || /^\d+(?:x\d+)?$/.test(wiki[2].slice(separator + 1))) result += protect(wiki[0]);
+				const destination = separator < 0 ? wiki[2] : wiki[2].slice(0, separator);
+				const replacement = captureLinks ? this.links?.capture(destination, true) : undefined;
+				if (captureLinks && this.links && replacement === undefined) { result += protect(wiki[0], separator < 0 ? destination : this.headingLabel(wiki[2].slice(separator + 1))); i += wiki[0].length; continue; }
+				const target = replacement ?? destination;
+				if (separator < 0 || /^\d+(?:x\d+)?$/.test(wiki[2].slice(separator + 1))) result += protect(`${wiki[1]}[[${target}${separator < 0 ? "" : wiki[2].slice(separator)}]]`, destination);
 				else {
-					result += protect(`${wiki[1]}[[${wiki[2].slice(0, separator + 1)}`);
-					result += this.inline(wiki[2].slice(separator + 1), range) + protect("]]");
+					result += protect(`${wiki[1]}[[${target}|`);
+					result += this.inline(wiki[2].slice(separator + 1), range, captureLinks) + protect("]]");
 				}
 				i += wiki[0].length; continue;
 			}
@@ -248,16 +340,22 @@ export class TranslationMarkdown {
 					}
 					if (tail >= rest.length) unsupported(); tail++;
 					suffix = rest.slice(end, tail);
+					const prefix = suffix.match(/^\]\([ \t]*/)![0].length;
+					const destination = this.destination(suffix, prefix);
+					const replacement = captureLinks ? this.links?.capture(destination.raw, false) : undefined;
+					if (captureLinks && this.links && replacement === undefined) { result += protect(rest.slice(0, tail), this.headingLabel(label)); i += tail; continue; }
+					if (replacement !== undefined) suffix = suffix.slice(0, destination.start) + replacement + suffix.slice(destination.end);
 				} else if (rest[tail] === "[") {
 					const ref = rest.slice(tail).match(/^\[([^\]\n]*)\]/); if (!ref) unsupported();
 					tail += ref[0].length; suffix = `][${ref[1] || label}]`;
+					if (captureLinks && this.links && !this.references.get(this.referenceKey(ref[1] || label))) { this.links.unresolved = true; result += protect(rest.slice(0, tail), this.headingLabel(label)); i += tail; continue; }
 				} else {
 					// Shortcut references acquire an explicit immutable reference label.
-					const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-					if (!new RegExp(`^ {0,3}\\[${escaped}\\]:`, "im").test(this.source)) unsupported();
+					if (!this.references.has(this.referenceKey(label))) unsupported();
+					if (captureLinks && this.links && !this.references.get(this.referenceKey(label))) { result += protect(rest.slice(0, tail), this.headingLabel(label)); i += tail; continue; }
 					suffix = `][${label}]`;
 				}
-				result += protect(rest.slice(0, open)) + this.inline(label, range) + protect(suffix);
+				result += protect(rest.slice(0, open)) + this.inline(label, range, captureLinks) + protect(suffix);
 				i += tail; continue;
 			}
 			const tag = rest.match(/^#[\p{L}\p{N}_/-]+/u);
@@ -286,6 +384,7 @@ export class TranslationMarkdown {
 		try { value = JSON.parse(fenced ? fenced[1] : trimmed); } catch { invalid(); }
 		if (!value || typeof value !== "object" || !("units" in value) || !Array.isArray(value.units) || value.units.length !== this.units.length) invalid();
 		const translated = new Map<string, string>();
+		const headingProse = new Map<string, string>();
 		for (const unit of value.units) {
 			const range = this.ranges.find(range => range.id === unit?.id);
 			if (!range || translated.has(unit.id) || typeof unit.text !== "string" || !unit.text.trim()) invalid();
@@ -313,10 +412,21 @@ export class TranslationMarkdown {
 			let index = 0;
 			const restored = unit.text.trim().replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]);
 			translated.set(unit.id, restored);
+			headingProse.set(unit.id, this.headingProse(range, unit.text.trim()));
+		}
+		for (const range of this.ranges) {
+			if (!translated.has(range.id)) { let index = 0; translated.set(range.id, range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++])); }
+		}
+		const headings = new Map<string, string>();
+		for (const heading of this.headings) {
+			const value = this.headingRanges(heading).map(range => headingProse.get(range.id) ?? this.headingProse(range, range.text)).join(" ");
+			const key = heading.key!;
+			if (headings.has(key)) headings.set(key, ""); else headings.set(key, stripHeadingForLink(value));
 		}
 		let body = ""; let cursor = this.frontmatterEnd;
 		for (const range of this.ranges) { body += this.source.slice(cursor, range.start) + translated.get(range.id)!; cursor = range.end; }
 		body += this.source.slice(cursor);
+		if (this.links) body = this.links.assemble(body, headings);
 		const frontmatter = this.source.slice(0, this.frontmatterEnd);
 		return frontmatter + (frontmatter && !frontmatter.endsWith("\n") ? "\n" : "") + originalLink + "\n\n" + body;
 	}

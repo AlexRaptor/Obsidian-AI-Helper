@@ -631,6 +631,11 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 	flex-wrap: wrap;
 	flex: 1 1 50%;
 }
+.ai-helper-translation-setting input[type="text"],
+.ai-helper-translation-setting textarea {
+	flex: 1 1 50%;
+	min-width: 50%;
+}
 .ai-helper-translation-setting textarea {
 	flex: 1 1 50%;
 	min-width: 50%;

@@ -1010,3 +1010,21 @@ it("режим отладки перевода выключен по умолч�
 	expect(plugin.settings.translationDebugMode).toBe(true);
 	expect(saveSettings).toHaveBeenCalledOnce();
 });
+
+it("настройки перевода сохраняют режим папки и отдельный путь, включая пустой", async () => {
+	setLanguage("ru");
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: "idle", t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	expect(plugin.settings.translationFolderMode).toBe("original");
+	expect(controls.find(control => control.name === "Сохранять перевод в")).toBeDefined();
+	const folder = controls.find(control => control.name === "Папка перевода")!;
+	expect(folder.input).toBeDefined();
+	await tab.setControlValue("translationFolderMode", "custom");
+	await folder.input!.change("Переводы/Статьи");
+	expect(plugin.settings.translationFolderMode).toBe("custom");
+	expect(plugin.settings.translationFolder).toBe("Переводы/Статьи");
+	await folder.input!.change("");
+	expect(plugin.settings.translationFolder).toBe("");
+	expect(saveSettings).toHaveBeenCalledTimes(3);
+});

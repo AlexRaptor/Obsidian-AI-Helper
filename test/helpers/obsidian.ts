@@ -289,3 +289,7 @@ export class DropdownComponent {
 }
 
 export class MarkdownView {}
+
+// Public heading normalization helpers used by Obsidian link navigation.
+export function stripHeading(heading: string): string { return heading.replace(/[!"#$%&()*+,.:;<=>?@^`{|}~\\/\[\]\r\n]/g, " ").replace(/\s+/g, " ").trim(); }
+export function stripHeadingForLink(heading: string): string { return heading.replace(/[:#|^\\\r\n]|%%|\[\[|\]\]/g, " ").replace(/\s+/g, " ").trim(); }

@@ -28,9 +28,11 @@ async function setup(options: { text?: string; settings?: Record<string, unknown
 	});
 	vi.stubGlobal("fetch", network);
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/тест-перевода";
-	const app = { vault: { adapter, offref: () => {}, on: () => ({}), getMarkdownFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path, extension: "md" })), getFileByPath: (path: string) => files.has(path) ? path === file.path ? file : Object.assign(new TFile(), { path, extension: "md" }) : null,
-		getAbstractFileByPath: (path: string) => files.has(path) ? file : null, read: vi.fn(async (note: TFile) => files.get(note.path)!),
+	const folders = new Set<string>(["Заметки"]);
+	const app = { vault: { adapter, offref: () => {}, on: () => ({}), getFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path })), createFolder: vi.fn(async (path: string) => { folders.add(path); }), getMarkdownFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path, extension: "md" })), getFileByPath: (path: string) => files.has(path) ? path === file.path ? file : Object.assign(new TFile(), { path, extension: "md" }) : null,
+		getAbstractFileByPath: (path: string) => files.has(path) ? file : folders.has(path) ? { path, children: [] } : null, read: vi.fn(async (note: TFile) => files.get(note.path)!),
 		create: vi.fn(async (path: string, text: string) => { if (files.has(path)) throw Error("Занято"); files.set(path, text); return Object.assign(new TFile(), { path, extension: "md" }); }) },
+		metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
 		workspace: { activeLeaf: leaf, getActiveViewOfType: (type: unknown) => type === MarkdownView ? view : null, getActiveFile: () => file, getLeavesOfType: (type: string) => type === "markdown" ? [leaf] : [],
 			on: (name: string, callback: (...args: any[]) => void) => { events.set(name, callback); return {}; }, onLayoutReady: () => {}, detachLeavesOfType: () => {},
 			createLeafBySplit: vi.fn(() => right), getLeaf: () => right, setActiveLeaf: vi.fn() } } as unknown as App;
@@ -51,7 +53,7 @@ it("команда переводит видимые абзацы и откры�
 	expect(env.commands.has("translate-current-note")).toBe(true);
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nVisible text.\n\nSecond paragraph.");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nVisible text.\n\nSecond paragraph.");
 	expect(env.files.get(env.file.path)).toBe("Сохранённый текст.");
 	expect(JSON.stringify(env.requests)).not.toContain("СЕКРЕТ ЧАТА");
 	expect(JSON.stringify(env.requests)).toContain("Видимый текст.");
@@ -310,7 +312,7 @@ it.each([false, true])("принимает ответ из отчёта поль
 	actions.get("Перевести текущую заметку")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(Modal.opened[0].contentEl.getText()).not.toContain("неправильный или неполный");
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nХорошие заметки сохраняют контекст. Полезный перевод сохраняет смысл оригинала.\n\nЭтот абзац уже написан на русском языке и должен остаться без изменений.\n");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nХорошие заметки сохраняют контекст. Полезный перевод сохраняет смысл оригинала.\n\nЭтот абзац уже написан на русском языке и должен остаться без изменений.\n");
 });
 it.each([
 	'Пояснение перед ответом\n```json\n{"units":[{"id":"p1","text":"Первый"},{"id":"p2","text":"Второй"}]}\n```',
@@ -462,7 +464,7 @@ it("позднее завершение отменённой попытки не
 // independently, including its original whitespace and protected source text.
 it("сохраняет каркас статьи, код, формулы и свойства при переводе через команду", async () => {
 	const source = ["---", "title: Секретное свойство", "tags: [секрет]", "---", "# Заголовок #", "", "Раздел", "=======", "", "Абзац **важный** и *курсив*, ~~старый~~.", "", "- [x] Задача", "  1. Вложенный", "     продолжение", "", "> Цитата", ">", "> - Элемент", "", "---", "", "Код `секретный код` и $секретная формула$ #секрет ^блок", "", "```ts", "// Секретный комментарий", "const x = 1;", "```", "", "    Секретный отступный код", "", "$$", "Секретная блочная формула", "$$", ""].join("\n");
-	const expected = ["---", "title: Секретное свойство", "tags: [секрет]", "---", "[Оригинал](<Статья.md>)", "", "# Heading #", "", "Section", "=======", "", "Paragraph **important** and *italic*, ~~old~~.", "", "- [x] Task", "  1. Nested", "     continuation", "", "> Quote", ">", "> - Item", "", "---", "", "Code `секретный код` and $секретная формула$ #секрет ^блок", "", "```ts", "// Секретный комментарий", "const x = 1;", "```", "", "    Секретный отступный код", "", "$$", "Секретная блочная формула", "$$", ""].join("\n");
+	const expected = ["---", "title: Секретное свойство", "tags: [секрет]", "---", "[Оригинал](<./Статья.md>)", "", "# Heading #", "", "Section", "=======", "", "Paragraph **important** and *italic*, ~~old~~.", "", "- [x] Task", "  1. Nested", "     continuation", "", "> Quote", ">", "> - Item", "", "---", "", "Code `секретный код` and $секретная формула$ #секрет ^блок", "", "```ts", "// Секретный комментарий", "const x = 1;", "```", "", "    Секретный отступный код", "", "$$", "Секретная блочная формула", "$$", ""].join("\n");
 	const words: Record<string, string> = { Заголовок: "Heading", Раздел: "Section", Абзац: "Paragraph", важный: "important", и: "and", курсив: "italic", старый: "old", Задача: "Task", Вложенный: "Nested", продолжение: "continuation", Цитата: "Quote", Элемент: "Item", Код: "Code" };
 	const env = await setup({ text: source, completion: async body => {
 		const { units } = JSON.parse(body.messages.at(-1).content);
@@ -477,11 +479,12 @@ it("сохраняет каркас статьи, код, формулы и св
 
 it("переводит явные подписи ссылок, изображений и встраиваний без чтения целей", async () => {
 	const source = '[Подпись](<../Цели/Файл.md#Раздел> "Секретная подсказка") и [Подпись][ид].\n\n[ид]: ../Цели/Файл.md#Раздел\n\n[[Цели/Файл#Раздел|Подпись]] [[Секретная цель]] ![[Вложение#Раздел]] ![[Фото.png|200x100]] ![[Вложение|Подпись]]\n\n![Подпись](../Фото.png) <https://example.org/Секрет> https://example.org/секрет\n';
-	const expected = '[Оригинал](<Статья.md>)\n\n[Caption](<../Цели/Файл.md#Раздел> "Секретная подсказка") and [Caption][ид].\n\n[ид]: ../Цели/Файл.md#Раздел\n\n[[Цели/Файл#Раздел|Caption]] [[Секретная цель]] ![[Вложение#Раздел]] ![[Фото.png|200x100]] ![[Вложение|Caption]]\n\n![Caption](../Фото.png) <https://example.org/Секрет> https://example.org/секрет\n';
+	const expected = '[Оригинал](<./Статья.md>)\n\n[Caption](<../Цели/Файл.md#Раздел> "Секретная подсказка") and [Caption][ид].\n\n[ид]: ../Цели/Файл.md#Раздел\n\n[[../Цели/Файл.md#Раздел|Caption]] [[../Секретная цель.md]] ![[../Вложение.md#Раздел]] ![[../Фото.png|200x100]] ![[../Вложение.md|Caption]]\n\n![Caption](../Фото.png) <https://example.org/Секрет> https://example.org/секрет\n';
 	const env = await setup({ text: source, completion: async body => {
 		const { units } = JSON.parse(body.messages.at(-1).content);
 		return response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("Подпись", "Caption").replace(" и ", " and ") })), "stop");
 	} });
+	for (const path of ["Цели/Файл.md", "Секретная цель.md", "Вложение.md", "Фото.png"]) env.files.set(path, "Содержимое цели");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -507,7 +510,7 @@ it.each(["удаление", "повтор", "перестановка", "чуж
 });
 it("сохраняет вложенное выделение, экранирование, жёсткие переносы и префиксы цитат", async () => {
 	const source = "## **Важный *текст***\r\n\r\n- [ ] Первый\r\n  - Второй\r\n    Продолжение\r\n  Родитель\r\n\r\n> > ***Важный*** и __текст__  \r\n> > следующий\\\r\n> > конец\r\n\r\nПараграф\r\n    продолжение параграфа\r\n\r\nПуть \\*звезда\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
-	const expected = "[Оригинал](<Статья.md>)\n\n## **Important *text***\r\n\r\n- [ ] First\r\n  - Second\r\n    Continuation\r\n  Parent\r\n\r\n> > ***Important*** и __text__  \r\n> > next\\\r\n> > end\r\n\r\nParagraph\r\n    paragraph continuation\r\n\r\nPath \\*star\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
+	const expected = "[Оригинал](<./Статья.md>)\n\n## **Important *text***\r\n\r\n- [ ] First\r\n  - Second\r\n    Continuation\r\n  Parent\r\n\r\n> > ***Important*** и __text__  \r\n> > next\\\r\n> > end\r\n\r\nParagraph\r\n    paragraph continuation\r\n\r\nPath \\*star\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
 	const words: Record<string, string> = { Важный: "Important", текст: "text", Первый: "First", Второй: "Second", Продолжение: "Continuation", Родитель: "Parent", следующий: "next", конец: "end", Параграф: "Paragraph", "продолжение параграфа": "paragraph continuation", Путь: "Path", звезда: "star" };
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/продолжение параграфа|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
 	env.commands.get("translate-current-note")!();
@@ -518,7 +521,7 @@ it("не обращается к модели для заметки только
 	const source = "---\ntitle: Свойство\n---\n\n```\nСекретный код\n```\n\n$$x = 1$$\n";
 	const env = await setup({ text: source }); env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("---\ntitle: Свойство\n---\n[Оригинал](<Статья.md>)\n\n\n```\nСекретный код\n```\n\n$$x = 1$$\n");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("---\ntitle: Свойство\n---\n[Оригинал](<./Статья.md>)\n\n\n```\nСекретный код\n```\n\n$$x = 1$$\n");
 	expect(env.requests).toHaveLength(0);
 });
 it("не принимает пробелы, превращающие выделение в обычный текст", async () => {
@@ -530,8 +533,9 @@ it("не принимает пробелы, превращающие выдел�
 });
 it("сохраняет пустые свойства, разделители и определения reference-ссылок с переносами", async () => {
 	const source = "---\n---\n\n[Подпись][] и [Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows и Microsoft Word.\n";
-	const expected = "---\n---\n[Оригинал](<Статья.md>)\n\n\n[Caption][Подпись] and [Short][Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows and Microsoft Word.\n";
+	const expected = "---\n---\n[Оригинал](<./Статья.md>)\n\n\n[Caption][Подпись] and [Short][Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows and Microsoft Word.\n";
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("Подпись", "Caption").replaceAll("Короткая", "Short").replaceAll(" и ", " and ") })), "stop") });
+	env.files.set("Цель.md", "Цель");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -541,7 +545,7 @@ it.each(["    - Секретный код\n", "\t1. Секретный код\n"
 	const env = await setup({ text }); env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.requests).toHaveLength(0);
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\n" + text);
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n" + text);
 });
 it.each(["Heading\n===", "Heading\r---"])("не позволяет модели создавать разметку одиночным переносом: %j", async text => {
 	const env = await setup({ text: "Текст", completion: async () => response([{ id: "p1", text }], "stop") });
@@ -554,7 +558,7 @@ it("жёсткий перенос абзаца не зависит от норм
 	const env = await setup({ text: "Первая строка  \nВторая строка", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("  ", " ").replace("Первая строка", "First line").replace("Вторая строка", "Second line") })), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nFirst line  \nSecond line");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nFirst line  \nSecond line");
 });
 it.each(["разделитель после переноса", "пустая подпись"])("не принимает повреждение размещения защищённых элементов: %s", async damage => {
 	const text = damage === "пустая подпись" ? "[Подпись](Цель.md)" : "Первая строка\nВторая строка";
@@ -563,6 +567,7 @@ it.each(["разделитель после переноса", "пустая п�
 		units[0].text = units[0].text.replace(damage === "пустая подпись" ? "Подпись" : "Вторая строка", damage === "пустая подпись" ? "" : "===");
 		return response(units, "stop");
 	} });
+	env.files.set("Заметки/Цель.md", "Цель");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.app.vault.create).not.toHaveBeenCalled();
@@ -574,14 +579,14 @@ it.each([["", "- ```"], ["> ", "> ```"], ["  ", "1. ```"]])("не распозн
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Пункт", "Item") })), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\n" + (prefix === "  " ? "- Item\n" : "") + block + "\n\nText");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n" + (prefix === "  " ? "- Item\n" : "") + block + "\n\nText");
 	expect(JSON.stringify(env.requests)).not.toContain("Секретный код");
 });
 it("сохраняет теги после знаков препинания и не отправляет их модели", async () => {
 	const env = await setup({ text: "Текст (#секрет/вложенный).", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text") })), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nText (#секрет/вложенный).");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nText (#секрет/вложенный).");
 	expect(JSON.stringify(env.requests)).not.toContain("секрет");
 });
 it("останавливается на неизвестном обозначении с потенциально переводимым текстом", async () => {
@@ -595,7 +600,7 @@ it("останавливается на неизвестном обозначе�
 
 it("переводит ячейки таблицы, сохраняя пустые ячейки, выравнивание и экранированные разделители", async () => {
 	const source = "До таблицы.\n\n| Имя | Значение | Пусто |\n| :--- | ---: | :---: |\n| Текст | **Жирный** и `секрет` | |\n| Сноска | Путь \\| часть | |\n\nПосле таблицы.";
-	const expected = "[Оригинал](<Статья.md>)\n\nBefore table.\n\n| Name | Value | Empty |\n| :--- | ---: | :---: |\n| Text | **Bold** and `секрет` | |\n| Footnote | Path \\| part | |\n\nAfter table.";
+	const expected = "[Оригинал](<./Статья.md>)\n\nBefore table.\n\n| Name | Value | Empty |\n| :--- | ---: | :---: |\n| Text | **Bold** and `секрет` | |\n| Footnote | Path \\| part | |\n\nAfter table.";
 	const words: Record<string, string> = { "До таблицы": "Before table", "После таблицы": "After table", Имя: "Name", Значение: "Value", Пусто: "Empty", Текст: "Text", Жирный: "Bold", и: "and", Сноска: "Footnote", Путь: "Path", часть: "part" };
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/До таблицы|После таблицы|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
 	env.commands.get("translate-current-note")!();
@@ -606,7 +611,7 @@ it("переводит ячейки таблицы, сохраняя пусты�
 
 it("переводит многострочные определения сносок один раз и сохраняет повторные упоминания", async () => {
 	const source = "Текст[^ид] и снова[^ид].\n\n[^ид]: Определение **важное**.\n    Продолжение с `секретом`.\n\n    Второй абзац.\n\nКонец.";
-	const expected = "[Оригинал](<Статья.md>)\n\nText[^ид] and again[^ид].\n\n[^ид]: Definition **important**.\n    Continuation with `секретом`.\n\n    Second paragraph.\n\nEnd.";
+	const expected = "[Оригинал](<./Статья.md>)\n\nText[^ид] and again[^ид].\n\n[^ид]: Definition **important**.\n    Continuation with `секретом`.\n\n    Second paragraph.\n\nEnd.";
 	const words: Record<string, string> = { Текст: "Text", и: "and", снова: "again", Определение: "Definition", важное: "important", Продолжение: "Continuation", с: "with", "Второй абзац": "Second paragraph", Конец: "End" };
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/Второй абзац|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
 	env.commands.get("translate-current-note")!();
@@ -619,7 +624,7 @@ it("переводит многострочные определения сно�
 
 it("переводит вложенные callout с таблицей и сноской, сохраняя тип, сворачивание и код", async () => {
 	const source = ["Начало[^источник].", "", "> [!TIP]- **Мой заголовок**", "> Описание.", ">", "> | Имя | Значение |", "> | --- | ---: |", "> | Текст[^источник] | `секрет` |", ">", "> > [!custom]+ Вложенный", "> > - **Пункт**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> Конец.", "", "[^источник]: Источник.", "    Продолжение.", ""].join("\n");
-	const expected = ["[Оригинал](<Статья.md>)", "", "Start[^источник].", "", "> [!TIP]- **My title**", "> Description.", ">", "> | Name | Value |", "> | --- | ---: |", "> | Text[^источник] | `секрет` |", ">", "> > [!custom]+ Nested", "> > - **Item**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> End.", "", "[^источник]: Source.", "    Continuation.", ""].join("\n");
+	const expected = ["[Оригинал](<./Статья.md>)", "", "Start[^источник].", "", "> [!TIP]- **My title**", "> Description.", ">", "> | Name | Value |", "> | --- | ---: |", "> | Text[^источник] | `секрет` |", ">", "> > [!custom]+ Nested", "> > - **Item**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> End.", "", "[^источник]: Source.", "    Continuation.", ""].join("\n");
 	const words: Record<string, string> = { Начало: "Start", "Мой заголовок": "My title", Описание: "Description", Имя: "Name", Значение: "Value", Текст: "Text", Вложенный: "Nested", Пункт: "Item", Конец: "End", Источник: "Source", Продолжение: "Continuation" };
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/Мой заголовок|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
 	env.commands.get("translate-current-note")!();
@@ -660,7 +665,7 @@ it.each([
 });
 it("сохраняет таблицу без внешних разделителей и определения сноски с кодом", async () => {
 	const source = "Имя | Значение\r\n--- | ---\r\nТекст | [^ид]\r\n\r\n[^ид]:\r\n    Описание.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
-	const expected = "[Оригинал](<Статья.md>)\n\nName | Value\r\n--- | ---\r\nText | [^ид]\r\n\r\n[^ид]:\r\n    Description.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
+	const expected = "[Оригинал](<./Статья.md>)\n\nName | Value\r\n--- | ---\r\nText | [^ид]\r\n\r\n[^ид]:\r\n    Description.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
 	const words: Record<string, string> = { Имя: "Name", Значение: "Value", Текст: "Text", Описание: "Description" };
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
 	env.commands.get("translate-current-note")!();
@@ -682,7 +687,7 @@ it("сохраняет ограждённый код непосредствен�
 	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Описание", "Description") })), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nText[^ид].\n\n[^ид]: ```ts\n    const secret = 1;\n    ```\n\n    Description.");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nText[^ид].\n\n[^ид]: ```ts\n    const secret = 1;\n    ```\n\n    Description.");
 	expect(JSON.stringify(env.requests)).not.toContain("secret");
 });
 
@@ -690,5 +695,150 @@ it("сохраняет упоминание сноски в начале абз�
 	const env = await setup({ text: "[^ид] Текст.\n\n[^ид]: Определение.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Определение", "Definition") })), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\n[^ид] Text.\n\n[^ид]: Definition.");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n[^ид] Text.\n\n[^ид]: Definition.");
+});
+
+
+it("сохраняет в новой папке ссылки и встраивания по снимку, не читая вложения", async () => {
+	const pending = deferred<Response>();
+	const source = '---\ntitle: Статья\n---\n# Раздел\n\n[Подробности](../Материалы/Справка.md#История) ![Рисунок](../Ресурсы/схема.png) ![[Материалы/Справка#История]]\n\n[Описание][ист]\n\n[ист]: ../Материалы/Справка.md "Подсказка"\n';
+	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы/Готовые" }, completion: () => pending.promise });
+	env.files.set("Материалы/Справка.md", "Секретное содержимое"); env.files.set("Ресурсы/схема.png", "Изображение");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.files.delete("Материалы/Справка.md"); env.files.set("Перенесено/Справка.md", "Другое");
+	env.files.delete("Ресурсы/схема.png"); env.files.delete(env.file.path); env.file.path = "Перенесено/Статья.md";
+	env.plugin.settings.translationFolder = "Изменено";
+	const { units } = JSON.parse(env.requests[0].messages.at(-1).content);
+	pending.resolve(response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Раздел", "Section").replace("Подробности", "Details").replace("Рисунок", "Picture").replace("Описание", "Description") })), "stop"));
+	await vi.waitFor(() => expect(env.files.has("Переводы/Готовые/Статья — en.md")).toBe(true));
+	expect(env.files.get("Переводы/Готовые/Статья — en.md")).toBe('---\ntitle: Статья\n---\n[Оригинал](<../../Заметки/Статья.md>)\n\n# Section\n\n[Details](../../Материалы/Справка.md#История) ![Picture](../../Ресурсы/схема.png) ![[../../Материалы/Справка.md#История]]\n\n[Description][ист]\n\n[ист]: ../../Материалы/Справка.md "Подсказка"\n');
+	expect(env.app.vault.createFolder).toHaveBeenCalledWith("Переводы");
+	expect(env.app.vault.createFolder).toHaveBeenCalledWith("Переводы/Готовые");
+	expect(env.app.vault.read).not.toHaveBeenCalled();
+	expect(JSON.stringify(env.requests)).not.toContain("Секретное содержимое");
+});
+
+
+it("обновляет самоссылки на переведённые ATX/Setext-заголовки и сохраняет чужие заголовки и блоки", async () => {
+	const source = "# Раздел\n\nВторой раздел\n---\n\n[Начало](#Раздел) [[Статья#Второй раздел|Далее]] ![[#^блок]] [Снаружи](Справка.md#Раздел)\n\nТекст ^блок";
+	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Второй раздел", "Second section").replace("Раздел", "Section").replace("Начало", "Start").replace("Далее", "Next").replace("Снаружи", "Outside").replace("Текст", "Text") })), "stop") });
+	env.files.set("Заметки/Справка.md", "# Раздел");
+	env.files.set("Обратная.md", "[[Заметки/Статья#Раздел]]");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Переводы/Статья — en.md")).toBe("[Оригинал](<../Заметки/Статья.md>)\n\n# Section\n\nSecond section\n---\n\n[Start](#Section) [[./Статья — en.md#Second section|Next]] ![[#^блок]] [Outside](../Заметки/Справка.md#Раздел)\n\nText ^блок");
+	expect(env.files.get("Обратная.md")).toBe("[[Заметки/Статья#Раздел]]");
+});
+
+it("сохраняет неразрешимые ссылки дословно с предупреждением даже при появлении целей после запуска", async () => {
+	const pending = deferred<Response>();
+	const source = "Текст [Неизвестная](Нет.md) [[Нет|Подпись]] ![Фото](Нет.png) [Справка][нет].\n\n[нет]: Нет.md\n\n[Сайт](https://example.org/a_(b)?q=%2F#секция)";
+	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: () => pending.promise });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.files.set("Заметки/Нет.md", "Случайная новая цель"); env.files.set("Нет.png", "Новая картинка");
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Справка", "Reference").replace("Сайт", "Website") })), "stop"));
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Переводы/Статья — en.md")).toBe("[Оригинал](<../Заметки/Статья.md>)\n\nText [Неизвестная](Нет.md) [[Нет|Подпись]] ![Фото](Нет.png) [Справка][нет].\n\n[нет]: Нет.md\n\n[Website](https://example.org/a_(b)?q=%2F#секция)");
+	expect(Modal.opened[0].contentEl.getText()).toContain("сохранены дословно");
+});
+
+it.each(["", "   ", "../Вне", "/Абсолютный", "Папка/../Вне", "Папка\\Вне", "Папка//Вне"])("блокирует неподходящую папку до обращения к модели: %j", async folder => {
+	const env = await setup({ settings: { translationFolderMode: "custom", translationFolder: folder } });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(0); expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("путь папки");
+});
+
+it("не сохраняет неоднозначную самоссылку на повторяющиеся заголовки", async () => {
+	const env = await setup({ text: "# Раздел\n\n# Раздел\n\n[[#Раздел|Далее]]", completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неподдерживаемая");
+});
+
+it("фиксирует выбор Obsidian для короткой ссылки до чтения закрытой заметки", async () => {
+	const reading = deferred<string>();
+	const pending = deferred<Response>();
+	const env = await setup({ settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: () => pending.promise });
+	env.files.set("Архив/Справка.md", "Первая цель"); env.files.set("Материалы/Справка.md", "Выбранная цель");
+	let target = "Материалы/Справка.md";
+	const resolve = vi.fn((name: string) => name === "Справка" ? Object.assign(new TFile(), { path: target }) : null);
+	Object.assign(env.app.metadataCache, { getFirstLinkpathDest: resolve });
+	Object.assign(env.app.workspace, { getLeavesOfType: () => [], getActiveViewOfType: () => null });
+	vi.mocked(env.app.vault.read).mockReturnValueOnce(reading.promise);
+	env.commands.get("translate-current-note")!();
+	target = "Архив/Справка.md"; env.files.delete("Материалы/Справка.md");
+	reading.resolve("[Справка](Справка)");
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	resolve.mockClear();
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop"));
+	await vi.waitFor(() => expect(env.files.has("Переводы/Статья — en.md")).toBe(true));
+	expect(env.files.get("Переводы/Статья — en.md")).toContain("[Reference](../Материалы/Справка.md)");
+	expect(resolve).not.toHaveBeenCalled();
+});
+
+it("пересчитывает закодированные Markdown-пути, изображения с размером и reference-ссылки без явного идентификатора", async () => {
+	const source = '[Фото](../Ресурсы/фото%20%281%29.png) ![[Ресурсы/фото (1).png|200x100]] [Короткая][] [Короткая]\n\n[Короткая]: <../Материалы/Справка.md> "Подсказка"';
+	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы/Статьи" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Фото", "Photo").replaceAll("Короткая", "Short") })), "stop") });
+	env.files.set("Ресурсы/фото (1).png", "Картинка"); env.files.set("Материалы/Справка.md", "Справка");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Переводы/Статьи/Статья — en.md")).toBe('[Оригинал](<../../Заметки/Статья.md>)\n\n[Photo](../../Ресурсы/фото%20%281%29.png) ![[../../Ресурсы/фото (1).png|200x100]] [Short][Короткая] [Short][Короткая]\n\n[Короткая]: <../../Материалы/Справка.md> "Подсказка"');
+});
+
+it("сохраняет назначение Markdown-ссылки на файл с закодированным знаком решётки", async () => {
+	const env = await setup({ text: "[Справка](../Материалы/Файл%23один.md#Раздел)", settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop") });
+	env.files.set("Материалы/Файл#один.md", "# Раздел");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Переводы/Статья — en.md")).toContain("[Reference](../Материалы/Файл%23один.md#Раздел)");
+});
+
+it("закрепляет короткую ссылку по снимку и в папке оригинала при появлении новой одноимённой цели", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ text: "Текст [[Справка]]", completion: () => pending.promise });
+	env.files.set("Материалы/Справка.md", "Исходная цель");
+	Object.assign(env.app.metadataCache, { getFirstLinkpathDest: (name: string) => name === "Справка" ? Object.assign(new TFile(), { path: "Материалы/Справка.md" }) : null });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.files.set("Заметки/Справка.md", "Новая одноимённая цель");
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text") })), "stop"));
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("Text [[../Материалы/Справка.md]]");
+});
+
+it("сохраняет самоссылку на отсутствующий заголовок дословно с предупреждением", async () => {
+	const env = await setup({ text: "# Раздел\n\n[Назад](#Отсутствует)", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Раздел", "Section").replace("Назад", "Back") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n# Section\n\n[Назад](#Отсутствует)");
+	expect(Modal.opened[0].contentEl.getText()).toContain("сохранены дословно");
+});
+
+it.each([
+	["Первая\nвторая\n---", "Первая%20вторая", "First\nsecond\n---", "First%20second"],
+	["> Раздел\n> ---", "Раздел", "> Section\n> ---", "Section"],
+	["# [Раздел](Справка.md)", "Раздел", "# [Section](./Справка.md)", "Section"],
+])("обновляет самоссылку на заголовок со сложным оформлением: %s", async (heading, anchor, expectedHeading, expectedAnchor) => {
+	const env = await setup({ text: heading + "\n\n[Назад](#" + anchor + ")", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Раздел", "Section").replace("Первая", "First").replace("вторая", "second").replace("Назад", "Back") })), "stop") });
+	env.files.set("Заметки/Справка.md", "Справка");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n" + expectedHeading + "\n\n[Back](#" + expectedAnchor + ")");
+});
+
+it("закрепляет Markdown-ссылку и ссылку на оригинал при удалении файлов с одноимёнными копиями в хранилище", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ text: "[Справка](Справка.md)", completion: () => pending.promise });
+	env.files.set("Заметки/Справка.md", "Исходная цель"); env.files.set("Архив/Справка.md", "Другая цель"); env.files.set("Архив/Статья.md", "Другой оригинал");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.files.delete("Заметки/Справка.md"); env.files.delete("Заметки/Статья.md");
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop"));
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n[Reference](./Справка.md)");
 });

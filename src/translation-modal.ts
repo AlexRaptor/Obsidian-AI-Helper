@@ -30,6 +30,7 @@ export class TranslationModal extends Modal {
 			const operation = this.plugin.translation;
 			progress.setText(this.plugin.t(operation.stage));
 			detail.setText(operation.detail ? this.plugin.t(operation.detail) : "");
+			setStatusTone(detail, operation.detail === "translation-unresolved" ? "warning" : operation.stage === "translation-error" ? "error" : "info");
 			detail.style.display = operation.detail ? "" : "none";
 			path.setText(operation.savedPath);
 			path.style.display = operation.savedPath ? "" : "none";
