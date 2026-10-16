@@ -136,11 +136,11 @@ it.each([
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 });
-it.each(["# Заголовок", "Текст со [ссылкой](Цель.md)", "---\nсвойство: текст\n---", "Текст\n\n- Список", "Текст\n\n$$\nформула\n$$", "<div>Текст</div>"])("отклоняет неподдерживаемую разметку до запроса: %s", async text => {
+it.each(["<div>Текст</div>", "| Колонка |\n| --- |\n| Текст |", "Сноска[^ид]\n\n[^ид]: Текст", "> [!note] Заголовок\n> Текст"])("отклоняет неподдерживаемую разметку до запроса: %s", async text => {
 	const env = await setup({ text }); env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.requests).toHaveLength(0); expect(env.app.vault.create).not.toHaveBeenCalled();
-	expect(Modal.opened[0].contentEl.getText()).toContain("только обычные абзацы");
+	expect(Modal.opened[0].contentEl.getText()).toContain("неподдерживаемая");
 });
 it("показывает сообщение без Markdown-заметки", async () => {
 	const env = await setup(); Object.assign(env.app.workspace, { getActiveFile: () => null });
@@ -456,4 +456,139 @@ it("позднее завершение отменённой попытки не
 		await new Promise(resolve => setTimeout(resolve, 20));
 		expect(env.app.vault.create).not.toHaveBeenCalled();
 	} finally { await chat.onClose(); }
+});
+
+// The model translates only visible prose; the expected document is authored
+// independently, including its original whitespace and protected source text.
+it("сохраняет каркас статьи, код, формулы и свойства при переводе через команду", async () => {
+	const source = ["---", "title: Секретное свойство", "tags: [секрет]", "---", "# Заголовок #", "", "Раздел", "=======", "", "Абзац **важный** и *курсив*, ~~старый~~.", "", "- [x] Задача", "  1. Вложенный", "     продолжение", "", "> Цитата", ">", "> - Элемент", "", "---", "", "Код `секретный код` и $секретная формула$ #секрет ^блок", "", "```ts", "// Секретный комментарий", "const x = 1;", "```", "", "    Секретный отступный код", "", "$$", "Секретная блочная формула", "$$", ""].join("\n");
+	const expected = ["---", "title: Секретное свойство", "tags: [секрет]", "---", "[Оригинал](<Статья.md>)", "", "# Heading #", "", "Section", "=======", "", "Paragraph **important** and *italic*, ~~old~~.", "", "- [x] Task", "  1. Nested", "     continuation", "", "> Quote", ">", "> - Item", "", "---", "", "Code `секретный код` and $секретная формула$ #секрет ^блок", "", "```ts", "// Секретный комментарий", "const x = 1;", "```", "", "    Секретный отступный код", "", "$$", "Секретная блочная формула", "$$", ""].join("\n");
+	const words: Record<string, string> = { Заголовок: "Heading", Раздел: "Section", Абзац: "Paragraph", важный: "important", и: "and", курсив: "italic", старый: "old", Задача: "Task", Вложенный: "Nested", продолжение: "continuation", Цитата: "Quote", Элемент: "Item", Код: "Code" };
+	const env = await setup({ text: source, completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		return response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word) })).reverse(), "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	const sent = JSON.stringify(env.requests);
+	for (const secret of ["Секретное свойство", "секретный код", "секретная формула", "Секретный комментарий", "Секретный отступный код", "Секретная блочная формула", "#секрет", "^блок"]) expect(sent).not.toContain(secret);
+});
+
+it("переводит явные подписи ссылок, изображений и встраиваний без чтения целей", async () => {
+	const source = '[Подпись](<../Цели/Файл.md#Раздел> "Секретная подсказка") и [Подпись][ид].\n\n[ид]: ../Цели/Файл.md#Раздел\n\n[[Цели/Файл#Раздел|Подпись]] [[Секретная цель]] ![[Вложение#Раздел]] ![[Фото.png|200x100]] ![[Вложение|Подпись]]\n\n![Подпись](../Фото.png) <https://example.org/Секрет> https://example.org/секрет\n';
+	const expected = '[Оригинал](<Статья.md>)\n\n[Caption](<../Цели/Файл.md#Раздел> "Секретная подсказка") and [Caption][ид].\n\n[ид]: ../Цели/Файл.md#Раздел\n\n[[Цели/Файл#Раздел|Caption]] [[Секретная цель]] ![[Вложение#Раздел]] ![[Фото.png|200x100]] ![[Вложение|Caption]]\n\n![Caption](../Фото.png) <https://example.org/Секрет> https://example.org/секрет\n';
+	const env = await setup({ text: source, completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		return response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("Подпись", "Caption").replace(" и ", " and ") })), "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	expect(env.app.vault.read).not.toHaveBeenCalled();
+	for (const secret of ["Секретная подсказка", "Секретная цель", "Цели/Файл", "Вложение", "Фото.png", "example.org"]) expect(JSON.stringify(env.requests)).not.toContain(secret);
+});
+it.each(["удаление", "повтор", "перестановка", "чужая единица", "подделка", "новая разметка"])("отклоняет повреждение защищённых элементов: %s", async damage => {
+	const env = await setup({ text: "Первый `секрет` и $формула$.\n\nВторой **важный**.", completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		const tokens = units[0].text.match(/⟦[^⟧]+⟧/g)!;
+		if (damage === "удаление") units[0].text = units[0].text.replace(tokens[0], "");
+		if (damage === "повтор") units[0].text += tokens[0];
+		if (damage === "перестановка") units[0].text = `Текст ${tokens[1]} и ${tokens[0]}.`;
+		if (damage === "чужая единица") units[1].text += tokens[0];
+		if (damage === "подделка") units[0].text += "⟦AIH999:p1:0⟧";
+		if (damage === "новая разметка") units[0].text += "\n# Новый раздел";
+		return response(units, "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
+});
+it("сохраняет вложенное выделение, экранирование, жёсткие переносы и префиксы цитат", async () => {
+	const source = "## **Важный *текст***\r\n\r\n- [ ] Первый\r\n  - Второй\r\n    Продолжение\r\n  Родитель\r\n\r\n> > ***Важный*** и __текст__  \r\n> > следующий\\\r\n> > конец\r\n\r\nПараграф\r\n    продолжение параграфа\r\n\r\nПуть \\*звезда\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
+	const expected = "[Оригинал](<Статья.md>)\n\n## **Important *text***\r\n\r\n- [ ] First\r\n  - Second\r\n    Continuation\r\n  Parent\r\n\r\n> > ***Important*** и __text__  \r\n> > next\\\r\n> > end\r\n\r\nParagraph\r\n    paragraph continuation\r\n\r\nPath \\*star\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
+	const words: Record<string, string> = { Важный: "Important", текст: "text", Первый: "First", Второй: "Second", Продолжение: "Continuation", Родитель: "Parent", следующий: "next", конец: "end", Параграф: "Paragraph", "продолжение параграфа": "paragraph continuation", Путь: "Path", звезда: "star" };
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/продолжение параграфа|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+});
+it("не обращается к модели для заметки только с защищёнными данными", async () => {
+	const source = "---\ntitle: Свойство\n---\n\n```\nСекретный код\n```\n\n$$x = 1$$\n";
+	const env = await setup({ text: source }); env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("---\ntitle: Свойство\n---\n[Оригинал](<Статья.md>)\n\n\n```\nСекретный код\n```\n\n$$x = 1$$\n");
+	expect(env.requests).toHaveLength(0);
+});
+it("не принимает пробелы, превращающие выделение в обычный текст", async () => {
+	const env = await setup({ text: "Текст **важный**.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("важный", " important ") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("защищённые элементы");
+});
+it("сохраняет пустые свойства, разделители и определения reference-ссылок с переносами", async () => {
+	const source = "---\n---\n\n[Подпись][] и [Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows и Microsoft Word.\n";
+	const expected = "---\n---\n[Оригинал](<Статья.md>)\n\n\n[Caption][Подпись] and [Short][Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows and Microsoft Word.\n";
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("Подпись", "Caption").replaceAll("Короткая", "Short").replaceAll(" и ", " and ") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
+	expect(JSON.stringify(env.requests)).not.toContain("Секретная подсказка");
+});
+it.each(["    - Секретный код\n", "\t1. Секретный код\n", "    # Секретный заголовок\n"])("не переводит отступный код, похожий на разметку: %j", async text => {
+	const env = await setup({ text }); env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(0);
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\n" + text);
+});
+it.each(["Heading\n===", "Heading\r---"])("не позволяет модели создавать разметку одиночным переносом: %j", async text => {
+	const env = await setup({ text: "Текст", completion: async () => response([{ id: "p1", text }], "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
+});
+it("жёсткий перенос абзаца не зависит от нормализации пробелов моделью", async () => {
+	const env = await setup({ text: "Первая строка  \nВторая строка", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("  ", " ").replace("Первая строка", "First line").replace("Вторая строка", "Second line") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nFirst line  \nSecond line");
+});
+it.each(["разделитель после переноса", "пустая подпись"])("не принимает повреждение размещения защищённых элементов: %s", async damage => {
+	const text = damage === "пустая подпись" ? "[Подпись](Цель.md)" : "Первая строка\nВторая строка";
+	const env = await setup({ text, completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		units[0].text = units[0].text.replace(damage === "пустая подпись" ? "Подпись" : "Вторая строка", damage === "пустая подпись" ? "" : "===");
+		return response(units, "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
+});
+it.each([["", "- ```"], ["> ", "> ```"], ["  ", "1. ```"]])("не распознаёт новые списки и цитаты внутри ограждённого кода: %j / %j", async (prefix, code) => {
+	const block = ["```markdown", code, "Секретный код", "```"].map(line => prefix + line).join("\n");
+	const source = (prefix === "  " ? "- Пункт\n" : "") + block + "\n\nТекст";
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Пункт", "Item") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\n" + (prefix === "  " ? "- Item\n" : "") + block + "\n\nText");
+	expect(JSON.stringify(env.requests)).not.toContain("Секретный код");
+});
+it("сохраняет теги после знаков препинания и не отправляет их модели", async () => {
+	const env = await setup({ text: "Текст (#секрет/вложенный).", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nText (#секрет/вложенный).");
+	expect(JSON.stringify(env.requests)).not.toContain("секрет");
+});
+it("останавливается на неизвестном обозначении с потенциально переводимым текстом", async () => {
+	const env = await setup({ text: "Начало ⟦плагин: Содержимое⟧." });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(0);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Modal.opened[0].contentEl.getText()).toContain("неподдерживаемая");
 });
