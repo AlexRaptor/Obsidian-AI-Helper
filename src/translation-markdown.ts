@@ -45,6 +45,22 @@ export class TranslationMarkdown {
 			if (range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, "").trim()) this.units.push({ id: range.id, text: range.text });
 		}
 	}
+	preferredCount(units: TranslationUnit[], next?: TranslationUnit): number {
+		if (!next) return units.length;
+		const ranges = [...units, next].map(unit => this.ranges.find(range => range.id === unit.id.split(".")[0])!);
+		let line = 0;
+		for (let i = 1; i <= units.length; i++) {
+			if (ranges[i - 1] === ranges[i]) continue;
+			const gap = this.source.slice(ranges[i - 1].end, ranges[i].start);
+			if (/[\r\n]/.test(gap)) line = i;
+		}
+		return line || units.length;
+	}
+	section(id?: string): string {
+		const range = this.ranges.find(range => range.id === id);
+		const heading = this.headings.filter(heading => heading.start <= (range?.start ?? 0)).at(-1);
+		return heading ? this.headingRanges(heading).map(range => range.text).join(" ") : "";
+	}
 	private token(range: Range, value: string, headingText?: string): string {
 		const token = `${this.marker}${range.id}:${range.protected.length}⟧`;
 		range.protected.push(value);
@@ -377,23 +393,24 @@ export class TranslationMarkdown {
 		}
 		return result;
 	}
-	assemble(content: string, originalLink: string): string {
+	validate(content: string, units: TranslationUnit[] = this.units): Map<string, string> {
 		let value: unknown;
 		const trimmed = content.trim();
 		const fenced = trimmed.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i);
 		try { value = JSON.parse(fenced ? fenced[1] : trimmed); } catch { invalid(); }
-		if (!value || typeof value !== "object" || !("units" in value) || !Array.isArray(value.units) || value.units.length !== this.units.length) invalid();
+		if (!value || typeof value !== "object" || !("units" in value) || !Array.isArray(value.units) || value.units.length !== units.length) invalid();
 		const translated = new Map<string, string>();
-		const headingProse = new Map<string, string>();
 		for (const unit of value.units) {
-			const range = this.ranges.find(range => range.id === unit?.id);
+			const expected = units.find(expected => expected.id === unit?.id);
+			const original = expected && this.ranges.find(range => range.id === expected.id.split(".")[0]);
+			const range = original && expected ? { ...original, text: expected.text, protected: (expected.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? []).map(token => original.protected[Number(token.match(/:(\d+)⟧$/)![1])]) } : undefined;
 			if (!range || translated.has(unit.id) || typeof unit.text !== "string" || !unit.text.trim()) invalid();
 			const tokens = unit.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? [];
-			const expected = range.protected.map((_, index) => `${this.marker}${range.id}:${index}⟧`);
-			if (tokens.length !== expected.length || tokens.some((token: string, i: number) => token !== expected[i])) invalid();
-			for (let i = 0; i < expected.length; i++) {
+			const expectedTokens = range.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? [];
+			if (tokens.length !== expectedTokens.length || tokens.some((token: string, i: number) => token !== expectedTokens[i])) invalid();
+			for (let i = 0; i < expectedTokens.length; i++) {
 				if (!/^[*_~]+$/.test(range.protected[i])) continue;
-				const token = expected[i];
+				const token = expectedTokens[i];
 				const originalAt = range.text.indexOf(token);
 				const translatedAt = unit.text.indexOf(token);
 				const boundary = (text: string, at: number) => at < 0 || at >= text.length ? "edge" : /\s/u.test(text[at]) ? "space" : "text";
@@ -409,10 +426,20 @@ export class TranslationMarkdown {
 			const plain = unit.text.trim().replace(/⟦AIH\d+:p\d+:\d+⟧/g, "");
 			// Model prose cannot create local structure, placeholders, or Markdown.
 			if (!plain.trim() || /[\r\n⟦⟧<>`*_~#$^|\\{}\[\]\u0000-\u0008]/u.test(plain) || /\n[ \t]*\n|(^|\n)\s*(?:[-+>:=]|\d+[.)])(?:\s|$)/u.test(plain)) invalid();
+			translated.set(unit.id, unit.text.trim());
+		}
+		return translated;
+	}
+	assemble(content: string, originalLink: string): string {
+		const accepted = this.validate(content);
+		const translated = new Map<string, string>();
+		const headingProse = new Map<string, string>();
+		for (const range of this.ranges) {
+			const text = accepted.get(range.id);
+			if (text === undefined) continue;
 			let index = 0;
-			const restored = unit.text.trim().replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]);
-			translated.set(unit.id, restored);
-			headingProse.set(unit.id, this.headingProse(range, unit.text.trim()));
+			translated.set(range.id, text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]));
+			headingProse.set(range.id, this.headingProse(range, text));
 		}
 		for (const range of this.ranges) {
 			if (!translated.has(range.id)) { let index = 0; translated.set(range.id, range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++])); }

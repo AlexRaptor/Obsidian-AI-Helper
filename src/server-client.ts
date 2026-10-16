@@ -24,7 +24,7 @@ export type EmbeddingErrorCode = "embedding-config" | "embedding-auth" | "embedd
 
 export type ModelCheckErrorCode = "model-config" | "model-auth" | "model-unavailable" | "model-network" | "model-response";
 
-type ClientErrorCode = ModelCheckErrorCode | EmbeddingErrorCode | "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
+type ClientErrorCode = "context-length" | ModelCheckErrorCode | EmbeddingErrorCode | "empty" | "incomplete" | "timeout" | "invalid-stream" | "stream-error" | "invalid-response-wait" | "invalid-params";
 
 class ClientError extends Error {
 	constructor(message: string, readonly code: ClientErrorCode) { super(message); }
@@ -103,17 +103,29 @@ function bearerHeaders(apiKey?: string): Record<string, string> {
 	return headers;
 }
 
-async function readErrorMessage(response: Response): Promise<string> {
+async function readServerError(response: Response): Promise<{ message: string; error?: unknown }> {
 	let message = `Model server responded with status ${response.status}`;
+	let error: unknown;
 	try {
 		const body: unknown = await response.json();
+		error = isRecord(body) ? body.error : undefined;
 		if (isRecord(body) && isRecord(body.error) && typeof body.error.message === "string" && body.error.message) {
 			message = body.error.message;
 		}
 	} catch {
 		// non-JSON error body: keep the status message
 	}
-	return message;
+	return { message, error };
+}
+
+function contextLengthExceeded(error: unknown, message: string): boolean {
+	if (isRecord(error) && [error.code, error.type].some(code => typeof code === "string" && /^(?:context_length_exceeded|context_window_exceeded|exceed_context_size)$/.test(code))) return true;
+	// A concrete non-context classification wins over words shared with token rate limits.
+	if (isRecord(error)) {
+		if (typeof error.code === "string" && error.code) return false;
+		if (typeof error.type === "string" && error.type && !["invalid_request_error", "invalid_request", "BadRequestError"].includes(error.type)) return false;
+	}
+	return /context[_ -]length[_ -]exceeded|maximum context length|context (?:window|size) (?:is |was )?exceeded|exceeds? (?:the )?(?:available |maximum )?context|too many (?:input )?tokens|prompt (?:is )?too long/i.test(message);
 }
 
 class UnsupportedStreamingError extends Error {}
@@ -206,7 +218,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				method: "GET", headers: bearerHeaders(apiKey), signal: requestSignal,
 			});
 			if (!response.ok) {
-				return { ok: false, error: { message: await readErrorMessage(response) } };
+				return { ok: false, error: { message: (await readServerError(response)).message } };
 			}
 			let data: unknown;
 			try {
@@ -279,9 +291,10 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			const attempt = async (streaming: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
 				const requestBody: Record<string, unknown> = { ...body, stream: streaming };
 				if (!streaming) delete requestBody.stream_options;
-				const reject = (message: string): ServerClientResult<ChatCompletionResult> => {
+				const reject = (message: string, error?: unknown, canExceedContext = true): ServerClientResult<ChatCompletionResult> => {
 					if (streaming && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
-					return { ok: false, error: { message } };
+					const contextLength = canExceedContext && contextLengthExceeded(error, message);
+					return { ok: false, error: { message, ...(contextLength ? { code: "context-length" as const } : {}) } };
 				};
 				const response = await fetchImpl(url, {
 					method: "POST",
@@ -289,7 +302,10 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					body: JSON.stringify(requestBody),
 					signal,
 				});
-				if (!response.ok) return reject(await readErrorMessage(response));
+				if (!response.ok) {
+					const error = await readServerError(response);
+					return reject(error.message, error.error, [400, 413, 422].includes(response.status));
+				}
 
 				const fail = (code: "empty" | "incomplete"): ServerClientResult<ChatCompletionResult> => ({
 					ok: false, error: { code, message: code === "empty"
@@ -301,7 +317,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 						return { ok: false, error: { message: "Model server returned an unparseable response." } };
 					}
 					if (isRecord(data) && isRecord(data.error) && typeof data.error.message === "string") {
-						return reject(data.error.message);
+						return reject(data.error.message, data.error);
 					}
 					if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
 						!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string" ||
@@ -344,6 +360,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 						}
 						const message = parsed.error.message;
 						if (streaming && !content && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
+						if (contextLengthExceeded(parsed.error, message)) throw new ClientError(message, "context-length");
 						throw new Error(message);
 					}
 					if (!Array.isArray(parsed.choices)) return;

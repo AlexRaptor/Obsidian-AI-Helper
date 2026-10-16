@@ -8,7 +8,7 @@ import { Modal, Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; Modal.opened.slice().forEach(modal => modal.close()); Notice.messages.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-async function setup(options: { text?: string; settings?: Record<string, unknown>; embedding?: (body: any, signal?: AbortSignal | null) => Promise<Response>; completion?: (body: any, signal?: AbortSignal | null) => Promise<Response> } = {}) {
+async function setup(options: { metadata?: (url: string, init?: RequestInit) => Response; text?: string; settings?: Record<string, unknown>; embedding?: (body: any, signal?: AbortSignal | null) => Promise<Response>; completion?: (body: any, signal?: AbortSignal | null) => Promise<Response> } = {}) {
 	if (options.embedding) vi.stubGlobal("indexedDB", new IDBFactory());
 	const file = Object.assign(new TFile(), { path: "Заметки/Статья.md", basename: "Статья", extension: "md" });
 	const files = new Map<string, string>([[file.path, "Сохранённый текст."]]);
@@ -21,7 +21,7 @@ async function setup(options: { text?: string; settings?: Record<string, unknown
 	const requests: any[] = [];
 	const network = vi.fn(async (url: string, init?: RequestInit) => {
 		if (url.endsWith("/embeddings") && options.embedding) return options.embedding(JSON.parse(String(init?.body)), init?.signal);
-		if (!url.endsWith("/chat/completions")) return new Response(JSON.stringify({ data: [] }));
+		if (!url.endsWith("/chat/completions")) return options.metadata?.(url, init) ?? new Response(JSON.stringify({ data: [] }));
 		const body = JSON.parse(String(init?.body)); requests.push(body);
 		if (options.completion) return options.completion(body, init?.signal);
 		return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ units: [{ id: "p1", text: "Visible text." }, { id: "p2", text: "Second paragraph." }] }) }, finish_reason: "stop" }] }));
@@ -129,7 +129,7 @@ it.each(["length", "content_filter", "tool_calls", "unknown"])("не сохра�
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.app.vault.create).not.toHaveBeenCalled();
-	expect(Modal.opened[0].contentEl.getText()).toContain("Ответ модели обрезан");
+	expect(Modal.opened[0].contentEl.getText()).toContain(reason === "length" ? "Три автоматических уменьшения" : "Ответ модели обрезан");
 });
 it.each([
 	[{ id: "p1", text: "Один" }],
@@ -1070,4 +1070,168 @@ it("пустая отдельная папка блокирует также з�
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.requests).toHaveLength(0); expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+
+it("переводит большую заметку последовательно без пропущенного хвоста", async () => {
+	const text = Array.from({ length: 60 }, (_, i) => `Абзац ${i + 1}. ` + "Содержательный русский текст. ".repeat(8)).join("\n\n");
+	const env = await setup({ text, settings: { contextWindow: "", translationPrompt: "" }, completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		return response(units, "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.get("Заметки/Статья — en.md")).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`));
+	expect(env.requests.length).toBeGreaterThan(1);
+});
+
+
+it.each(["оценка", "сервер"])("собирает огромный абзац и таблицу с ограниченным ответом: %s", async counter => {
+	const text = "# Раздел\n\n" + "Очень длинное предложение с `кодом` и **выделением**. ".repeat(90) +
+		"\n\n| Название | Значение |\n| --- | --- |\n" + Array.from({ length: 80 }, (_, i) => `| Строка ${i} | Русский текст ${i} |`).join("\n");
+	let tokenizations = 0;
+	const env = await setup({ text, settings: { contextWindow: "8192", maxTokens: "700", translationPrompt: "" },
+		metadata: (url, init) => {
+			if (counter === "сервер" && url.endsWith("/v1/models")) return Response.json({ data: [{ id: "model", max_model_len: 8192 }] });
+			if (counter === "сервер" && url.endsWith("/tokenize")) {
+				tokenizations++;
+				const count = Math.ceil(new TextEncoder().encode(JSON.stringify(JSON.parse(String(init?.body)).messages)).length / 4);
+				return Response.json({ count, tokens: Array(count).fill(1) });
+			}
+			return Response.json({ data: [] });
+		}, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.get("Заметки/Статья — en.md")).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`), { timeout: 5000 });
+	expect(env.requests.length).toBeGreaterThan(3);
+	expect(env.requests.every(body => body.max_tokens === 700)).toBe(true);
+	expect(tokenizations > 0).toBe(counter === "сервер");
+});
+
+it("контекст раздела и предыдущие принятые пары не дублируются в результате", async () => {
+	const text = "# Терминология\n\n" + Array.from({ length: 8 }, (_, i) => `Понятие ${i}: ` + "важное значение. ".repeat(12)).join("\n\n");
+	const env = await setup({ text, settings: { contextWindow: "8192", maxTokens: "650", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`);
+	expect(env.requests.slice(1).some(body => body.messages.some((message: any) => message.content.includes('"previous":[{') && message.content.includes('"section":"Терминология"')))).toBe(true);
+});
+
+it.each(["length", "context"])("уменьшает неудавшуюся часть максимум три раза: %s", async failure => {
+	const env = await setup({ text: "Очень длинный оригинал. ".repeat(60), completion: async body => failure === "context"
+		? Response.json({ error: { message: "maximum context length exceeded" } }, { status: 400 })
+		: response(JSON.parse(body.messages.at(-1).content).units, "length") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(Modal.opened[0].contentEl.getText()).toContain("Три автоматических уменьшения"));
+	expect(env.requests).toHaveLength(4);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("прогресс принятого начала не уменьшается при делении и повторе", async () => {
+	const progress: number[] = [];
+	let failed = false;
+	const text = Array.from({ length: 8 }, (_, i) => `Абзац ${i}. ` + "Продолжение предложения. ".repeat(8)).join("\n\n");
+	const env = await setup({ text, settings: { maxTokens: "550", translationPrompt: "" }, completion: async body => {
+		const units = JSON.parse(body.messages.at(-1).content).units;
+		if (!failed && env.requests.length === 2) { failed = true; return response(units, "length"); }
+		return response(units, "stop");
+	} });
+	const unsubscribe = env.plugin.translation.subscribe(() => { progress.push(env.plugin.translation.progress); });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	unsubscribe();
+	expect(failed).toBe(true);
+	expect(progress.some(value => value > 0 && value < 1)).toBe(true);
+	expect(progress.at(-1)).toBe(1);
+	expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`);
+});
+
+it.each(["json", "sse", "fallback"])("не принимает фильтрацию и не повторяет её автоматически: %s", async transport => {
+	let rejected = false;
+	const env = await setup({ completion: async body => {
+		if (transport === "fallback" && !rejected) { rejected = true; return Response.json({ error: { message: "streaming is not supported" } }, { status: 400 }); }
+		const units = JSON.parse(body.messages.at(-1).content).units;
+		return transport === "sse" ? new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ units }) }, finish_reason: "content_filter" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } }) : response(units, "content_filter");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(Modal.opened[0].contentEl.getText()).toContain("Ответ модели обрезан"));
+	expect(env.requests).toHaveLength(transport === "fallback" ? 2 : 1);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+
+it("фиксирует обнаруженное окно и настройки до окончания операции", async () => {
+	const text = Array.from({ length: 12 }, (_, i) => `Раздел ${i}. ` + "Снимок оригинала неизменен. ".repeat(16)).join("\n\n");
+	let discovered = false;
+	const env = await setup({ text, settings: { contextWindow: "", translationPrompt: "" }, metadata: url => {
+		if (url.endsWith("/v1/models")) return Response.json({ data: [{ id: "model", max_model_len: discovered ? 100 : 4096 }] });
+		return Response.json({ data: [] });
+	}, completion: async body => {
+		discovered = true;
+		env.plugin.settings.contextWindow = "100"; env.plugin.settings.translationLanguage = "Другой язык";
+		return response(JSON.parse(body.messages.at(-1).content).units, "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.get("Заметки/Статья — en.md")).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`));
+	expect(env.requests.length).toBeGreaterThan(1);
+	expect(env.requests.every(body => body.max_tokens < 4096 && JSON.stringify(body.messages).includes("English"))).toBe(true);
+});
+
+it("не повторяет принятую часть после сетевой ошибки следующей части", async () => {
+	let failed = false;
+	const text = Array.from({ length: 5 }, (_, i) => `Пункт ${i}. ` + "Длинное описание. ".repeat(12)).join("\n\n");
+	const env = await setup({ text, settings: { maxTokens: "500", translationPrompt: "" }, completion: async body => {
+		if (env.requests.length === 2) { failed = true; return new Response("Сбой", { status: 503 }); }
+		return response(JSON.parse(body.messages.at(-1).content).units, "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(failed).toBe(true); expect(env.requests).toHaveLength(2);
+	expect(env.plugin.translation.progress).toBeGreaterThan(0);
+	const accepted = JSON.parse(env.requests[0].messages.at(-1).content).units;
+	button("Повторить").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	const retried = env.requests.slice(2).flatMap(body => JSON.parse(body.messages.at(-1).content).units);
+	expect(retried.some(unit => accepted.some((original: any) => original.id === unit.id))).toBe(false);
+	expect(env.files.get("Заметки/Статья — en.md")).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`);
+});
+
+it("останавливается раньше на неделимой единице", async () => {
+	const env = await setup({ text: "Я", completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "length") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(Modal.opened[0].contentEl.getText()).toContain("нельзя безопасно уменьшить"));
+	expect(env.requests).toHaveLength(1); expect(env.plugin.translation.progress).toBe(0);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("оборванная следующая часть не прибавляет прогресс и не сохраняет начало как полный перевод", async () => {
+	const env = await setup({ text: "Начало статьи.\n\n" + "Длинный хвост статьи. ".repeat(50), settings: { maxTokens: "500", translationPrompt: "" }, completion: async body => {
+		const content = JSON.stringify({ units: JSON.parse(body.messages.at(-1).content).units });
+		return env.requests.length === 1 ? response(JSON.parse(content).units, "stop") : new Response(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+	} });
+	const progress: number[] = [];
+	env.plugin.translation.subscribe(() => { if (env.plugin.translation.progress > 0) progress.push(env.plugin.translation.progress); });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.requests).toHaveLength(2);
+	expect(new Set(progress).size).toBe(1);
+	expect(progress[0]).toBeLessThan(1);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("не отделяет селекторы начертания вне BMP от исходного символа", async () => {
+	const glyph = "\u{20000}\u{E0100}";
+	const env = await setup({ text: glyph.repeat(101), settings: { maxTokens: "180", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	const units = env.requests.flatMap(body => JSON.parse(body.messages.at(-1).content).units);
+	expect(units.length).toBeGreaterThan(1);
+	expect(units.every(unit => /^(?:\u{20000}\u{E0100})+$/u.test(unit.text))).toBe(true);
+});
+
+it("не уменьшает часть автоматически после явного ограничения частоты в SSE", async () => {
+	const env = await setup({ completion: async () => new Response(`data: ${JSON.stringify({ error: { code: "rate_limit_exceeded", message: "Too many tokens requested, please try again later" } })}\n\n`, { headers: { "content-type": "text/event-stream" } }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.requests).toHaveLength(1);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
 });

@@ -39,7 +39,7 @@ export class TranslationModal extends Modal {
 			overwrite.buttonEl.style.display = operation.canSave && operation.conflict?.file ? "" : "none";
 			saveCopy.buttonEl.style.display = operation.canSave && operation.conflict ? "" : "none";
 			save.setDisabled(!operation.canSave); overwrite.setDisabled(!operation.canSave); saveCopy.setDisabled(!operation.canSave);
-			progress.setText(this.plugin.t(operation.stage));
+			progress.setText(this.plugin.t(operation.stage) + (["translation-preparing", "translation-running", "translation-error", "translation-waiting"].includes(operation.stage) ? ` — ${Math.floor(operation.progress * 100)}%` : ""));
 			detail.setText(operation.detail ? this.plugin.t(operation.detail) + (operation.saveError ? ` ${operation.saveError}` : "") : "");
 			const warning = operation.detail === "translation-unresolved" || operation.detail === "translation-conflict" || operation.detail === "translation-target-changed";
 			const error = operation.stage === "translation-error" || operation.detail === "translation-title-error" || operation.detail === "translation-name";
