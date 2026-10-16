@@ -288,3 +288,30 @@ it("сообщает об ошибке буфера обмена и сохран
 	button("Копировать ответ модели").click();
 	await vi.waitFor(() => expect(Notice.messages.at(-1)).toBe("Ответ модели скопирован"));
 });
+
+it.each([false, true])("принимает ответ из отчёта пользователя, Markdown-обрамление: %s", async wrapped => {
+	const raw = String.raw`{"units":[{"id":"p1","text":"Хорошие заметки сохраняют контекст. Полезный перевод сохраняет смысл оригинала."},{"id":"p2","text":"Этот абзац уже написан на русском языке и должен остаться без изменений.\n"}]}`;
+	const content = wrapped ? "```json\n" + raw + "\n```" : raw;
+	const env = await setup({ text: "Good notes preserve context. A useful translation preserves the meaning of the original.\n\nЭтот абзац уже написан на русском языке и должен остаться без изменений.\n", settings: { translationLanguage: "Русский" }, completion: async () => new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] })) });
+	const actions = new Map<string, () => void>();
+	env.events.get("file-menu")!({ addItem: (render: (item: any) => void) => {
+		let title = ""; const item = { setTitle: (value: string) => { title = value; return item; }, setIcon: () => item, onClick: (action: () => void) => { actions.set(title, action); return item; } }; render(item);
+	} }, env.file);
+	actions.get("Перевести текущую заметку")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(Modal.opened[0].contentEl.getText()).not.toContain("неправильный или неполный");
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nХорошие заметки сохраняют контекст. Полезный перевод сохраняет смысл оригинала.\n\nЭтот абзац уже написан на русском языке и должен остаться без изменений.\n");
+});
+it.each([
+	'Пояснение перед ответом\n```json\n{"units":[{"id":"p1","text":"Первый"},{"id":"p2","text":"Второй"}]}\n```',
+	'```json\n{"units":[{"id":"p1","text":"Первый"},{"id":"p2","text":"Второй"}]}',
+	'```json\n{"units":[{"id":"p1","text":"Первый"}]}\n```',
+	'```json\n{"units":[{"id":"p1","text":"Первый"},{"id":"p1","text":"Повтор"}]}\n```',
+	'```json\n{"units":[{"id":"p1","text":"Первый"},{"id":"p2","text":"Второй"}]}\n```\n```json\n{}\n```',
+])("обрамление не позволяет принять неоднозначный или неполный ответ: %s", async content => {
+	const env = await setup({ completion: async () => new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] })) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});

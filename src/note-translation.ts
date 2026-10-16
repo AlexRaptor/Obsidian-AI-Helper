@@ -34,7 +34,11 @@ function paragraphs(text: string): { units: Unit[]; parts: string[] } {
 }
 function translations(content: string, units: Unit[]): Map<string, string> {
 	let value: unknown;
-	try { value = JSON.parse(content); } catch { throw new TranslationError("translation-invalid"); }
+	// Some models wrap otherwise valid JSON despite the output instruction. Accept
+	// one complete outer fence, but never extract JSON from commentary or fragments.
+	const trimmed = content.trim();
+	const fenced = trimmed.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i);
+	try { value = JSON.parse(fenced ? fenced[1] : trimmed); } catch { throw new TranslationError("translation-invalid"); }
 	if (!value || typeof value !== "object" || !("units" in value) || !Array.isArray(value.units) || value.units.length !== units.length) throw new TranslationError("translation-invalid");
 	const expected = new Set(units.map(unit => unit.id));
 	const result = new Map<string, string>();
