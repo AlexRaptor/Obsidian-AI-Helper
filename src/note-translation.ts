@@ -16,6 +16,9 @@ interface TranslationSnapshot {
 	caseInsensitive: Promise<boolean>;
 	name: string;
 	originalLabel: string;
+	partialWarning: string;
+	partialEnd: string;
+	caseInsensitiveValue?: boolean;
 	settings: AiHelperSettings;
 	leaf: WorkspaceLeaf | null;
 	targets: ReturnType<typeof snapshotTranslationTargets>;
@@ -42,18 +45,43 @@ export class NoteTranslation {
 	get canSave(): boolean { return !this.busy && !!this.readySave; }
 	get conflict() { return this.readySave?.save.conflict; }
 	private controller?: AbortController;
+	private release?: () => void;
 	private retryWork?: { snapshot: TranslationSnapshot; reading: Promise<string> };
-	get canRetry(): boolean { return !this.busy && !!this.retryWork; }
+	get canRetry(): boolean { return !this.busy && !!this.retryWork && !this.readySave; }
 	private snapshot?: TranslationSnapshot;
 	progress = 0;
+	partialResult = false;
 	private response: string | undefined;
 	get debugResponse(): string | undefined { return this.plugin.settings.translationDebugMode ? this.response : undefined; }
 	private listeners = new Set<() => void>();
 	constructor(private plugin: AiHelperPlugin) {}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private update(stage: TranslationStage, detail?: LocaleKey): void { this.stage = stage; this.detail = detail; this.listeners.forEach(listener => listener()); }
+	stop(): void {
+		if (!this.busy || this.stage === "translation-saving") return;
+		this.controller?.abort(); this.controller = undefined; this.release?.(); this.release = undefined;
+		this.busy = false; this.response = undefined;
+		this.update("translation-error");
+	}
+	get canSavePartial(): boolean { return !this.busy && !this.readySave && !!this.snapshot?.parts?.partial(); }
+	async savePartial(): Promise<void> {
+		if (!this.canSavePartial) return;
+		const snapshot = this.snapshot!;
+		this.partialResult = true;
+		const partial = snapshot.parts!.partial()!;
+		const controller = new AbortController(); this.controller = controller;
+		const warning = snapshot.partialWarning;
+		const ending = snapshot.partialEnd;
+		const assemble = (path: string) => {
+			snapshot.links!.setResultPath(path);
+			const link = encodeDestination(relativePath(path, snapshot.path)).replace(/#/g, "%23");
+			return snapshot.document!.assemble(partial.content, `> [!warning] ${warning}\n\n[${snapshot.originalLabel}](<${link}>)`, partial.end).trimEnd() + "\n\n" + ending;
+		};
+		this.readySave = { snapshot, save: new TranslationSave(this.plugin.app.vault, snapshot.path, snapshot.resultPath!, assemble, controller.signal, snapshot.caseInsensitiveValue ?? true) };
+		await this.save();
+	}
 	cancel(): void {
-		this.controller?.abort(); this.controller = undefined; this.busy = false; this.active = false; this.response = undefined; this.retryWork = undefined; this.readySave = undefined; this.snapshot = undefined;
+		this.controller?.abort(); this.release?.(); this.release = undefined; this.controller = undefined; this.busy = false; this.active = false; this.response = undefined; this.retryWork = undefined; this.readySave = undefined; this.snapshot = undefined;
 		this.update("translation-cancelled");
 	}
 	dispose(): void { this.cancel(); this.listeners.clear(); }
@@ -62,7 +90,7 @@ export class NoteTranslation {
 		const lease = this.acquire();
 		if (!lease) return false;
 		const { app } = this.plugin;
-		this.active = true; this.busy = true; this.savedPath = ""; this.saveError = ""; this.response = undefined; this.progress = 0; this.snapshot = undefined;
+		this.active = true; this.busy = true; this.savedPath = ""; this.saveError = ""; this.response = undefined; this.progress = 0; this.partialResult = false; this.snapshot = undefined;
 		const controller = new AbortController(); this.controller = controller;
 		const path = file.path;
 		const leaves = app.workspace.getLeavesOfType("markdown");
@@ -71,13 +99,14 @@ export class NoteTranslation {
 		// Probe equivalent casing while the original still exists; never follow its later moves.
 		const probe = path.slice(0, -1) + (path.endsWith("d") ? "D" : "d");
 		const caseInsensitive = Promise.all([app.vault.adapter.exists(probe), app.vault.adapter.exists(probe, true)]).then(([exists, exact]) => exists && !exact, () => true);
-		const snapshot: TranslationSnapshot = { caseInsensitive, originalLabel: this.plugin.t("translation-original"), path, name: path.slice(path.lastIndexOf("/") + 1, -3), settings: { ...this.plugin.settings }, targets: snapshotTranslationTargets(app, path), leaf: view?.leaf ?? app.workspace.activeLeaf };
+		const snapshot: TranslationSnapshot = { caseInsensitive, partialWarning: this.plugin.t("translation-partial-warning"), partialEnd: this.plugin.t("translation-partial-end"), originalLabel: this.plugin.t("translation-original"), path, name: path.slice(path.lastIndexOf("/") + 1, -3), settings: { ...this.plugin.settings }, targets: snapshotTranslationTargets(app, path), leaf: view?.leaf ?? app.workspace.activeLeaf };
 		this.snapshot = snapshot;
 		this.update("translation-preparing");
 		// Read the editor synchronously before yielding; a closed file read starts now too.
 		let text: Promise<string>;
 		try { text = view ? Promise.resolve(view.getMode() === "source" ? view.editor.getValue() : view.getViewData()) : app.vault.read(file); }
 		catch { text = Promise.reject(new TranslationError("translation-read-error")); }
+		this.retryWork = { snapshot, reading: text }; this.release = () => lease.release();
 		void this.run(snapshot, text, controller, lease);
 		return true;
 	}
@@ -97,7 +126,7 @@ export class NoteTranslation {
 		const lease = this.acquire();
 		if (!lease) return;
 		const { snapshot, reading } = this.retryWork!;
-		this.retryWork = undefined; this.busy = true; this.response = undefined;
+		this.busy = true; this.response = undefined; this.release = () => lease.release();
 		const controller = new AbortController(); this.controller = controller;
 		this.update("translation-preparing");
 		void this.run(snapshot, reading, controller, lease);
@@ -111,6 +140,7 @@ export class NoteTranslation {
 		try {
 			const text = await Promise.race([reading, interrupted]); check();
 			const caseInsensitive = await Promise.race([snapshot.caseInsensitive, interrupted]); check();
+			snapshot.caseInsensitiveValue = caseInsensitive;
 			const s = snapshot.settings;
 			if (!s.translationLanguage.trim() || !connectionUrl(s.serverUrl) || !s.model.trim()) throw new TranslationError("translation-config");
 			let folder = snapshot.path.slice(0, snapshot.path.lastIndexOf("/"));
@@ -192,12 +222,13 @@ export class NoteTranslation {
 						if (!result.ok) throw new TranslationError("translation-model-error");
 						if (result.value.finishReason !== undefined && result.value.finishReason !== "stop") throw new TranslationError("translation-incomplete");
 						parts.accept(count, result.value.content);
-						this.progress = parts.progress; this.update("translation-running");
+						this.progress = parts.progress * document.coverage; this.update("translation-running");
 						break;
 					}
 				}
 				content = parts.content();
 			}
+			if (document.blocked) throw new TranslationError("translation-unsupported");
 			// Validate the response before exposing any save actions, then retain it in memory.
 			const assemble = (path: string) => {
 				snapshot.links!.setResultPath(path);
@@ -205,14 +236,14 @@ export class NoteTranslation {
 				return document.assemble(content, `[${snapshot.originalLabel}](<${originalLink}>)`);
 			};
 			assemble(snapshot.resultPath!); check();
-			this.progress = 1;
+			this.progress = 1; this.retryWork = undefined;
 			this.readySave = { snapshot, save: new TranslationSave(this.plugin.app.vault, snapshot.path, snapshot.resultPath!, assemble, signal, caseInsensitive) };
 			priority.release();
 			this.busy = false;
 			await this.save();
 		} catch (error) {
 			if (!signal.aborted) {
-				if (error instanceof TranslationError && ["translation-model-error", "translation-title-error", "translation-name"].includes(error.key)) this.retryWork = { snapshot, reading };
+				this.retryWork = { snapshot, reading };
 				if (error instanceof TranslationError && ["translation-title-error", "translation-name"].includes(error.key)) {
 					this.update("translation-waiting", error.key); return;
 				}
@@ -235,7 +266,7 @@ export class NoteTranslation {
 			this.savedPath = file.path;
 			try { await this.open(ready.snapshot, file, this.controller!.signal); if (this.readySave !== ready) return; this.update("translation-saved", ready.snapshot.links?.unresolved ? "translation-unresolved" : undefined); }
 			catch { if (this.readySave !== ready) return; this.update("translation-saved", "translation-open-error"); }
-			this.active = false; this.readySave = undefined; this.snapshot = undefined;
+			this.active = false; this.readySave = undefined; this.snapshot = undefined; this.retryWork = undefined;
 		} catch (error) {
 			if (this.readySave === ready) {
 				this.saveError = error instanceof Error ? error.message : String(error);

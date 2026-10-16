@@ -8,7 +8,7 @@ import { Modal, Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; Modal.opened.slice().forEach(modal => modal.close()); Notice.messages.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-async function setup(options: { metadata?: (url: string, init?: RequestInit) => Response; text?: string; settings?: Record<string, unknown>; embedding?: (body: any, signal?: AbortSignal | null) => Promise<Response>; completion?: (body: any, signal?: AbortSignal | null) => Promise<Response> } = {}) {
+async function setup(options: { metadata?: (url: string, init?: RequestInit) => Response | Promise<Response>; text?: string; settings?: Record<string, unknown>; embedding?: (body: any, signal?: AbortSignal | null) => Promise<Response>; completion?: (body: any, signal?: AbortSignal | null) => Promise<Response> } = {}) {
 	if (options.embedding) vi.stubGlobal("indexedDB", new IDBFactory());
 	const file = Object.assign(new TFile(), { path: "Заметки/Статья.md", basename: "Статья", extension: "md" });
 	const files = new Map<string, string>([[file.path, "Сохранённый текст."]]);
@@ -222,7 +222,7 @@ it("после отмены чтения закрытой заметки сра�
 	Object.assign(env.app.workspace, { getLeavesOfType: () => [], getActiveViewOfType: () => null });
 	vi.mocked(env.app.vault.read).mockReturnValueOnce(reading.promise);
 	env.commands.get("translate-current-note")!();
-	button("Остановить").click();
+	button("Остановить").click(); button("Завершить").click();
 	Object.assign(env.app.workspace, { getActiveViewOfType: (type: unknown) => type === MarkdownView ? env.view : null });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
@@ -343,17 +343,17 @@ it("после ошибки освобождает чат, а повтор пр�
 	const { chat, root } = await env.openChat();
 	try {
 		env.commands.get("translate-current-note")!();
-		await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+		await vi.waitFor(() => expect(button("Продолжить перевод").disabled).toBe(false));
 		root.find("ai-helper-input").value = "Обсудим статью"; root.find("ai-helper-send").click();
 		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
-		button("Повторить").click();
+		button("Продолжить перевод").click();
 		expect(Notice.messages.at(-1)).toContain("Дождитесь");
 		pending.resolve(new Response(JSON.stringify({ choices: [{ message: { content: "Обсудим." } }] })));
 		await vi.waitFor(() => expect(chat.isGenerating()).toBe(false));
 		expect(attempts).toBe(1);
 		env.view.editor.getValue = () => "Изменённый оригинал";
 		env.plugin.settings.translationLanguage = "Deutsch";
-		button("Повторить").click(); button("Повторить").click();
+		button("Продолжить перевод").click(); button("Продолжить перевод").click();
 		await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
 		expect(attempts).toBe(2);
 		expect(JSON.stringify(env.requests.at(-1))).toContain("Видимый текст.");
@@ -440,7 +440,7 @@ it.each(["пауза", "ошибка"])("освобождение перевод
 		env.commands.get("translate-current-note")!();
 		await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 		translation.resolve(new Response("{}", { status: 503 }));
-		await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+		await vi.waitFor(() => expect(button("Продолжить перевод").disabled).toBe(false));
 		await new Promise(resolve => setTimeout(resolve, 40));
 		expect(embeddings).toBe(1);
 		expect(root.find("ai-helper-index-reason").getText()).toBe(before);
@@ -453,7 +453,7 @@ it("позднее завершение отменённой попытки не
 	try {
 		env.commands.get("translate-current-note")!();
 		await vi.waitFor(() => expect(env.requests).toHaveLength(1));
-		button("Остановить").click(); env.commands.get("translate-current-note")!();
+		button("Остановить").click(); button("Завершить").click(); env.commands.get("translate-current-note")!();
 		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
 		old.resolve(response([{ id: "p1", text: "Поздний." }, { id: "p2", text: "Ответ." }], "stop"));
 		await new Promise(resolve => setTimeout(resolve, 20));
@@ -663,9 +663,9 @@ it.each([
 	"> [!tip]- Заголовок\n> :::расширение\n> Текст",
 	"| Имя | Значение |\n| --- | --- |\n| Текст | <span>Неизвестное</span> |",
 ])("останавливает неизвестную или неоднозначную сложную разметку до запроса: %s", async text => {
-	const env = await setup({ text }); env.commands.get("translate-current-note")!();
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") }); env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.requests).toHaveLength(0);
+	expect(env.requests.flatMap(body => JSON.parse(body.messages.at(-1).content).units).every((unit: any) => !unit.text.includes("Неизвестное") && !unit.text.includes("Лишняя"))).toBe(true);
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 	expect(Modal.opened[0].contentEl.getText()).toContain("неподдерживаемая");
 });
@@ -684,7 +684,7 @@ it.each(["", "---", "    Секретный код"])("не продолжает
 	const env = await setup({ text: "| Имя | Значение |\n| --- | --- |\n| Текст | Значение |\n" + boundary + "\n| Неизвестная | Конструкция |" });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.requests).toHaveLength(0);
+	expect(env.requests.flatMap(body => JSON.parse(body.messages.at(-1).content).units).every((unit: any) => !unit.text.includes("Неизвестное") && !unit.text.includes("Лишняя"))).toBe(true);
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 });
 
@@ -1035,8 +1035,8 @@ it("повтор содержимого сохраняет уже перевед
 		return response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop");
 	} });
 	env.commands.get("translate-current-note")!();
-	await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
-	button("Повторить").click();
+	await vi.waitFor(() => expect(button("Продолжить перевод").disabled).toBe(false));
+	button("Продолжить перевод").click();
 	await vi.waitFor(() => expect(env.files.has("Заметки/Название.md")).toBe(true));
 	expect(env.requests).toHaveLength(3); expect(env.requests.filter(body => body.messages.at(-1).content === "Статья")).toHaveLength(1);
 });
@@ -1188,7 +1188,7 @@ it("не повторяет принятую часть после сетево�
 	expect(failed).toBe(true); expect(env.requests).toHaveLength(2);
 	expect(env.plugin.translation.progress).toBeGreaterThan(0);
 	const accepted = JSON.parse(env.requests[0].messages.at(-1).content).units;
-	button("Повторить").click();
+	button("Продолжить перевод").click();
 	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
 	const retried = env.requests.slice(2).flatMap(body => JSON.parse(body.messages.at(-1).content).units);
 	expect(retried.some(unit => accepted.some((original: any) => original.id === unit.id))).toBe(false);
@@ -1234,4 +1234,224 @@ it("не уменьшает часть автоматически после я�
 	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
 	expect(env.requests).toHaveLength(1);
 	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("после остановки до первой части продолжает прежний снимок и игнорирует поздний ответ", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ completion: async body => env.requests.length === 1 ? pending.promise : response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	button("Остановить").click();
+	expect(button("Продолжить перевод").disabled).toBe(false);
+	expect(button("Сохранить неполный перевод").disabled).toBe(true);
+	env.view.editor.getValue = () => "Изменённый оригинал.";
+	env.plugin.settings.translationSuffix = " — новый";
+	pending.resolve(response([{ id: "p1", text: "Поздний ответ." }, { id: "p2", text: "Поздний ответ." }], "stop"));
+	button("Продолжить перевод").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("Видимый текст.\n\nВторой абзац.");
+	expect(env.requests).toHaveLength(2);
+});
+
+it("сохраняет непрерывное начало с предупреждением после свойств без повторного запроса", async () => {
+	const text = '---\ntitle: Оригинал\n---\nНачало статьи.\n\n' + 'Непереведённый хвост. '.repeat(100);
+	const env = await setup({ text, settings: { maxTokens: "500", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => ({ ...unit, text: "Переведённое начало." })), "stop") : new Response("Сбой", { status: 503 }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	expect(env.files.get("Заметки/Статья — en.md")).toBe('---\ntitle: Оригинал\n---\n> [!warning] Неполный перевод\n\n[Оригинал](<./Статья.md>)\n\nПереведённое начало.\n\nПеревод остановлен здесь. Оставшаяся часть оригинала не переведена');
+	expect(env.requests).toHaveLength(2);
+	expect(env.plugin.translation.active).toBe(false);
+});
+
+it("перед неизвестным HTML переводит только начало и не пропускает препятствие при продолжении", async () => {
+	const env = await setup({ text: "Начало.\n\n<div>Неизвестный текст</div>\n\nКонец.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => ({ ...unit, text: "Переведённое начало." })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	button("Продолжить перевод").click();
+	await vi.waitFor(() => expect(button("Продолжить перевод").disabled).toBe(false));
+	expect(env.requests).toHaveLength(1);
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("Переведённое начало.");
+	expect(env.files.get("Заметки/Статья — en.md")).not.toMatch(/Неизвестный|Конец|<div>/);
+});
+
+it.each(["сноска", "заголовок"])("не принимает часть с зависимостью от последующего переводимого содержания: %s", async kind => {
+	const dependent = kind === "сноска" ? "Ссылка на сноску[^позже]." : "[Перейти](#Позже).";
+	const target = kind === "сноска" ? "[^позже]: Переводимый текст сноски." : "# Позже\nТекст раздела.";
+	const env = await setup({ text: "Готовое начало.\n\n" + dependent + "\n\n" + "Большой промежуточный текст. ".repeat(100) + "\n\n" + target,
+		settings: { maxTokens: "180", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	expect(env.requests).toHaveLength(2);
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+	const saved = env.files.get("Заметки/Статья — en.md")!;
+	expect(saved).toContain("Готовое начало.");
+	expect(saved).not.toMatch(/Ссылка|Перейти|Большой|Позже|сноски/);
+});
+
+it.each(["suffix", "translated"])("неполный перевод использует правило имени %s, папку и все решения конфликта", async mode => {
+	for (const action of ["overwrite", "copy", "cancel", "retry"] as const) {
+		let parts = 0;
+		const env = await setup({ text: "Готовое начало.\n\n" + "Оставшийся текст. ".repeat(100), settings: { maxTokens: "500", translationPrompt: "", translationNameMode: mode, translationFolderMode: "custom", translationFolder: "Переводы/Статьи" }, completion: async body => {
+			if (body.messages.at(-1).content === "Статья") return Response.json({ choices: [{ message: { content: "Переведённая статья" }, finish_reason: "stop" }] });
+			return ++parts === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 });
+		} });
+		const path = `Переводы/Статьи/${mode === "suffix" ? "Статья — en" : "Переведённая статья"}.md`;
+		if (action !== "retry") env.files.set(path, "Существующий перевод.");
+		else vi.mocked(env.app.vault.create).mockRejectedValueOnce(Error("Нет места"));
+		env.commands.get("translate-current-note")!();
+		await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+		const calls = env.requests.length;
+		env.plugin.settings.translationFolder = "Изменено"; env.plugin.settings.translationSuffix = "Другой";
+		button("Сохранить неполный перевод").click();
+		await vi.waitFor(() => expect(button(action === "retry" ? "Сохранить" : "Сохранить копию").style.display).toBe(""));
+		if (action === "cancel") button("Отмена").click();
+		else button(action === "overwrite" ? "Перезаписать" : action === "copy" ? "Сохранить копию" : "Сохранить").click();
+		await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+		const saved = action === "copy" ? path.slice(0, -3) + " (2).md" : path;
+		if (action === "cancel") expect(env.files.get(path)).toBe("Существующий перевод.");
+		else {
+			expect(env.files.get(saved)).toContain("> [!warning] Неполный перевод");
+			expect(env.files.get(saved)).toContain("Готовое начало.");
+			expect(env.files.get(saved)).not.toContain("Оставшийся текст");
+			expect(env.files.get(saved)).toContain("../../Заметки/Статья.md");
+			expect(Modal.opened.at(-1)?.contentEl.getText()).not.toContain("100%");
+		}
+		expect(env.requests).toHaveLength(calls);
+		Modal.opened.slice().forEach(modal => modal.close());
+	}
+});
+
+it("неполный результат сохраняет целую таблицу, переведённую сноску и reference-определение", async () => {
+	const beginning = "Текст[^а] и [подпись][ссылка].\n\n[^а]: Описание сноски.\n\n| Имя | Значение |\n| --- | --- |\n| Строка | Данные |";
+	const env = await setup({ text: beginning + "\n\n" + "Непереведённый хвост. ".repeat(100) + '\n\n[ссылка]: https://example.com', settings: { maxTokens: "800", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	const saved = env.files.get("Заметки/Статья — en.md")!;
+	expect(saved).toContain(beginning);
+	expect(saved).toContain('[ссылка]: https://example.com');
+	expect(saved).not.toContain("Непереведённый хвост");
+});
+
+it("пустые неизвестные HTML-элементы не останавливают перевод", async () => {
+	const text = "Текст <custom/> и <widget></widget>.";
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.get("Заметки/Статья — en.md")).toContain(text));
+});
+
+it("английские предупреждения неполного перевода фиксируются при запуске", async () => {
+	const env = await setup({ text: "Готовое начало.\n\n" + "Хвост. ".repeat(300), settings: { language: "en", maxTokens: "500", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Save partial translation").disabled).toBe(false));
+	env.plugin.settings.language = "ru";
+	button("Save partial translation").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("> [!warning] Partial translation");
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("Translation stopped here. The remaining original text has not been translated.");
+});
+
+it("сохраняет принятое начало внутри большого абзаца без непереведённого остатка", async () => {
+	const env = await setup({ text: "Длинный абзац статьи. ".repeat(200), settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => ({ ...unit, text: "Готовый фрагмент." })), "stop") : new Response("Сбой", { status: 503 }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("Готовый фрагмент.");
+	expect(env.files.get("Заметки/Статья — en.md")).not.toContain("Длинный абзац");
+});
+
+it.each(["чтение", "подсчёт"])("остановка на стадии %s оставляет снимок и освобождает модель до позднего ответа", async stage => {
+	const reading = deferred<string>(); const counting = deferred<Response>(); let counts = 0; let signal: AbortSignal | null | undefined;
+	const env = await setup({ metadata: (url, init) => {
+		if (url.endsWith("/v1/models")) return Response.json({ data: [{ id: "model", max_model_len: 32000 }] });
+		if (url.endsWith("/tokenize")) { signal = init?.signal; return ++counts === 1 ? counting.promise : Response.json({ tokens: [1, 2], count: 2 }); }
+		return Response.json({ data: [] });
+	}, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	if (stage === "чтение") {
+		Object.assign(env.app.workspace, { getActiveViewOfType: () => null, getLeavesOfType: () => [] });
+		vi.mocked(env.app.vault.read).mockReturnValueOnce(reading.promise);
+	}
+	env.commands.get("translate-current-note")!();
+	if (stage === "подсчёт") await vi.waitFor(() => expect(counts).toBe(1));
+	button("Остановить").click();
+	if (stage === "подсчёт") expect(signal?.aborted).toBe(true);
+	expect(button("Продолжить перевод").disabled).toBe(false);
+	expect(button("Сохранить неполный перевод").disabled).toBe(true);
+	env.commands.get("translate-current-note")!();
+	expect(env.requests).toHaveLength(0);
+	reading.resolve("Текст прежнего снимка."); counting.resolve(Response.json({ tokens: [1], count: 1 }));
+	await new Promise(resolve => setTimeout(resolve, 10));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	button("Продолжить перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.files.get("Заметки/Статья — en.md")).toContain(stage === "чтение" ? "Текст прежнего снимка." : "Видимый текст.");
+});
+
+it("остановка после готовой части сохраняет её, отмена и выгрузка не восстанавливают операцию", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ text: "Готовое начало.\n\n" + "Длинный хвост. ".repeat(100), settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length === 2 ? pending.promise : response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+	button("Остановить").click();
+	expect(button("Сохранить неполный перевод").disabled).toBe(false);
+	button("Завершить").click();
+	expect(env.plugin.translation.active).toBe(false);
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests.length).toBeGreaterThan(2));
+	expect(JSON.parse(env.requests[2].messages.at(-1).content).units[0].text).toBe("Готовое начало.");
+	env.plugin.onunload();
+	expect(env.plugin.translation.canRetry).toBe(false);
+	expect(env.plugin.translation.canSavePartial).toBe(false);
+	pending.resolve(response([{ id: "p2", text: "Поздно." }], "stop"));
+});
+
+it("не сохраняет незавершённую строку таблицы после принятого фрагмента ячейки", async () => {
+	const env = await setup({ text: "Готовое начало.\n\n| Имя | Значение |\n| --- | --- |\n| " + "Большая ячейка. ".repeat(100) + " | Остаток строки |", settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length < 3 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	const saved = env.files.get("Заметки/Статья — en.md")!;
+	expect(saved).toContain("| Имя | Значение |\n| --- | --- |");
+	expect(saved).not.toMatch(/Большая|Остаток/);
+});
+
+it("восстанавливает нужную защищённую сноску, игнорируя неиспользуемую reference-ссылку из хвоста", async () => {
+	const env = await setup({ text: 'Начало[^а].\n\n' + 'Непереведённый хвост. '.repeat(100) + '\n\n[^а]: `код`\n\n# Позже\n\n[лишняя]: #Позже', settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	const saved = env.files.get("Заметки/Статья — en.md")!;
+	expect(saved).toContain("Начало[^а].");
+	expect(saved).toContain('[^а]: `код`');
+	expect(saved).not.toMatch(/хвост|Позже|лишняя/);
+});
+
+it("ссылка на отдельный идентификатор списка не принимается без перевода самого списка", async () => {
+	const env = await setup({ text: 'Готовое начало.\n\n[Перейти](#^список).\n\n' + 'Непереведённый хвост. '.repeat(100) + '\n\n- Первый пункт.\n- Второй пункт.\n\n^список', settings: { maxTokens: "180", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	expect(env.requests).toHaveLength(2);
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.files.get("Заметки/Статья — en.md")).not.toMatch(/Перейти|список|пункт|хвост/);
+});
+
+it("незакрытый большой блок останавливает перевод на его начале без повторного разбора строк", async () => {
+	const env = await setup({ text: 'Готовое начало.\n\n```\n' + 'защищённая строка\n'.repeat(3000), completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
+	expect(env.plugin.translation.progress).toBeLessThan(1);
+	button("Сохранить неполный перевод").click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.files.get("Заметки/Статья — en.md")).not.toMatch(/защищённая|```/);
 });

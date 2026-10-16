@@ -28,6 +28,7 @@ export class TranslationLinks {
 	unresolved = false;
 	private headings = new Map<string, number>();
 	setHeadings(headings: readonly string[]): void {
+		this.headings.clear();
 		for (const heading of headings) this.headings.set(heading, (this.headings.get(heading) ?? 0) + 1);
 	}
 	private destinations: { marker: string; raw: string; path: string; fragment: string; wiki: boolean }[] = [];
@@ -66,8 +67,12 @@ export class TranslationLinks {
 		this.destinations.push({ marker, raw, path, fragment, wiki });
 		return marker;
 	}
+	localFragments(body: string): string[] {
+		return this.destinations.filter(link => link.path === this.original && link.fragment && body.includes(link.marker)).map(link => link.fragment);
+	}
 	assemble(body: string, headings: ReadonlyMap<string, string>): string {
 		for (const link of this.destinations) {
+			if (!body.includes(link.marker)) continue;
 			let fragment = link.fragment;
 			if (link.path === this.original && fragment && !fragment.startsWith("#^")) {
 				const translated = headings.get(stripHeading(fragment.slice(1)).toLowerCase());

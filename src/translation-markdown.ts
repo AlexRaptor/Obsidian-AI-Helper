@@ -12,10 +12,14 @@ function invalid(): never { throw new TranslationMarkdownError("invalid"); }
 export class TranslationMarkdown {
 	readonly units: TranslationUnit[] = [];
 	readonly frontmatterEnd: number;
+	blocked = false;
+	coverage = 1;
+	private parseBoundary = 0;
 	private ranges: Range[] = [];
 	private marker = "";
 	private headings: { start: number; end: number; key?: string }[] = [];
 	private referenceDefinitions: { start: number; end: number; text: string }[] = [];
+	private footnotes = new Map<string, { start: number; end: number }>();
 	private references = new Map<string, boolean>();
 	constructor(private source: string, private links?: TranslationLinks) {
 		if (!source.trim()) throw new TranslationMarkdownError("empty");
@@ -24,28 +28,92 @@ export class TranslationMarkdown {
 		const frontmatter = source.match(/^(?:\uFEFF)?---[ \t]*\r?\n(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
 		if (/^(?:\uFEFF)?---[ \t]*\r?\n/.test(source) && !frontmatter) unsupported();
 		this.frontmatterEnd = frontmatter?.[0].length ?? 0;
-		this.parseBlocks();
-		for (const definition of this.referenceDefinitions) {
-			const key = this.referenceKey(definition.text.match(/^ {0,3}\[([^\]]+)\]/)![1]);
-			if (this.references.has(key)) unsupported();
-			this.references.set(key, true);
-		}
-		for (const heading of this.headings) {
-			heading.key = stripHeading(this.headingRanges(heading).map(range => this.headingLabel(this.source.slice(range.start, range.end))).join(" ")).toLowerCase();
-		}
-		this.links?.setHeadings(this.headings.map(heading => heading.key!));
-		for (const definition of this.referenceDefinitions) {
-			const rewritten = this.reference(definition.text);
-			const range = this.ranges.find(range => range.start === definition.start)!;
-			range.protected[0] = rewritten;
-		}
-		for (const range of this.ranges) {
-			if (!range.text) range.text = this.inline(this.source.slice(range.start, range.end), range);
-			// Protected-only ranges still participate in local assembly.
-			if (range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, "").trim()) this.units.push({ id: range.id, text: range.text });
+		try {
+			this.parseBlocks();
+			for (const definition of this.referenceDefinitions) {
+				this.parseBoundary = this.source.lastIndexOf("\n", definition.start - 1) + 1;
+				const key = this.referenceKey(definition.text.match(/^ {0,3}\[([^\]]+)\]/)![1]);
+				if (this.references.has(key)) unsupported();
+				this.references.set(key, true);
+			}
+			for (const heading of this.headings) {
+				this.parseBoundary = this.source.lastIndexOf("\n", heading.start - 1) + 1;
+				heading.key = stripHeading(this.headingRanges(heading).map(range => this.headingLabel(this.source.slice(range.start, range.end))).join(" ")).toLowerCase();
+			}
+			this.links?.setHeadings(this.headings.map(heading => heading.key!));
+			for (const definition of this.referenceDefinitions) {
+				this.parseBoundary = this.source.lastIndexOf("\n", definition.start - 1) + 1;
+				const rewritten = this.reference(definition.text);
+				const range = this.ranges.find(range => range.start === definition.start)!;
+				range.protected[0] = rewritten;
+			}
+			for (const range of this.ranges) {
+				this.parseBoundary = this.source.lastIndexOf("\n", range.start - 1) + 1;
+				if (!range.text) range.text = this.inline(this.source.slice(range.start, range.end), range);
+				// Protected-only ranges still participate in local assembly.
+				if (range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, "").trim()) this.units.push({ id: range.id, text: range.text });
+			}
+		} catch (error) {
+			if (!(error instanceof TranslationMarkdownError) || error.kind !== "unsupported" || this.parseBoundary <= this.frontmatterEnd) throw error;
+			const prefix = new TranslationMarkdown(this.source.slice(0, this.parseBoundary), this.links);
+			Object.assign(this, prefix);
+			this.blocked = true;
+			this.coverage = this.source.length / source.length;
 		}
 	}
+	private referenceRanges(ranges: Range[]): Range[] {
+		const keys = new Set(ranges.flatMap(range => range.protected.flatMap(token => {
+			const match = token.match(/^\]\[([^\]]+)\]$/);
+			return match ? [this.referenceKey(match[1])] : [];
+		})));
+		return this.referenceDefinitions.filter(definition => keys.has(this.referenceKey(definition.text.match(/^ {0,3}\[([^\]]+)\]/)![1])))
+			.map(definition => this.ranges.find(range => range.start === definition.start)!);
+	}
+	private dependencyClosure(initial: Range[]): Range[] {
+		const pending = [...initial];
+		const visited = new Set<Range>();
+		while (pending.length) {
+			const range = pending.pop()!;
+			if (visited.has(range)) continue;
+			visited.add(range);
+			pending.push(...this.referenceRanges([range]));
+			for (const token of range.protected) {
+				const match = token.match(/^\[\^([^\]\s]+)\]$/);
+				if (!match) continue;
+				const definition = this.footnotes.get(match[1]);
+				if (!definition) unsupported();
+				pending.push(...this.ranges.filter(candidate => candidate.start >= definition.start && candidate.end <= definition.end));
+			}
+			for (const fragment of this.links?.localFragments(range.protected.join("")) ?? []) {
+				if (fragment.startsWith("#^")) {
+					const target = this.ranges.find(candidate => this.source.slice(candidate.start, candidate.end).endsWith(fragment.slice(1)));
+					if (!target) unsupported();
+					pending.push(target);
+					// A standalone block identifier belongs to the preceding paragraph/list.
+					if (!this.units.some(unit => unit.id === target.id)) {
+						const previous = this.ranges.filter(range => range.end < target.start && this.units.some(unit => unit.id === range.id)).at(-1);
+						if (previous) pending.push(previous);
+					}
+				} else {
+					const heading = this.headings.find(heading => heading.key === stripHeading(fragment.slice(1)).toLowerCase());
+					if (heading) pending.push(...this.headingRanges(heading)); else unsupported();
+				}
+			}
+		}
+		return [...visited];
+	}
+	private dependencyRanges(id: string): Range[] {
+		return this.dependencyClosure([this.ranges.find(range => range.id === id.split(".")[0])!])
+			.filter(candidate => candidate.id !== id.split(".")[0] && this.units.some(unit => unit.id === candidate.id));
+	}
+	checkDependencies(ids: Set<string>, changed: TranslationUnit[]): void {
+		for (const unit of changed) if (this.dependencyRanges(unit.id).some(range => !ids.has(range.id))) unsupported();
+	}
 	preferredCount(units: TranslationUnit[], next?: TranslationUnit): number {
+		const last = this.ranges.find(range => range.id === units.at(-1)!.id.split(".")[0])!;
+		for (let i = 0; i < units.length; i++) {
+			if (i && this.dependencyRanges(units[i].id).some(range => range.end > last.end)) return i;
+		}
 		if (!next) return units.length;
 		const ranges = [...units, next].map(unit => this.ranges.find(range => range.id === unit.id.split(".")[0])!);
 		let line = 0;
@@ -95,9 +163,10 @@ export class TranslationMarkdown {
 	private parseBlocks(): void {
 		const lines = [...this.source.slice(this.frontmatterEnd).matchAll(/[^\n]*(?:\n|$)/g)].filter(match => match[0]);
 		let offset = this.frontmatterEnd;
-		let protectedBlock: { closing: RegExp; quoteDepth: number; indent: number } | undefined;
+		let protectedBlock: { start: number; closing: RegExp; quoteDepth: number; indent: number } | undefined;
 		let listIndents: number[] = [];
 		let footnoteQuote: string | undefined;
+		let footnoteId: string | undefined;
 		const definitions = new Set<string>();
 		let paragraph: { start: number; end: number } | undefined;
 		let protectedUntil = 0;
@@ -107,9 +176,12 @@ export class TranslationMarkdown {
 		for (const match of lines) {
 			const line = match[0].replace(/\r?\n$/, "");
 			const start = offset; offset += match[0].length;
+			this.parseBoundary = start;
 			if (start < protectedUntil) continue;
 			if (setextParagraph?.next !== start) setextParagraph = undefined;
 			if (protectedBlock) {
+				this.parseBoundary = protectedBlock.start;
+				if (footnoteId && footnoteQuote !== undefined) this.footnotes.get(footnoteId)!.end = start + line.length;
 				let content = line;
 				for (let depth = 0; depth < protectedBlock.quoteDepth; depth++) {
 					const prefix = content.match(/^ {0,3}>[ \t]?/);
@@ -131,13 +203,15 @@ export class TranslationMarkdown {
 				flush();
 				if (definitions.has(definition[1])) unsupported();
 				definitions.add(definition[1]);
-				footnoteQuote = quote; listIndents = [];
+				footnoteQuote = quote; footnoteId = definition[1]; listIndents = [];
+				this.footnotes.set(footnoteId, { start, end: start + line.length });
 				footnotePrefix = definition[0].length;
 			} else if (footnoteQuote !== undefined && inner.trim()) {
 				const continuation = inner.match(/^(?: {4}|\t)/);
 				if (quote === footnoteQuote && continuation) footnotePrefix = continuation[0].length;
 				else { flush(); footnoteQuote = undefined; listIndents = []; }
 			}
+			if (footnotePrefix && footnoteId) this.footnotes.get(footnoteId)!.end = start + line.length;
 			inner = inner.slice(footnotePrefix);
 			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(inner)) { flush(); table = undefined; continue; }
 			let item = inner.match(/^(\s*)(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/);
@@ -178,11 +252,11 @@ export class TranslationMarkdown {
 			const opening = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
 			if (opening) {
 				flush(); if (opening[1][0] === "`" && opening[2].includes("`")) unsupported();
-				protectedBlock = { closing: new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*$`), quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length - footnotePrefix + (definition ? 4 : footnotePrefix) }; continue;
+				protectedBlock = { start, closing: new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*$`), quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length - footnotePrefix + (definition ? 4 : footnotePrefix) }; continue;
 			}
 			if (/^\s*\$\$/.test(content)) {
 				flush();
-				if (!/^\s*\$\$[\s\S]+\$\$\s*$/.test(content)) protectedBlock = { closing: /^\s*\$\$\s*$/, quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length - footnotePrefix + (definition ? 4 : footnotePrefix) };
+				if (!/^\s*\$\$[\s\S]+\$\$\s*$/.test(content)) protectedBlock = { start, closing: /^\s*\$\$\s*$/, quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length - footnotePrefix + (definition ? 4 : footnotePrefix) };
 				continue;
 			}
 			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*|-+[ \t]*)$/.test(content)) { flush(); continue; }
@@ -224,7 +298,7 @@ export class TranslationMarkdown {
 			setextParagraph = { start: paragraph.start, next: offset, prefix: container };
 		}
 		flush();
-		if (protectedBlock) unsupported();
+		if (protectedBlock) { this.parseBoundary = protectedBlock.start; unsupported(); }
 	}
 	/** Unescaped pipes are structural, even inside inline code in an Obsidian table. */
 	private tableCells(line: string): { start: number; end: number }[] | undefined {
@@ -380,7 +454,7 @@ export class TranslationMarkdown {
 			if (block) { result += protect(block[0]); i += block[0].length; continue; }
 			const entity = rest.match(/^&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/i);
 			if (entity) { result += protect(entity[0]); i += entity[0].length; continue; }
-			const emptyMarkup = rest.match(/^(?:<!--[ \t\r\n]*-->|<(?:br|hr|wbr)[ \t]*\/?[ \t]*>)/i);
+			const emptyMarkup = rest.match(/^(?:<!--[ \t\r\n]*-->|<(?:br|hr|wbr)[ \t]*\/?[ \t]*>|<[a-z][a-z\d:-]*[ \t]*\/>|<([a-z][a-z\d:-]*)[ \t]*>[ \t]*<\/\1[ \t]*>)/i);
 			if (emptyMarkup) { result += protect(emptyMarkup[0]); i += emptyMarkup[0].length; continue; }
 			const autolink = rest.match(/^<(?:https?:\/\/[^<>\s]+|[^<>\s@]+@[^<>\s@]+)>/i);
 			if (autolink) { result += protect(autolink[0]); i += autolink[0].length; continue; }
@@ -430,29 +504,69 @@ export class TranslationMarkdown {
 		}
 		return translated;
 	}
-	assemble(content: string, originalLink: string): string {
-		const accepted = this.validate(content);
+	/** A partial result stops at a complete source line, never inside a table row. */
+	previousBoundary(end: number): number { return this.source.lastIndexOf("\n", end - 2) + 1; }
+	partialContent(texts: ReadonlyMap<string, string>, end: number): string {
+		return JSON.stringify({ units: this.units.filter(unit => this.ranges.find(range => range.id === unit.id)!.end <= end).map(unit => ({ id: unit.id, text: texts.get(unit.id) })) });
+	}
+	partialEnd(texts: ReadonlyMap<string, string>, incomplete: ReadonlySet<string>): number {
+		const missing = this.units.find(unit => !texts.has(unit.id) || incomplete.has(unit.id));
+		if (missing && texts.has(missing.id)) {
+			const range = this.ranges.find(range => range.id === missing.id)!;
+			const line = this.source.lastIndexOf("\n", range.start - 1) + 1;
+			// A split prose paragraph can end here; structural rows/items stay atomic.
+			return this.source.slice(line, range.start).trim() ? line : range.end;
+		}
+		let end = missing ? this.source.lastIndexOf("\n", this.ranges.find(range => range.id === missing.id)!.start - 1) + 1 : this.source.length;
+		// A multiline paragraph or table header must be complete as well.
+		for (const range of this.ranges) if (range.start < end && range.end > end) end = this.source.lastIndexOf("\n", range.start - 1) + 1;
+		return end;
+	}
+	assemble(content: string, originalLink: string, end = this.source.length): string {
+		const units = this.units.filter(unit => this.ranges.find(range => range.id === unit.id)!.end <= end);
+		const accepted = this.validate(content, units);
+		this.checkDependencies(new Set(units.map(unit => unit.id)), units);
+		const ranges = this.ranges.filter(range => range.end <= end);
 		const translated = new Map<string, string>();
 		const headingProse = new Map<string, string>();
-		for (const range of this.ranges) {
+		for (const range of ranges) {
 			const text = accepted.get(range.id);
 			if (text === undefined) continue;
 			let index = 0;
 			translated.set(range.id, text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]));
 			headingProse.set(range.id, this.headingProse(range, text));
 		}
-		for (const range of this.ranges) {
+		for (const range of ranges) {
 			if (!translated.has(range.id)) { let index = 0; translated.set(range.id, range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++])); }
 		}
 		const headings = new Map<string, string>();
-		for (const heading of this.headings) {
+		for (const heading of this.headings.filter(heading => heading.end <= end)) {
 			const value = this.headingRanges(heading).map(range => headingProse.get(range.id) ?? this.headingProse(range, range.text)).join(" ");
 			const key = heading.key!;
 			if (headings.has(key)) headings.set(key, ""); else headings.set(key, stripHeadingForLink(value));
 		}
 		let body = ""; let cursor = this.frontmatterEnd;
-		for (const range of this.ranges) { body += this.source.slice(cursor, range.start) + translated.get(range.id)!; cursor = range.end; }
-		body += this.source.slice(cursor);
+		for (const range of ranges) { body += this.source.slice(cursor, range.start) + translated.get(range.id)!; cursor = range.end; }
+		body += this.source.slice(cursor, end);
+		// Reference definitions contain only protected syntax and can be restored locally.
+		const dependencies = this.dependencyClosure(ranges);
+		for (const range of this.referenceRanges(dependencies).filter(range => range.start >= end)) body += "\n\n" + range.protected[0];
+		const neededFootnotes = new Set(dependencies.flatMap(range => range.protected.flatMap(token => {
+			const match = token.match(/^\[\^([^\]\s]+)\]$/);
+			return match ? [match[1]] : [];
+		})));
+		for (const id of neededFootnotes) {
+			const definition = this.footnotes.get(id)!;
+			if (definition.start < end) continue;
+			// Dependency validation proved this definition contains no untranslated prose.
+			let restored = ""; let cursor = definition.start;
+			for (const range of this.ranges.filter(range => range.start >= definition.start && range.end <= definition.end)) {
+				let index = 0;
+				restored += this.source.slice(cursor, range.start) + range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]);
+				cursor = range.end;
+			}
+			body += "\n\n" + restored + this.source.slice(cursor, definition.end);
+		}
 		if (this.links) body = this.links.assemble(body, headings);
 		const frontmatter = this.source.slice(0, this.frontmatterEnd);
 		return frontmatter + (frontmatter && !frontmatter.endsWith("\n") ? "\n" : "") + originalLink + "\n\n" + body;

@@ -16,10 +16,11 @@ export class TranslationModal extends Modal {
 		const name = nameRow.createEl("input", { attr: { type: "text", "aria-label": this.plugin.t("translation-enter-name") } });
 		new ButtonComponent(nameRow).setButtonText(this.plugin.t("translation-use-name")).onClick(() => this.plugin.translation.setName(name.value));
 		const actions = this.contentEl.createDiv({ cls: "modal-button-container ai-helper-translation-actions" });
-		const cancel = new ButtonComponent(actions).onClick(() => { this.plugin.translation.cancel(); this.close(); });
+		const cancel = new ButtonComponent(actions).onClick(() => { if (this.plugin.translation.busy) this.plugin.translation.stop(); else { this.plugin.translation.cancel(); this.close(); } });
 		new ButtonComponent(actions).setButtonText(this.plugin.t("translation-hide")).onClick(() => this.close());
 		const retry = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-retry")).onClick(() => this.plugin.translation.retry());
 		const save = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-save")).onClick(() => { void this.plugin.translation.save(); });
+		const partial = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-save-partial")).onClick(() => { void this.plugin.translation.savePartial(); });
 		const overwrite = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-overwrite")).setWarning().onClick(() => { void this.plugin.translation.save("overwrite"); });
 		const saveCopy = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-copy")).onClick(() => { void this.plugin.translation.save("copy"); });
 		const copy = this.plugin.settings.translationDebugMode ? new ButtonComponent(actions)
@@ -34,12 +35,15 @@ export class TranslationModal extends Modal {
 			}) : undefined;
 		const update = () => {
 			const operation = this.plugin.translation;
+			partial.setDisabled(!operation.canSavePartial);
+			partial.buttonEl.style.display = operation.busy || operation.canSave || !operation.active ? "none" : "";
+			retry.setButtonText(this.plugin.t(operation.needsName ? "translation-retry" : "translation-continue"));
 			nameRow.style.display = operation.needsName ? "" : "none";
 			save.buttonEl.style.display = operation.canSave && !operation.conflict ? "" : "none";
 			overwrite.buttonEl.style.display = operation.canSave && operation.conflict?.file ? "" : "none";
 			saveCopy.buttonEl.style.display = operation.canSave && operation.conflict ? "" : "none";
 			save.setDisabled(!operation.canSave); overwrite.setDisabled(!operation.canSave); saveCopy.setDisabled(!operation.canSave);
-			progress.setText(this.plugin.t(operation.stage) + (["translation-preparing", "translation-running", "translation-error", "translation-waiting"].includes(operation.stage) ? ` — ${Math.floor(operation.progress * 100)}%` : ""));
+			progress.setText(this.plugin.t(operation.partialResult && operation.stage === "translation-saving" ? "translation-partial-saving" : operation.partialResult && operation.stage === "translation-saved" ? "translation-partial-saved" : operation.stage) + (["translation-preparing", "translation-running", "translation-error", "translation-waiting"].includes(operation.stage) ? ` — ${Math.floor(operation.progress * 100)}%` : ""));
 			detail.setText(operation.detail ? this.plugin.t(operation.detail) + (operation.saveError ? ` ${operation.saveError}` : "") : "");
 			const warning = operation.detail === "translation-unresolved" || operation.detail === "translation-conflict" || operation.detail === "translation-target-changed";
 			const error = operation.stage === "translation-error" || operation.detail === "translation-title-error" || operation.detail === "translation-name";

@@ -88,10 +88,24 @@ export class TranslationParts {
 		const remaining = new Set(this.pending.slice(count).map(unit => unit.original));
 		const complete = this.document.units.filter(unit => updates.has(unit.id) && !remaining.has(unit.id));
 		this.document.validate(JSON.stringify({ units: complete.map(unit => ({ id: unit.id, text: updates.get(unit.id) })) }), complete);
+		const completedIds = new Set([...this.texts.keys(), ...updates.keys()].filter(id => !remaining.has(id)));
+		this.document.checkDependencies(completedIds, source);
 		for (const [id, text] of updates) this.texts.set(id, text);
 		this.accepted.push({ source, translated });
 		this.completed += source.reduce((sum, unit) => sum + this.weight(unit.text), 0);
 		this.pending.splice(0, count);
+	}
+	partial(): { content: string; end: number } | undefined {
+		let end = this.document.partialEnd(this.texts, new Set(this.pending.map(unit => unit.original)));
+		while (end > this.document.frontmatterEnd) {
+			try {
+				const selected = this.document.partialContent(this.texts, end);
+				if (!JSON.parse(selected).units.length) return;
+				this.document.assemble(selected, "", end);
+				return { content: selected, end };
+			} catch { end = this.document.previousBoundary(end); }
+		}
+		return undefined;
 	}
 	content(): string {
 		return JSON.stringify({ units: this.document.units.map(unit => ({ id: unit.id, text: this.texts.get(unit.id) })) });
