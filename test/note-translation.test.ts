@@ -669,10 +669,26 @@ it("сохраняет таблицу без внешних разделител
 	expect(JSON.stringify(env.requests)).not.toContain("Секретный код");
 });
 
-it("не продолжает таблицу через пустую строку, скрывая неизвестную конструкцию", async () => {
-	const env = await setup({ text: "| Имя | Значение |\n| --- | --- |\n| Текст | Значение |\n\n| Неизвестная | Конструкция |" });
+it.each(["", "---", "    Секретный код"])("не продолжает таблицу через границу блока: %j", async boundary => {
+	const env = await setup({ text: "| Имя | Значение |\n| --- | --- |\n| Текст | Значение |\n" + boundary + "\n| Неизвестная | Конструкция |" });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.requests).toHaveLength(0);
 	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("сохраняет ограждённый код непосредственно после маркера определения сноски", async () => {
+	const source = "Текст[^ид].\n\n[^ид]: ```ts\n    const secret = 1;\n    ```\n\n    Описание.";
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Описание", "Description") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\nText[^ид].\n\n[^ид]: ```ts\n    const secret = 1;\n    ```\n\n    Description.");
+	expect(JSON.stringify(env.requests)).not.toContain("secret");
+});
+
+it("сохраняет упоминание сноски в начале абзаца", async () => {
+	const env = await setup({ text: "[^ид] Текст.\n\n[^ид]: Определение.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Определение", "Definition") })), "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<Статья.md>)\n\n[^ид] Text.\n\n[^ид]: Definition.");
 });

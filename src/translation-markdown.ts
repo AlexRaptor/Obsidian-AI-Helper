@@ -83,14 +83,14 @@ export class TranslationMarkdown {
 				else { flush(); footnoteQuote = undefined; listIndents = []; }
 			}
 			inner = inner.slice(footnotePrefix);
-			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(inner)) { flush(); continue; }
+			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(inner)) { flush(); table = undefined; continue; }
 			let item = inner.match(/^(\s*)(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/);
 			const indent = inner.match(/^[ \t]*/)![0];
 			if (!inner.trim()) { flush(); table = undefined; continue; }
 			while (listIndents.length && indent.length < listIndents[listIndents.length - 1]) listIndents.pop();
 			const relativeIndent = inner.slice(listIndents[listIndents.length - 1] ?? 0);
 			if (/^(?: {4}|\t)/.test(relativeIndent)) {
-				if (!paragraph) { flush(); continue; }
+				if (!paragraph) { flush(); table = undefined; continue; }
 				item = null;
 			}
 			let prefix = quote.length + footnotePrefix;
@@ -122,11 +122,11 @@ export class TranslationMarkdown {
 			const opening = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
 			if (opening) {
 				flush(); if (opening[1][0] === "`" && opening[2].includes("`")) unsupported();
-				protectedBlock = { closing: new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*$`), quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length }; continue;
+				protectedBlock = { closing: new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*$`), quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length - footnotePrefix + (definition ? 4 : footnotePrefix) }; continue;
 			}
 			if (/^\s*\$\$/.test(content)) {
 				flush();
-				if (!/^\s*\$\$[\s\S]+\$\$\s*$/.test(content)) protectedBlock = { closing: /^\s*\$\$\s*$/, quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length };
+				if (!/^\s*\$\$[\s\S]+\$\$\s*$/.test(content)) protectedBlock = { closing: /^\s*\$\$\s*$/, quoteDepth: (quote.match(/>/g) ?? []).length, indent: prefix - quote.length - footnotePrefix + (definition ? 4 : footnotePrefix) };
 				continue;
 			}
 			if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*|-+[ \t]*)$/.test(content)) { flush(); continue; }
@@ -138,7 +138,7 @@ export class TranslationMarkdown {
 				flush(); this.add(start + prefix + callout[0].length, start + line.length); continue;
 			}
 			// Unknown extensions stop before any file can be saved as complete.
-			if (/^\s*(?:\[\^|\[!|:{3,}|[|])/.test(content)) unsupported();
+			if (/^\s*(?:\[!|:{3,}|[|])/.test(content)) unsupported();
 			const heading = content.match(/^ {0,3}#{1,6}[ \t]+/);
 			if (heading || item || quote || footnotePrefix || listIndents.length) {
 				flush();
