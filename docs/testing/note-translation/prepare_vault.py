@@ -15,12 +15,23 @@ if vault == repository or vault in repository.parents:
     parser.error('Хранилище нельзя создавать вместо репозитория или его родительской папки.')
 if vault.exists() and not vault.is_dir():
     parser.error('Путь назначения занят файлом, а не папкой.')
+mode = '1'
 if vault.exists() and any(vault.iterdir()):
-    try:
-        answer = input(f'Хранилище {vault} не пусто. Удалить всё его содержимое, включая настройки, и создать заново? [y/N]: ')
-    except (EOFError, KeyboardInterrupt):
-        answer = ''
-    if answer.strip().lower() not in ('yes', 'y'):
+    print(f'Хранилище {vault} не пусто. Выберите действие:')
+    print('1. Заменить полностью.')
+    print('2. Заменить, сохранив настройки плагина.')
+    print('3. Заменить только контент.')
+    print('4. Отмена.')
+    print('Варианты 1–3 заменяют все заметки и вложения тестовыми данными.')
+    while True:
+        try:
+            mode = input('Ваш выбор [1/2/3/4, по умолчанию 4]: ').strip() or '4'
+        except (EOFError, KeyboardInterrupt):
+            mode = '4'
+        if mode in ('1', '2', '3', '4'):
+            break
+        print('Введите 1, 2, 3 или 4.')
+    if mode == '4':
         print('Перезапись отменена. Хранилище не изменено.')
         raise SystemExit(0)
 
@@ -78,28 +89,50 @@ A stable block reference. ^stable-block
     'Рабочее пространство.md': '# Другая заметка\n\nОткройте эту заметку в дополнительной области, чтобы проверить сохранение существующего рабочего пространства.\n',
     'Вложения/Схема.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80" viewBox="0 0 240 80"><rect x="1" y="1" width="238" height="78" fill="none" stroke="currentColor"/><text x="24" y="46" fill="currentColor">Read → Write → Review</text></svg>\n',
 }
-# Build and stage all files before replacing the existing vault.
+# Stage all files before replacing existing content. Content-only mode never
+# touches .obsidian, and does not need a plugin build.
 try:
-    subprocess.run(['npm', 'run', 'build'], cwd=repository, check=True)
-    manifest = json.loads((repository / 'manifest.json').read_text(encoding='utf-8'))
-    plugin_id = manifest['id']
-    if not isinstance(plugin_id, str) or not plugin_id or plugin_id in ('.', '..') or '/' in plugin_id or '\\' in plugin_id:
-        parser.error('Недопустимый id плагина в manifest.json.')
+    if mode != '3':
+        subprocess.run(['npm', 'run', 'build'], cwd=repository, check=True)
+        manifest = json.loads((repository / 'manifest.json').read_text(encoding='utf-8'))
+        plugin_id = manifest['id']
+        if not isinstance(plugin_id, str) or not plugin_id or plugin_id in ('.', '..') or '/' in plugin_id or '\\' in plugin_id:
+            parser.error('Недопустимый id плагина в manifest.json.')
     vault.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.translation-vault-', dir=vault.parent) as staging:
         prepared = Path(staging) / 'vault'
-        plugin_directory = prepared / '.obsidian' / 'plugins' / plugin_id
-        plugin_directory.mkdir(parents=True)
-        for artifact in ('main.js', 'manifest.json', 'styles.css'):
-            shutil.copy2(repository / artifact, plugin_directory / artifact)
+        prepared.mkdir()
+        if mode == '2' and (vault / '.obsidian').exists():
+            shutil.copytree(vault / '.obsidian', prepared / '.obsidian')
+        if mode != '3':
+            plugin_directory = prepared / '.obsidian' / 'plugins' / plugin_id
+            plugin_directory.mkdir(parents=True, exist_ok=True)
+            for artifact in ('main.js', 'manifest.json', 'styles.css'):
+                shutil.copy2(repository / artifact, plugin_directory / artifact)
         for name, content in files.items():
             target = prepared / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding='utf-8')
-        if vault.exists():
-            shutil.rmtree(vault)
-        prepared.rename(vault)
+        if mode == '3':
+            for entry in vault.iterdir():
+                if entry.name == '.obsidian':
+                    continue
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+            for entry in prepared.iterdir():
+                entry.rename(vault / entry.name)
+        else:
+            if vault.exists():
+                shutil.rmtree(vault)
+            prepared.rename(vault)
 except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
     parser.exit(1, f'Не удалось подготовить хранилище: {error}\n')
 print(f'Подготовлено хранилище: {vault}')
-print(f'Собранный плагин установлен: {vault / ".obsidian" / "plugins" / plugin_id}')
+if mode == '3':
+    print('Заменён только контент. Плагин и настройки Obsidian не изменены.')
+else:
+    print(f'Собранный плагин установлен: {vault / ".obsidian" / "plugins" / plugin_id}')
+    if mode == '2':
+        print('Настройки плагина и Obsidian сохранены.')
