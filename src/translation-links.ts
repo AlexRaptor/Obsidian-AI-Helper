@@ -32,6 +32,7 @@ export class TranslationLinks {
 	}
 	private destinations: { marker: string; raw: string; path: string; fragment: string; wiki: boolean }[] = [];
 	constructor(private targets: { paths: readonly string[]; resolved: ReadonlyMap<string, string> }, private original: string, private result: string, private marker: string) {}
+	setResultPath(path: string): void { this.result = path; }
 	capture(raw: string, wiki: boolean): string | undefined {
 		if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(raw)) return raw;
 		// Split syntax before URL decoding: %23 belongs to the filename, not the anchor.

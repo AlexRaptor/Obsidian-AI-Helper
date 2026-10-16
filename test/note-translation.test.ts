@@ -29,8 +29,12 @@ async function setup(options: { text?: string; settings?: Record<string, unknown
 	vi.stubGlobal("fetch", network);
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/тест-перевода";
 	const folders = new Set<string>(["Заметки"]);
-	const app = { vault: { adapter, offref: () => {}, on: () => ({}), getFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path })), createFolder: vi.fn(async (path: string) => { folders.add(path); }), getMarkdownFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path, extension: "md" })), getFileByPath: (path: string) => files.has(path) ? path === file.path ? file : Object.assign(new TFile(), { path, extension: "md" }) : null,
-		getAbstractFileByPath: (path: string) => files.has(path) ? file : folders.has(path) ? { path, children: [] } : null, read: vi.fn(async (note: TFile) => files.get(note.path)!),
+	const entries = new Map<string, TFile>([[file.path, file]]);
+	const entry = (path: string) => { if (!entries.has(path)) entries.set(path, Object.assign(new TFile(), { path, extension: "md" })); return entries.get(path)!; };
+	Object.assign(adapter, { exists: async (path: string) => files.has(path) || folders.has(path) });
+	const app = { vault: { adapter, offref: () => {}, on: () => ({}), getFiles: () => [...files.keys()].map(entry), createFolder: vi.fn(async (path: string) => { folders.add(path); }), getMarkdownFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path, extension: "md" })), getFileByPath: (path: string) => files.has(path) ? path === file.path ? file : Object.assign(new TFile(), { path, extension: "md" }) : null,
+		getAbstractFileByPath: (path: string) => files.has(path) ? entry(path) : folders.has(path) ? { path, children: [] } : null, read: vi.fn(async (note: TFile) => files.get(note.path)!),
+		process: vi.fn(async (note: TFile, fn: (text: string) => string) => { const value = fn(files.get(note.path)!); files.set(note.path, value); return value; }),
 		create: vi.fn(async (path: string, text: string) => { if (files.has(path)) throw Error("Занято"); files.set(path, text); return Object.assign(new TFile(), { path, extension: "md" }); }) },
 		metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
 		workspace: { activeLeaf: leaf, getActiveViewOfType: (type: unknown) => type === MarkdownView ? view : null, getActiveFile: () => file, getLeavesOfType: (type: string) => type === "markdown" ? [leaf] : [],
@@ -46,7 +50,7 @@ async function setup(options: { text?: string; settings?: Record<string, unknown
 		const chat = factory({} as WorkspaceLeaf) as ChatView; await chat.onOpen();
 		return { chat, root: chat.contentEl as unknown as TestElement };
 	};
-	return { plugin, app, file, files, view, leaf, right, opened, commands, events, network, requests, openChat };
+	return { plugin, app, file, files, folders, view, leaf, right, opened, commands, events, network, requests, openChat };
 }
 it("команда переводит видимые абзацы и открывает отдельную заметку рядом", async () => {
 	const env = await setup();
@@ -152,7 +156,7 @@ it("показывает сообщение без Markdown-заметки", asy
 it("не перезаписывает занятый путь", async () => {
 	const env = await setup(); env.files.set("Заметки/Статья — en.md", "Существующая заметка");
 	env.commands.get("translate-current-note")!();
-	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	await vi.waitFor(() => expect(button("Отмена")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("Существующая заметка");
 	expect(Modal.opened[0].contentEl.getText()).toContain("Путь результата занят");
 });
@@ -383,7 +387,7 @@ it.each(["чат", "перевод"])("атомарно отклоняет ко�
 		expect(env.app.vault.create).not.toHaveBeenCalled();
 	} finally { await one.chat.onClose(); await two.chat.onClose(); }
 });
-it.each(["завершение", "ожидание", "отмена", "выгрузка"])("перевод сохраняет готовый запрос индекса и освобождает приоритет: %s", async outcome => {
+it.each(["завершение", "ожидание", "выбор копии", "ввод имени", "отмена", "выгрузка"])("перевод сохраняет готовый запрос индекса и освобождает приоритет: %s", async outcome => {
 	const index = deferred<Response>(); const translation = deferred<Response>();
 	const inputs: string[] = []; let indexSignal: AbortSignal | null | undefined;
 	const env = await setup({ settings: { embeddingServerUrl: "http://server/v1", embeddingModel: "поиск", noteUpdateDelaySeconds: 0.01 },
@@ -395,6 +399,8 @@ it.each(["завершение", "ожидание", "отмена", "выгру
 	env.files.set("Заметки/Следующая.md", "Следующая заметка.");
 	env.commands.get("index-vault")!();
 	await vi.waitFor(() => expect(inputs).toHaveLength(1));
+	if (outcome === "выбор копии") env.files.set("Заметки/Статья — en.md", "Существующий перевод");
+	if (outcome === "ввод имени") env.plugin.settings.translationNameMode = "translated";
 	env.commands.get("translate-current-note")!();
 	await new Promise(resolve => setTimeout(resolve, 20));
 	expect(env.requests).toHaveLength(0); expect(indexSignal?.aborted).toBe(false);
@@ -403,7 +409,7 @@ it.each(["завершение", "ожидание", "отмена", "выгру
 	expect(inputs).toHaveLength(1);
 	if (outcome === "отмена") button("Остановить").click();
 	else if (outcome === "выгрузка") env.plugin.onunload();
-	else translation.resolve(outcome === "ожидание" ? new Response("{}", { status: 503 }) : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop"));
+	else translation.resolve(outcome === "ожидание" || outcome === "ввод имени" ? new Response("{}", { status: 503 }) : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop"));
 	if (outcome === "выгрузка") {
 		await new Promise(resolve => setTimeout(resolve, 40)); expect(inputs).toHaveLength(1);
 	} else {
@@ -841,4 +847,227 @@ it("закрепляет Markdown-ссылку и ссылку на оригин
 	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop"));
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n[Reference](./Справка.md)");
+});
+
+it("пустой суффикс защищает оригинал и сохраняет копию без повторного перевода", async () => {
+	const env = await setup({ settings: { translationSuffix: "" } });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить копию").style.display).not.toBe("none"));
+	expect(button("Перезаписать").style.display).toBe("none");
+	button("Сохранить копию").click(); button("Сохранить копию").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья (2).md")).toBe(true));
+	expect(env.files.get(env.file.path)).toBe("Сохранённый текст.");
+	expect(env.requests).toHaveLength(1); expect(env.app.vault.create).toHaveBeenCalledTimes(1);
+});
+
+function filenameInput(): TestElement {
+	const find = (element: TestElement): TestElement | undefined => element.tagName === "INPUT" && element.attributes["aria-label"] === "Имя файла" ? element : element.children.map(find).find(Boolean);
+	return Modal.opened.map(modal => find(modal.contentEl)).find(Boolean)!;
+}
+it("переводит имя до содержимого, очищает путь и сохраняет title дословно", async () => {
+	const env = await setup({ text: '---\ntitle: Исходное свойство\n---\nСтатья.', settings: { translationNameMode: "translated" }, completion: async body => {
+		if (body.messages.at(-1).content === "Статья") return new Response(JSON.stringify({ choices: [{ message: { content: "../Перевод: статьи.md.md" }, finish_reason: "stop" }] }));
+		return response([{ id: "p1", text: "Переведённая статья." }], "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.opened).toHaveLength(2));
+	expect(env.files.get("Заметки/.._Перевод_ статьи.md")).toContain("title: Исходное свойство");
+	expect(env.requests).toHaveLength(2);
+	expect(env.requests[0].messages.at(-1).content).toBe("Статья");
+	expect(JSON.stringify(env.requests)).not.toContain("Исходное свойство");
+});
+it.each(["повтор", "ручной ввод"])("ошибка перевода названия: %s без смены правила", async action => {
+	let failed = false;
+	const env = await setup({ settings: { translationNameMode: "translated" }, completion: async body => {
+		if (!failed) { failed = true; return new Response("Ошибка", { status: 503 }); }
+		if (body.messages.at(-1).content === "Статья") return new Response(JSON.stringify({ choices: [{ message: { content: "Перевод" }, finish_reason: "stop" }] }));
+		return response([{ id: "p1", text: "Первый абзац." }, { id: "p2", text: "Второй абзац." }], "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+	expect(env.requests).toHaveLength(1); expect(env.app.vault.create).not.toHaveBeenCalled();
+	if (action === "повтор") button("Повторить").click();
+	else { filenameInput().value = "Перевод.md"; button("Использовать имя").click(); }
+	await vi.waitFor(() => expect(env.files.has("Заметки/Перевод.md")).toBe(true));
+	expect(env.requests).toHaveLength(action === "повтор" ? 3 : 2);
+});
+it.each([" ", "...", "CON", "NUL.md", "LPT1.txt", "Я".repeat(130)])("исправление недопустимого имени %j не переводит название заново", async title => {
+	const env = await setup({ settings: { translationNameMode: "translated" }, completion: async body => body.messages.at(-1).content === "Статья" ? new Response(JSON.stringify({ choices: [{ message: { content: title }, finish_reason: "stop" }] })) : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(filenameInput()).toBeDefined());
+	await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+	filenameInput().value = ""; button("Использовать имя").click();
+	expect(env.requests).toHaveLength(1);
+	filenameInput().value = "Исправлено"; button("Использовать имя").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Исправлено.md")).toBe(true));
+	expect(env.requests).toHaveLength(2);
+});
+it.each(["перезапись", "копия", "отмена", "папка"])("разрешает конфликт через диалог: %s", async action => {
+	const env = await setup(); const path = "Заметки/Статья — en.md";
+	if (action === "папка") env.folders.add(path); else env.files.set(path, "Старая версия");
+	env.files.set("Заметки/Статья — en (2).md", "Первая копия");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+	if (action === "папка") expect(button("Перезаписать").style.display).toBe("none");
+	if (action === "отмена") { button("Отмена").click(); expect(env.files.get(path)).toBe("Старая версия"); expect(env.app.vault.create).not.toHaveBeenCalled(); }
+	else {
+		button(action === "перезапись" ? "Перезаписать" : "Сохранить копию").click();
+		await vi.waitFor(() => expect(env.opened).toHaveLength(2));
+		if (action === "перезапись") expect(env.files.get(path)).toContain("Visible text.");
+		else { expect(env.files.get("Заметки/Статья — en (3).md")).toContain("Visible text."); expect(env.files.get("Заметки/Статья — en (2).md")).toBe("Первая копия"); }
+	}
+	expect(env.requests).toHaveLength(1);
+});
+it.each(["до нажатия", "в обработке"])("повторно спрашивает разрешение при изменении цели: %s", async when => {
+	const env = await setup(); const path = "Заметки/Статья — en.md"; env.files.set(path, "Старая версия");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Перезаписать").disabled).toBe(false));
+	if (when === "до нажатия") env.files.set(path, "Новые правки");
+	else vi.mocked(env.app.vault.process).mockImplementationOnce(async (_file, callback) => { env.files.set(path, "Новые правки"); const result = callback("Новые правки"); env.files.set(path, result); return result; });
+	button("Перезаписать").click();
+	await vi.waitFor(() => expect(button("Перезаписать").disabled).toBe(false));
+	expect(env.files.get(path)).toBe("Новые правки"); expect(env.opened).toHaveLength(0);
+	button("Перезаписать").click(); button("Перезаписать").click();
+	await vi.waitFor(() => expect(env.opened).toHaveLength(2));
+	expect(env.files.get(path)).toContain("Visible text."); expect(env.requests).toHaveLength(1);
+});
+it("гонка создания копии занимает следующее свободное имя и пересчитывает самоссылки", async () => {
+	const env = await setup({ text: "[Статья](Статья.md)", completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	env.files.set("Заметки/Статья — en.md", "Существующий перевод");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+	vi.mocked(env.app.vault.create).mockImplementationOnce(async path => { env.files.set(path, "Конкурентная запись"); throw Error("Занято"); });
+	button("Сохранить копию").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en (3).md")).toBe(true));
+	expect(env.files.get("Заметки/Статья — en (2).md")).toBe("Конкурентная запись");
+	expect(env.files.get("Заметки/Статья — en (3).md")).toContain("Статья%20—%20en%20%283%29.md");
+	expect(env.requests).toHaveLength(1);
+});
+it.each(["папка", "запись"])("повторяет сохранение после ошибки: %s", async failure => {
+	const env = await setup({ settings: { translationFolderMode: "custom", translationFolder: "Переводы/Статьи" } });
+	if (failure === "папка") vi.mocked(env.app.vault.createFolder).mockRejectedValueOnce(Error("Нет доступа"));
+	else vi.mocked(env.app.vault.create).mockRejectedValueOnce(Error("Нет места"));
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить").style.display).not.toBe("none"));
+	env.plugin.settings.translationFolder = "Изменено";
+	button("Сохранить").click(); button("Сохранить").click();
+	await vi.waitFor(() => expect(env.files.has("Переводы/Статьи/Статья — en.md")).toBe(true));
+	expect(env.requests).toHaveLength(1);
+});
+it("повтор не меняет выбор копии после ошибки записи", async () => {
+	const env = await setup(); const path = "Заметки/Статья — en.md"; env.files.set(path, "Существующий перевод");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+	vi.mocked(env.app.vault.create).mockRejectedValueOnce(Error("Нет места"));
+	button("Сохранить копию").click();
+	await vi.waitFor(() => expect(button("Сохранить").style.display).not.toBe("none"));
+	button("Сохранить").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en (2).md")).toBe(true));
+	expect(env.files.get(path)).toBe("Существующий перевод"); expect(env.requests).toHaveLength(1);
+});
+it("удаление подтверждаемой цели требует нового решения", async () => {
+	const env = await setup(); const path = "Заметки/Статья — en.md"; env.files.set(path, "Существующий перевод");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Перезаписать").disabled).toBe(false));
+	env.files.delete(path); button("Перезаписать").click();
+	await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	button("Сохранить копию").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en (2).md")).toBe(true));
+});
+it.each([true, false])("защита регистра учитывает файловую систему, без учёта регистра: %s", async insensitive => {
+	const env = await setup({ settings: { translationNameMode: "translated" }, completion: async body => body.messages.at(-1).content === "Статья" ? new Response(JSON.stringify({ choices: [{ message: { content: "статья" }, finish_reason: "stop" }] })) : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop") });
+	Object.assign(env.app.vault.adapter, { exists: async (path: string, sensitive = false) => insensitive && !sensitive ? [...env.files.keys(), ...env.folders].some(key => key.toLowerCase() === path.toLowerCase()) : env.files.has(path) || env.folders.has(path) });
+	env.commands.get("translate-current-note")!();
+	if (insensitive) {
+		await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+		expect(button("Перезаписать").style.display).toBe("none");
+		button("Сохранить копию").click();
+		await vi.waitFor(() => expect(env.files.has("Заметки/статья (2).md")).toBe(true));
+	} else await vi.waitFor(() => expect(env.files.has("Заметки/статья.md")).toBe(true));
+	expect(env.files.get("Заметки/Статья.md")).toBe("Сохранённый текст.");
+});
+it.each(["файл", "папка"])("изменение типа цели перед записью: %s", async replacement => {
+	const env = await setup(); const path = "Заметки/Статья — en.md"; env.files.set(path, "Версия");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Перезаписать").disabled).toBe(false));
+	if (replacement === "папка") { env.files.delete(path); env.folders.add(path); }
+	else {
+		const previous = env.app.vault.getAbstractFileByPath.bind(env.app.vault);
+		const newFile = Object.assign(new TFile(), { path });
+		Object.assign(env.app.vault, { getAbstractFileByPath: (target: string) => target === path ? newFile : previous(target) });
+	}
+	button("Перезаписать").click();
+	await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+	expect(env.app.vault.process).not.toHaveBeenCalled(); expect(env.app.vault.create).not.toHaveBeenCalled();
+	if (replacement === "папка") expect(button("Перезаписать").style.display).toBe("none");
+});
+it("при ожидании решения чат работает, новая команда возвращает текущую операцию", async () => {
+	const env = await setup(); env.files.set("Заметки/Статья — en.md", "Перевод");
+	const { chat, root } = await env.openChat();
+	try {
+		env.commands.get("translate-current-note")!();
+		await vi.waitFor(() => expect(button("Сохранить копию").disabled).toBe(false));
+		env.commands.get("translate-current-note")!();
+		expect(env.requests).toHaveLength(1);
+		root.find("ai-helper-input").value = "Обсудим статью"; root.find("ai-helper-send").click();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+		await vi.waitFor(() => expect(chat.isGenerating()).toBe(false));
+		button("Сохранить копию").click();
+		await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en (2).md")).toBe(true));
+		expect(env.requests).toHaveLength(2);
+	} finally { await chat.onClose(); }
+});
+it("снимок правила имени и папки не меняется во время запроса названия", async () => {
+	const title = deferred<Response>();
+	const env = await setup({ settings: { translationNameMode: "translated", translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => body.messages.at(-1).content === "Статья" ? title.promise : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop") });
+	env.commands.get("translate-current-note")!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	Object.assign(env.plugin.settings, { translationNameMode: "suffix", translationFolder: "Другая папка", translationLanguage: "Deutsch", translationSuffix: " новое" });
+	title.resolve(new Response(JSON.stringify({ choices: [{ message: { content: "Название" }, finish_reason: "stop" }] })));
+	await vi.waitFor(() => expect(env.files.has("Переводы/Название.md")).toBe(true));
+	expect(JSON.stringify(env.requests[1])).toContain("English");
+});
+it("повтор содержимого сохраняет уже переведённое название", async () => {
+	let contentAttempt = 0;
+	const env = await setup({ settings: { translationNameMode: "translated" }, completion: async body => {
+		if (body.messages.at(-1).content === "Статья") return new Response(JSON.stringify({ choices: [{ message: { content: "Название" }, finish_reason: "stop" }] }));
+		if (contentAttempt++ === 0) return new Response("Ошибка", { status: 503 });
+		return response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop");
+	} });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+	button("Повторить").click();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Название.md")).toBe(true));
+	expect(env.requests).toHaveLength(3); expect(env.requests.filter(body => body.messages.at(-1).content === "Статья")).toHaveLength(1);
+});
+it("после перемещения оригинала защищает путь снимка и позволяет перезаписать другой путь", async () => {
+	const pending = deferred<Response>(); const env = await setup({ completion: () => pending.promise });
+	env.commands.get("translate-current-note")!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.files.delete(env.file.path); env.file.path = "Заметки/Статья — en.md"; env.files.set(env.file.path, "Перемещённый оригинал");
+	pending.resolve(response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop"));
+	await vi.waitFor(() => expect(button("Перезаписать").style.display).not.toBe("none"));
+	button("Перезаписать").click();
+	await vi.waitFor(() => expect(env.files.get("Заметки/Статья — en.md")).toContain("Первый."));
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("./Статья.md");
+});
+it.each(["Перевод.md.", "Перевод.md.md.", "Перевод.md. ."])("нормализует завершающие точки и расширение один раз: %s", async title => {
+	const env = await setup({ settings: { translationNameMode: "translated" }, completion: async body => body.messages.at(-1).content === "Статья" ? new Response(JSON.stringify({ choices: [{ message: { content: title }, finish_reason: "stop" }] })) : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop") });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Перевод.md")).toBe(true));
+});
+it("перезаписывает подтверждённый файл с отличающимся регистром полного пути", async () => {
+	const env = await setup({ settings: { translationFolderMode: "custom", translationFolder: "переводы" } });
+	const path = "Переводы/СТАТЬЯ — EN.md"; env.files.set(path, "Старая версия"); env.folders.add("Переводы");
+	Object.assign(env.app.vault.adapter, { exists: async (path: string, sensitive = false) => sensitive ? env.files.has(path) || env.folders.has(path) : [...env.files.keys(), ...env.folders].some(key => key.toLowerCase() === path.toLowerCase()) });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Перезаписать").style.display).not.toBe("none"));
+	button("Перезаписать").click();
+	await vi.waitFor(() => expect(env.files.get(path)).toContain("Visible text."));
+	expect(env.files.has("переводы/Статья — en.md")).toBe(false); expect(env.requests).toHaveLength(1);
+});
+it("пустая отдельная папка блокирует также запрос переведённого названия", async () => {
+	const env = await setup({ settings: { translationNameMode: "translated", translationFolderMode: "custom", translationFolder: "" } });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
+	expect(env.requests).toHaveLength(0); expect(env.app.vault.create).not.toHaveBeenCalled();
 });

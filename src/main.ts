@@ -264,7 +264,7 @@ export class AiHelperPlugin extends Plugin {
 		this.noteSearchConnection.configure(this.settings);
 		this.modelConnection.configure(this.settings);
 		this.contextWindowConnection.configure(this.settings);
-		if (["translationLanguage", "translationSuffix", "translationPrompt", "translationOpenSideBySide"].some(key => !stored || !(key in stored))) await this.saveData(this.settings);
+		if (["translationLanguage", "translationSuffix", "translationNameMode", "translationPrompt", "translationOpenSideBySide"].some(key => !stored || !(key in stored))) await this.saveData(this.settings);
 	}
 
 	translateNote(selected?: TFile): void {

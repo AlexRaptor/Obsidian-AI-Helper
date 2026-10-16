@@ -26,6 +26,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 	translationLanguage: string;
 	translationPrompt: string;
 	translationSuffix: string;
+	translationNameMode: string;
 	translationOpenSideBySide: boolean;
 	translationDebugMode: boolean;
 	folderDescriptionName: string;
@@ -56,6 +57,7 @@ export const DEFAULT_SETTINGS: AiHelperSettings = {
 	translationLanguage: "English",
 	translationPrompt: DEFAULT_TRANSLATION_PROMPT,
 	translationSuffix: " — en",
+	translationNameMode: "suffix",
 	translationOpenSideBySide: true,
 	translationDebugMode: false,
 	folderDescriptionName: DEFAULT_FOLDER_DESCRIPTION_NAME,
@@ -210,6 +212,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 						setting.setClass("ai-helper-translation-setting");
 						setting.addText(text => text.setValue(this.plugin.settings.translationFolder).onChange(value => this.setControlValue("translationFolder", value)));
 					}),
+					{ name: this.t("translation-name-mode"), control: { type: "dropdown", key: "translationNameMode", options: { suffix: this.t("translation-name-suffix"), translated: this.t("translation-name-translated") } } },
 					{ name: this.t("translation-suffix"), desc: this.t("translation-suffix-desc"), control: { type: "text", key: "translationSuffix" } },
 					{ name: this.t("translation-side-by-side"), control: { type: "toggle", key: "translationOpenSideBySide" } },
 					{ name: this.t("translation-debug-mode"), desc: this.t("translation-debug-mode-desc"), control: { type: "toggle", key: "translationDebugMode" } },

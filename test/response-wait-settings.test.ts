@@ -1028,3 +1028,20 @@ it("настройки перевода сохраняют режим папки
 	expect(plugin.settings.translationFolder).toBe("");
 	expect(saveSettings).toHaveBeenCalledTimes(3);
 });
+
+it("настройки имени сохраняют оба правила и пустой суффикс при смене языка", async () => {
+	setLanguage("ru");
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: "idle", t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	expect(plugin.settings.translationNameMode).toBe("suffix");
+	const rule = controls.find(control => control.name === "Правило имени")!.dropdown!;
+	expect(rule.options).toEqual({ suffix: "Исходное название с суффиксом", translated: "Переведённое название" });
+	await rule.change("translated");
+	await controls.find(control => control.name === "Суффикс имени")!.input!.change("");
+	await controls.find(control => control.name === "Язык назначения")!.input!.change("Немецкий");
+	expect(plugin.settings.translationSuffix).toBe(""); expect(plugin.settings.translationNameMode).toBe("translated");
+	await rule.change("suffix");
+	expect(plugin.settings.translationSuffix).toBe(""); expect(plugin.settings.translationNameMode).toBe("suffix");
+	expect(saveSettings).toHaveBeenCalledTimes(4);
+});

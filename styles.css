@@ -651,3 +651,13 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 .ai-helper-translation-path {
 	overflow-wrap: anywhere;
 }
+
+.ai-helper-translation-name {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+.ai-helper-translation-name input {
+	flex: 1 1 50%;
+	min-width: 50%;
+}
