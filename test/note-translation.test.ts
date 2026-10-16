@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { type App, type PluginManifest, type WorkspaceLeaf, TFile, MarkdownView } from "obsidian";
+import { type App, type PluginManifest, type WorkspaceLeaf, TFile, MarkdownView, FileSystemAdapter } from "obsidian";
+import { IDBFactory } from "fake-indexeddb";
 import { ChatView } from "../src/chat-view";
 import { AiHelperPlugin } from "../src/main";
 import { DEFAULT_SETTINGS } from "../src/settings";
@@ -7,7 +8,8 @@ import { Modal, Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; Modal.opened.slice().forEach(modal => modal.close()); Notice.messages.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-async function setup(options: { text?: string; settings?: Record<string, unknown>; completion?: (body: any, signal?: AbortSignal | null) => Promise<Response> } = {}) {
+async function setup(options: { text?: string; settings?: Record<string, unknown>; embedding?: (body: any, signal?: AbortSignal | null) => Promise<Response>; completion?: (body: any, signal?: AbortSignal | null) => Promise<Response> } = {}) {
+	if (options.embedding) vi.stubGlobal("indexedDB", new IDBFactory());
 	const file = Object.assign(new TFile(), { path: "Заметки/Статья.md", basename: "Статья", extension: "md" });
 	const files = new Map<string, string>([[file.path, "Сохранённый текст."]]);
 	const view = Object.assign(Object.create(MarkdownView.prototype), { file, getMode: () => "source", editor: { getValue: () => options.text ?? "Видимый текст.\n\nВторой абзац." } });
@@ -18,14 +20,16 @@ async function setup(options: { text?: string; settings?: Record<string, unknown
 	const events = new Map<string, (...args: any[]) => void>();
 	const requests: any[] = [];
 	const network = vi.fn(async (url: string, init?: RequestInit) => {
+		if (url.endsWith("/embeddings") && options.embedding) return options.embedding(JSON.parse(String(init?.body)), init?.signal);
 		if (!url.endsWith("/chat/completions")) return new Response(JSON.stringify({ data: [] }));
 		const body = JSON.parse(String(init?.body)); requests.push(body);
 		if (options.completion) return options.completion(body, init?.signal);
 		return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ units: [{ id: "p1", text: "Visible text." }, { id: "p2", text: "Second paragraph." }] }) }, finish_reason: "stop" }] }));
 	});
 	vi.stubGlobal("fetch", network);
-	const app = { vault: { adapter: {}, offref: () => {}, on: () => ({}), getMarkdownFiles: () => [file], getFileByPath: (path: string) => files.has(path) ? file : null,
-		getAbstractFileByPath: (path: string) => files.has(path) ? file : null, read: vi.fn(async () => files.get(file.path)!),
+	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => "/тест-перевода";
+	const app = { vault: { adapter, offref: () => {}, on: () => ({}), getMarkdownFiles: () => [...files.keys()].map(path => Object.assign(new TFile(), { path, extension: "md" })), getFileByPath: (path: string) => files.has(path) ? path === file.path ? file : Object.assign(new TFile(), { path, extension: "md" }) : null,
+		getAbstractFileByPath: (path: string) => files.has(path) ? file : null, read: vi.fn(async (note: TFile) => files.get(note.path)!),
 		create: vi.fn(async (path: string, text: string) => { if (files.has(path)) throw Error("Занято"); files.set(path, text); return Object.assign(new TFile(), { path, extension: "md" }); }) },
 		workspace: { activeLeaf: leaf, getActiveViewOfType: (type: unknown) => type === MarkdownView ? view : null, getActiveFile: () => file, getLeavesOfType: (type: string) => type === "markdown" ? [leaf] : [],
 			on: (name: string, callback: (...args: any[]) => void) => { events.set(name, callback); return {}; }, onLayoutReady: () => {}, detachLeavesOfType: () => {},
@@ -33,8 +37,14 @@ async function setup(options: { text?: string; settings?: Record<string, unknown
 	const plugin = new AiHelperPlugin(app, { id: "obsidian-ai-helper" } as PluginManifest); plugins.push(plugin);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, serverUrl: "http://server/v1", model: "model", contextWindow: "32000", language: "ru", translationLanguage: "English", translationSuffix: " — en", systemPrompt: "СЕКРЕТ ЧАТА", ...options.settings });
 	vi.spyOn(plugin, "addCommand").mockImplementation((command: any) => { commands.set(command.id, command.callback); return command; });
+	const registerView = vi.spyOn(plugin, "registerView");
 	await plugin.onload();
-	return { plugin, app, file, files, view, leaf, right, opened, commands, events, network, requests };
+	const openChat = async () => {
+		const factory = registerView.mock.calls.find(([type]) => type === "ai-helper-chat")![1];
+		const chat = factory({} as WorkspaceLeaf) as ChatView; await chat.onOpen();
+		return { chat, root: chat.contentEl as unknown as TestElement };
+	};
+	return { plugin, app, file, files, view, leaf, right, opened, commands, events, network, requests, openChat };
 }
 it("команда переводит видимые абзацы и открывает отдельную заметку рядом", async () => {
 	const env = await setup();
@@ -314,4 +324,136 @@ it.each([
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
 	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("после ошибки освобождает чат, а повтор при занятом чате не ставит перевод в очередь", async () => {
+	const pending = deferred<Response>();
+	let attempts = 0;
+	const env = await setup({ completion: async body => {
+		if (!body.messages[0].content.includes("Translate every")) return pending.promise;
+		attempts++;
+		return attempts === 1 ? new Response("{}", { status: 503 }) : response([{ id: "p1", text: "Первый перевод." }, { id: "p2", text: "Второй перевод." }], "stop");
+	} });
+	const { chat, root } = await env.openChat();
+	try {
+		env.commands.get("translate-current-note")!();
+		await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+		root.find("ai-helper-input").value = "Обсудим статью"; root.find("ai-helper-send").click();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+		button("Повторить").click();
+		expect(Notice.messages.at(-1)).toContain("Дождитесь");
+		pending.resolve(new Response(JSON.stringify({ choices: [{ message: { content: "Обсудим." } }] })));
+		await vi.waitFor(() => expect(chat.isGenerating()).toBe(false));
+		expect(attempts).toBe(1);
+		env.view.editor.getValue = () => "Изменённый оригинал";
+		env.plugin.settings.translationLanguage = "Deutsch";
+		button("Повторить").click(); button("Повторить").click();
+		await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
+		expect(attempts).toBe(2);
+		expect(JSON.stringify(env.requests.at(-1))).toContain("Видимый текст.");
+		expect(JSON.stringify(env.requests.at(-1))).toContain("English");
+	} finally { await chat.onClose(); }
+});
+it.each(["чат", "перевод"])("атомарно отклоняет конкурирующие действия: первым запущен %s", async first => {
+	const pending = deferred<Response>();
+	const env = await setup({ completion: () => pending.promise });
+	const one = await env.openChat(); const two = await env.openChat();
+	try {
+		one.root.find("ai-helper-input").value = "Первый вопрос";
+		two.root.find("ai-helper-input").value = "Второй вопрос";
+		if (first === "чат") {
+			one.root.find("ai-helper-send").click();
+			env.commands.get("translate-current-note")!();
+		} else {
+			env.commands.get("translate-current-note")!();
+			one.root.find("ai-helper-send").click();
+		}
+		two.root.find("ai-helper-send").click();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+		expect(two.root.find("ai-helper-input").value).toBe("Второй вопрос");
+		expect(Notice.messages.at(-1)).toContain("Дождитесь");
+		if (first === "чат") one.root.find("ai-helper-send").click(); else button("Остановить").click();
+		two.root.find("ai-helper-send").click();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+		pending.resolve(new Response(JSON.stringify({ choices: [{ message: { content: "Поздний ответ" } }] })));
+		await vi.waitFor(() => expect(two.chat.isGenerating()).toBe(false));
+		expect(env.requests).toHaveLength(2);
+		expect(env.app.vault.create).not.toHaveBeenCalled();
+	} finally { await one.chat.onClose(); await two.chat.onClose(); }
+});
+it.each(["завершение", "ожидание", "отмена", "выгрузка"])("перевод сохраняет готовый запрос индекса и освобождает приоритет: %s", async outcome => {
+	const index = deferred<Response>(); const translation = deferred<Response>();
+	const inputs: string[] = []; let indexSignal: AbortSignal | null | undefined;
+	const env = await setup({ settings: { embeddingServerUrl: "http://server/v1", embeddingModel: "поиск", noteUpdateDelaySeconds: 0.01 },
+		embedding: async (body, signal) => {
+			inputs.push(...body.input);
+			if (inputs.length === 1) { indexSignal = signal; return index.promise; }
+			return new Response(JSON.stringify({ data: body.input.map((_: string, i: number) => ({ index: i, embedding: [1, 0] })) }));
+		}, completion: () => translation.promise });
+	env.files.set("Заметки/Следующая.md", "Следующая заметка.");
+	env.commands.get("index-vault")!();
+	await vi.waitFor(() => expect(inputs).toHaveLength(1));
+	env.commands.get("translate-current-note")!();
+	await new Promise(resolve => setTimeout(resolve, 20));
+	expect(env.requests).toHaveLength(0); expect(indexSignal?.aborted).toBe(false);
+	index.resolve(new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	expect(inputs).toHaveLength(1);
+	if (outcome === "отмена") button("Остановить").click();
+	else if (outcome === "выгрузка") env.plugin.onunload();
+	else translation.resolve(outcome === "ожидание" ? new Response("{}", { status: 503 }) : response([{ id: "p1", text: "Первый." }, { id: "p2", text: "Второй." }], "stop"));
+	if (outcome === "выгрузка") {
+		await new Promise(resolve => setTimeout(resolve, 40)); expect(inputs).toHaveLength(1);
+	} else {
+		await vi.waitFor(() => expect(inputs).toHaveLength(2));
+		expect(inputs[1]).toContain("Следующая заметка.");
+		expect(inputs.filter(input => input.includes("Сохранённый текст."))).toHaveLength(1);
+	}
+	if (outcome === "отмена" || outcome === "выгрузка") {
+		translation.resolve(response([{ id: "p1", text: "Поздний." }, { id: "p2", text: "Ответ." }], "stop"));
+		await new Promise(resolve => setTimeout(resolve, 20));
+		expect(env.app.vault.create).not.toHaveBeenCalled(); expect(env.requests).toHaveLength(1);
+	}
+});
+it.each(["пауза", "ошибка"])("освобождение перевода сохраняет состояние индекса: %s", async state => {
+	const index = deferred<Response>(); const translation = deferred<Response>(); let embeddings = 0;
+	const env = await setup({ settings: { embeddingServerUrl: "http://server/v1", embeddingModel: "поиск", noteUpdateDelaySeconds: 0.01 },
+		embedding: async () => { embeddings++; return index.promise; }, completion: () => translation.promise });
+	env.files.set("Заметки/Следующая.md", "Следующая заметка.");
+	const { chat, root } = await env.openChat();
+	try {
+		root.find("ai-helper-search-toggle").click();
+		env.commands.get("index-vault")!();
+		await vi.waitFor(() => expect(embeddings).toBe(1));
+		if (state === "пауза") root.find("ai-helper-index-pause").click();
+		index.resolve(state === "ошибка" ? new Response("{}", { status: 503 }) : new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] })));
+		await vi.waitFor(() => expect(root.find("ai-helper-index-reason").getText()).toContain(state === "пауза" ? "Индексация приостановлена" : "Ошибка"));
+		const before = root.find("ai-helper-index-reason").getText();
+		env.commands.get("translate-current-note")!();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+		translation.resolve(new Response("{}", { status: 503 }));
+		await vi.waitFor(() => expect(button("Повторить").disabled).toBe(false));
+		await new Promise(resolve => setTimeout(resolve, 40));
+		expect(embeddings).toBe(1);
+		expect(root.find("ai-helper-index-reason").getText()).toBe(before);
+	} finally { await chat.onClose(); }
+});
+it("позднее завершение отменённой попытки не освобождает модель новой операции", async () => {
+	const old = deferred<Response>(); const current = deferred<Response>(); let attempts = 0;
+	const env = await setup({ completion: () => ++attempts === 1 ? old.promise : current.promise });
+	const { chat, root } = await env.openChat();
+	try {
+		env.commands.get("translate-current-note")!();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+		button("Остановить").click(); env.commands.get("translate-current-note")!();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+		old.resolve(response([{ id: "p1", text: "Поздний." }, { id: "p2", text: "Ответ." }], "stop"));
+		await new Promise(resolve => setTimeout(resolve, 20));
+		root.find("ai-helper-input").value = "Новый вопрос"; root.find("ai-helper-send").click();
+		expect(Notice.messages.at(-1)).toContain("Дождитесь"); expect(env.requests).toHaveLength(2);
+		button("Остановить").click();
+		current.resolve(response([{ id: "p1", text: "Второй." }, { id: "p2", text: "Ответ." }], "stop"));
+		await new Promise(resolve => setTimeout(resolve, 20));
+		expect(env.app.vault.create).not.toHaveBeenCalled();
+	} finally { await chat.onClose(); }
 });

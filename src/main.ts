@@ -1,3 +1,4 @@
+import { ConversationModel } from "./conversation-model";
 import { NoteTranslation } from "./note-translation";
 import { TranslationModal } from "./translation-modal";
 import { FileSystemAdapter, Plugin, MarkdownView, TFile, TFolder, type TAbstractFile, type Editor, parseYaml, getLanguage as getAppLanguage } from "obsidian";
@@ -25,6 +26,7 @@ import { chatEditorSelection } from "./editor-selection";
 import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
 
 export class AiHelperPlugin extends Plugin {
+	conversationModel = new ConversationModel(() => this.noteSearch);
 	translation = new NoteTranslation(this);
 	private translationModal?: TranslationModal;
 	currentNote: TFile | null = null;
@@ -224,6 +226,7 @@ export class AiHelperPlugin extends Plugin {
 	onunload(): void {
 		this.unloading = true;
 		this.translation.dispose();
+		this.conversationModel.dispose();
 		this.translationModal?.close();
 		this.indexStorageListeners.clear();
 		this.noteSearch?.dispose();
@@ -269,8 +272,7 @@ export class AiHelperPlugin extends Plugin {
 		if (!this.translation.active) {
 			const file = selected ?? this.app.workspace.getActiveFile?.();
 			if (!file || file.extension !== "md") { showStatusNotice(this.t("translation-note-required"), "warning"); return; }
-			if (this.getChatView()?.isGenerating() || this.noteSearch?.chatHasPriority) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
-			this.translation.start(file);
+			if (!this.translation.start(file)) return;
 		}
 		this.translationModal?.close();
 		this.translationModal = new TranslationModal(this); this.translationModal.open();

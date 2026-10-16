@@ -4,6 +4,7 @@ import type { AiHelperSettings } from "./settings";
 import { connectionUrl, type ChatMessage } from "./server-client";
 import { effectiveContextWindow } from "./context-window";
 import { conservativePromptTokens } from "./prompt-tokens";
+import { showStatusNotice } from "./ui-status";
 import type { LocaleKey } from "./i18n";
 
 export type TranslationStage = "translation-preparing" | "translation-running" | "translation-saving" | "translation-saved" | "translation-error" | "translation-cancelled";
@@ -60,6 +61,8 @@ export class NoteTranslation {
 	active = false;
 	busy = false;
 	private controller?: AbortController;
+	private retryWork?: { snapshot: TranslationSnapshot; reading: Promise<string> };
+	get canRetry(): boolean { return !this.busy && !!this.retryWork; }
 	private response: string | undefined;
 	get debugResponse(): string | undefined { return this.plugin.settings.translationDebugMode ? this.response : undefined; }
 	private listeners = new Set<() => void>();
@@ -67,12 +70,14 @@ export class NoteTranslation {
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private update(stage: TranslationStage, detail?: LocaleKey): void { this.stage = stage; this.detail = detail; this.listeners.forEach(listener => listener()); }
 	cancel(): void {
-		this.controller?.abort(); this.controller = undefined; this.busy = false; this.active = false; this.response = undefined;
+		this.controller?.abort(); this.controller = undefined; this.busy = false; this.active = false; this.response = undefined; this.retryWork = undefined;
 		this.update("translation-cancelled");
 	}
 	dispose(): void { this.cancel(); this.listeners.clear(); }
-	start(file: TFile): void {
-		if (this.active) return;
+	start(file: TFile): boolean {
+		if (this.active) return true;
+		const lease = this.acquire();
+		if (!lease) return false;
 		const { app } = this.plugin;
 		this.active = true; this.busy = true; this.savedPath = ""; this.response = undefined;
 		const controller = new AbortController(); this.controller = controller;
@@ -86,11 +91,26 @@ export class NoteTranslation {
 		let text: Promise<string>;
 		try { text = view ? Promise.resolve(view.getMode() === "source" ? view.editor.getValue() : view.getViewData()) : app.vault.read(file); }
 		catch { text = Promise.reject(new TranslationError("translation-read-error")); }
-		void this.run(snapshot, text, controller);
+		void this.run(snapshot, text, controller, lease);
+		return true;
 	}
-	private async run(snapshot: TranslationSnapshot, reading: Promise<string>, controller: AbortController): Promise<void> {
+	private acquire() {
+		const lease = this.plugin.conversationModel.tryAcquire();
+		if (!lease) showStatusNotice(this.plugin.t("translation-busy"), "warning");
+		return lease;
+	}
+	retry(): void {
+		if (!this.canRetry) return;
+		const lease = this.acquire();
+		if (!lease) return;
+		const { snapshot, reading } = this.retryWork!;
+		this.retryWork = undefined; this.busy = true; this.response = undefined;
+		const controller = new AbortController(); this.controller = controller;
+		this.update("translation-preparing");
+		void this.run(snapshot, reading, controller, lease);
+	}
+	private async run(snapshot: TranslationSnapshot, reading: Promise<string>, controller: AbortController, priority: { ready: Promise<void>; release(): void }): Promise<void> {
 		const { signal } = controller;
-		const priority = this.plugin.noteSearch?.acquireChatPriority();
 		const check = () => { if (signal.aborted) throw new Error("cancelled"); };
 		let interrupt!: () => void;
 		const interrupted = new Promise<never>((_resolve, reject) => { interrupt = () => { priority?.release(); reject(new Error("cancelled")); }; });
@@ -134,7 +154,10 @@ export class NoteTranslation {
 			catch { check(); this.update("translation-saved", "translation-open-error"); }
 			this.active = false;
 		} catch (error) {
-			if (!signal.aborted) this.update("translation-error", error instanceof TranslationError ? error.key : "translation-read-error");
+			if (!signal.aborted) {
+				if (error instanceof TranslationError && error.key === "translation-model-error") this.retryWork = { snapshot, reading };
+				this.update("translation-error", error instanceof TranslationError ? error.key : "translation-read-error");
+			}
 		} finally {
 			signal.removeEventListener("abort", interrupt);
 			priority?.release();

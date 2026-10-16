@@ -15,6 +15,7 @@ export class TranslationModal extends Modal {
 		const actions = this.contentEl.createDiv({ cls: "modal-button-container ai-helper-translation-actions" });
 		const cancel = new ButtonComponent(actions).onClick(() => { this.plugin.translation.cancel(); this.close(); });
 		new ButtonComponent(actions).setButtonText(this.plugin.t("translation-hide")).onClick(() => this.close());
+		const retry = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-retry")).onClick(() => this.plugin.translation.retry());
 		const copy = this.plugin.settings.translationDebugMode ? new ButtonComponent(actions)
 			.setButtonText(this.plugin.t("translation-copy-response"))
 			.onClick(async () => {
@@ -35,6 +36,8 @@ export class TranslationModal extends Modal {
 			setStatusTone(status, operation.stage === "translation-error" ? "error" : operation.stage === "translation-saved" ? "success" : "info");
 			cancel.setButtonText(this.plugin.t(operation.busy ? "translation-stop" : "translation-finish"));
 			cancel.setDisabled(operation.stage === "translation-saving");
+			retry.buttonEl.style.display = operation.canRetry ? "" : "none";
+			retry.setDisabled(!operation.canRetry);
 			copy?.setDisabled(!operation.debugResponse);
 		};
 		this.unsubscribe = this.plugin.translation.subscribe(update); update();

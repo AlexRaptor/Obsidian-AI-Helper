@@ -649,7 +649,6 @@ export class ChatView extends ItemView implements HoverParent {
 
 	private async handleSend(): Promise<void> {
 		if (this.thinking) return;
-		if (this.plugin.translation?.busy) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
 		const draft = this.messageInput.getDraft();
 		const text = draftText(draft).trim();
 		const fragmentKeys = new Set<string>();
@@ -676,6 +675,9 @@ export class ChatView extends ItemView implements HoverParent {
 		}
 		if (!text) return;
 		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
+
+		const modelLease = this.plugin.conversationModel?.tryAcquire();
+		if (this.plugin.conversationModel && !modelLease) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
 
 		this.messageInput.clear();
 		const displayDraft: DisplayDraft | undefined = hasAttachments ? {
@@ -725,7 +727,7 @@ export class ChatView extends ItemView implements HoverParent {
 		const serverUrl = settings.serverUrl.trim();
 		const model = settings.model;
 
-		const priority = this.plugin.noteSearch?.acquireChatPriority?.();
+		const priority = modelLease ?? this.plugin.noteSearch?.acquireChatPriority?.();
 		this.releaseChatPriority = priority?.release ?? null;
 		this.setThinking(true);
 		try {
