@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { type App, type PluginManifest, type WorkspaceLeaf, TFile, MarkdownView, FileSystemAdapter } from "obsidian";
 import { IDBFactory } from "fake-indexeddb";
@@ -503,11 +504,11 @@ it("переводит явные подписи ссылок, изображе�
 it.each(["удаление", "повтор", "перестановка", "чужая единица", "подделка", "новая разметка"])("отклоняет повреждение защищённых элементов: %s", async damage => {
 	const env = await setup({ text: "Первый `секрет` и $формула$.\n\nВторой **важный**.", completion: async body => {
 		const { units } = JSON.parse(body.messages.at(-1).content);
-		const tokens = units[0].text.match(/⟦[^⟧]+⟧/g)!;
-		if (damage === "удаление") units[0].text = units[0].text.replace(tokens[0], "");
-		if (damage === "повтор") units[0].text += tokens[0];
-		if (damage === "перестановка") units[0].text = `Текст ${tokens[1]} и ${tokens[0]}.`;
-		if (damage === "чужая единица") units[1].text += tokens[0];
+		const token = "⟦AIH0:p1:0⟧";
+		if (damage === "удаление") units.splice(0, 1);
+		if (damage === "повтор") units.push({ ...units[0] });
+		if (damage === "перестановка") units[0].text = `Текст ${token}.`;
+		if (damage === "чужая единица") units[1].id = "другой";
 		if (damage === "подделка") units[0].text += "⟦AIH999:p1:0⟧";
 		if (damage === "новая разметка") units[0].text += "\n# Новый раздел";
 		return response(units, "stop");
@@ -533,12 +534,11 @@ it("не обращается к модели для заметки только
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("---\ntitle: Свойство\n---\n[Оригинал](<./Статья.md>)\n\n\n```\nСекретный код\n```\n\n$$x = 1$$\n");
 	expect(env.requests).toHaveLength(0);
 });
-it("не принимает пробелы, превращающие выделение в обычный текст", async () => {
+it("локально убирает пробелы модели возле выделения", async () => {
 	const env = await setup({ text: "Текст **важный**.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("важный", " important ") })), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.app.vault.create).not.toHaveBeenCalled();
-	expect(Modal.opened[0].contentEl.getText()).toContain("защищённые элементы");
+	expect(env.files.get("Заметки/Статья — en.md")).toContain("Текст **important**.");
 });
 it("сохраняет пустые свойства, разделители и определения reference-ссылок с переносами", async () => {
 	const source = "---\n---\n\n[Подпись][] и [Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows и Microsoft Word.\n";
@@ -573,7 +573,8 @@ it.each(["разделитель после переноса", "пустая п�
 	const text = damage === "пустая подпись" ? "[Подпись](Цель.md)" : "Первая строка\nВторая строка";
 	const env = await setup({ text, completion: async body => {
 		const { units } = JSON.parse(body.messages.at(-1).content);
-		units[0].text = units[0].text.replace(damage === "пустая подпись" ? "Подпись" : "Вторая строка", damage === "пустая подпись" ? "" : "===");
+		const target = units.find((unit: { text: string }) => unit.text.includes(damage === "пустая подпись" ? "Подпись" : "Вторая строка"));
+		target.text = damage === "пустая подпись" ? "" : "===";
 		return response(units, "stop");
 	} });
 	env.files.set("Заметки/Цель.md", "Цель");
@@ -650,7 +651,7 @@ it.each(["лишняя ячейка", "пропущенная ячейка", "д
 		if (damage === "дубль определения") units.push({ ...units.at(-1) });
 		if (damage === "идентификатор сноски") units[0].text = "Текст[^другой].";
 		if (damage === "тип callout") units.find((unit: { text: string }) => unit.text === "Заголовок").text = "[!warning]+ Заголовок";
-		if (damage === "повреждённое выделение") units.find((unit: { text: string }) => unit.text.includes("Важно")).text = "Важно";
+		if (damage === "повреждённое выделение") units.find((unit: { text: string }) => unit.text.includes("Важно")).text = "**Важно**";
 		return response(units, "stop");
 	} });
 	env.commands.get("translate-current-note")!();
@@ -1593,4 +1594,139 @@ it("объясняет исчезновение оригинала уведом�
 	expect(Notice.messages.at(-1)).toContain("Заметки/Статья — en.md");
 	expect(env.opened).toHaveLength(1);
 	expect(env.app.workspace.createLeafBySplit).not.toHaveBeenCalled();
+});
+
+it.each(["команда", "меню"])("#58: %s переводит подписи и оформление без копирования маркеров", async entry => {
+	const text = 'Read [the guide](https://example.org), [[Справка|related note]] and [resources](https://example.net).\n\nCapture **important ideas**, *examples* and ~~outdated advice~~.\n\nA short reference helps the reader[^ref].\n\nStable reference block. ^stable\n\n[^ref]: Reference text.';
+	const words: Record<string, string> = { 'Read': 'Прочитайте', 'the guide': 'руководство', 'related note': 'связанную заметку', 'resources': 'полезные ссылки', 'Capture': 'Записывайте', 'important ideas': 'важные идеи', 'examples': 'примеры', 'outdated advice': 'устаревшие советы', 'A short reference helps the reader': 'Короткая справка помогает читателю', 'Stable reference block': 'Стабильный блок ссылок', 'Reference text': 'Текст справки', ' and ': ' и ' };
+	const env = await setup({ text, settings: { translationLanguage: 'Русский' }, completion: async body => {
+		const payload = JSON.parse(body.messages.at(-1).content);
+		expect(JSON.stringify(payload)).not.toMatch(/⟦AIH/);
+		expect(payload.context).toBeDefined();
+		return response(payload.units.map((unit: { id: string; text: string }) => ({ id: unit.id, text: Object.entries(words).reduce((text, [from, to]) => text.replaceAll(from, to), unit.text) })), 'stop');
+	} });
+	env.files.set('Справка.md', 'Содержимое встраивания не читается.');
+	if (entry === 'команда') env.commands.get('translate-current-note')!();
+	else {
+		let launch!: () => void;
+		env.events.get('file-menu')!({ addItem: (render: (item: any) => void) => {
+			let title = ""; const item = { setTitle: (value: string) => { title = value; return item; }, setIcon: () => item, onClick: (action: () => void) => { if (title === "Перевести текущую заметку") launch = action; return item; } }; render(item);
+		} }, env.file);
+		launch();
+	}
+	await vi.waitFor(() => expect(env.files.has('Заметки/Статья — en.md')).toBe(true));
+	const result = env.files.get('Заметки/Статья — en.md')!;
+	expect(result).toContain('[руководство](https://example.org)');
+	expect(result).toContain('[[../Справка.md|связанную заметку]]');
+	expect(result).toContain('**важные идеи**, *примеры* и ~~устаревшие советы~~');
+	expect(result).toContain('читателю[^ref]');
+	expect(result).toContain('Стабильный блок ссылок. ^stable');
+	expect(result).not.toMatch(/⟦AIH/);
+	expect(env.app.vault.read).not.toHaveBeenCalled();
+	expect(env.opened).toHaveLength(2);
+});
+
+it.each(["ru", "en"])("#58: объясняет нарушения при скрытом прогрессе и продолжает после исправления (%s)", async language => {
+	const pending = deferred<Response>();
+	const env = await setup({ text: 'Прочитайте **важное** и [справку](https://example.org).', settings: { language }, completion: async body => env.requests.length === 1 ? pending.promise : response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	const units = JSON.parse(env.requests[0].messages.at(-1).content).units;
+	button(language === 'ru' ? 'Скрыть' : 'Hide').click();
+	pending.resolve(response(units.slice(1), 'stop'));
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(Notice.messages.at(-1)).toContain(language === 'ru' ? 'Пропущен перевод' : 'Missing translated fragment');
+	expect(Notice.messages.at(-1)).toContain(units[0].id);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	env.commands.get('translate-current-note')!();
+	expect(Modal.opened[0].contentEl.getText()).toContain(units[0].id);
+	button(language === 'ru' ? 'Продолжить перевод' : 'Continue translation').click();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.files.get('Заметки/Статья — en.md')).toContain('**важное** и [справку](https://example.org)');
+});
+
+it.each([
+	['duplicate', 'Повторён идентификатор', 'Duplicate translated'],
+	['unknown', 'неизвестный идентификатор', 'Unknown fragment'],
+	['empty', 'Пустой перевод', 'Empty translated'],
+	['structure', 'недопустимую разметку', 'forbidden markup'],
+	['format', 'Неверная структура', 'Invalid translation response'],
+	['old', 'неизвестный идентификатор', 'Unknown fragment'],
+])('#58: отклоняет %s без записи и без вывода данных модели', async (damage, ru, en) => {
+	for (const language of ['ru', 'en']) {
+		const env = await setup({ text: 'Текст **важный**.', settings: { language }, completion: async body => {
+			const units = JSON.parse(body.messages.at(-1).content).units;
+			if (damage === 'duplicate') units.push({ ...units[0] });
+			if (damage === 'unknown') units[0].id = 'СЕКРЕТ ИЗ ОТВЕТА';
+			if (damage === 'empty') units[0].text = ' ';
+			if (damage === 'structure') units[0].text = '[новая ссылка](секрет)';
+			if (damage === 'format') return response({ units }, 'stop');
+			if (damage === 'old') return response([{ id: 'p1', text: 'Записывайте важные идеи⟦AIH0:p1:0⟧, примеры⟦AIH0:p1:3⟧.' }], 'stop');
+			return response(units, 'stop');
+		} });
+		env.commands.get('translate-current-note')!();
+		await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+		expect(env.app.vault.create).not.toHaveBeenCalled();
+		const message = Notice.messages.at(-1)!;
+		expect(message).toContain(language === 'ru' ? ru : en);
+		expect(message).not.toContain('СЕКРЕТ');
+		if (['duplicate', 'empty', 'structure'].includes(damage)) expect(message).toContain(JSON.parse(env.requests[0].messages.at(-1).content).units[0].id);
+		button(language === 'ru' ? 'Завершить' : 'Finish').click();
+		expect(env.plugin.translation.active).toBe(false);
+	}
+});
+
+
+it("#58: полная How to take notes собирается без потери частей, с локальными ссылками", async () => {
+	const text = readFileSync("docs/testing/note-translation/issue58-source.md", "utf8");
+	const translations: Record<string, string> = {
+		"How to take notes": "Как вести заметки", "A practical method": "Практический метод",
+		"next section": "следующий раздел", "related note": "связанная заметка", "a useful reference": "полезная справка",
+		"important ideas": "важные идеи", "examples": "примеры", "outdated advice": "устаревшие советы",
+	};
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ id: unit.id, text: Object.entries(translations).reduce((value, [from, to]) => value.replaceAll(from, to), unit.text) })), "stop") });
+	env.files.set("Справка/Метод.md", "Содержимое встроенной заметки.");
+	env.files.set("Вложения/Схема.svg", "Рисунок");
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	const result = env.files.get("Заметки/Статья — en.md")!;
+	let expected = text.slice(0, text.indexOf("# How to take notes"));
+	expected += "[Оригинал](<./Статья.md>)\n\n";
+	expected += Object.entries(translations).reduce((value, [from, to]) => value.replaceAll(from, to), text.slice(text.indexOf("# How to take notes")))
+		.replace("(#Практический метод)", "(#Практический%20метод)")
+		.replace("[[Справка/Метод|", "[[../Справка/Метод.md|")
+		.replace("![[Справка/Метод]]", "![[../Справка/Метод.md]]");
+	expect(result).toBe(expected);
+	expect(env.app.vault.read).not.toHaveBeenCalled();
+	expect(result).not.toMatch(/⟦AIH/);
+});
+
+it.each(['Это **важно**:', '**Сумма** = 2.', '**Важно** - проверить результат.', 'Проверьте `x` = 1.'])("#58: принимает пунктуацию внутри строки после оформления: %s", async text => {
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text));
+});
+
+it.each(['тип текста', 'лишнее поле'])("#58: сообщает известный ID при неверной структуре записи: %s", async damage => {
+	const env = await setup({ text: 'Прочитайте **справку**.', completion: async body => {
+		const units = JSON.parse(body.messages.at(-1).content).units;
+		if (damage === 'тип текста') units[0].text = 42;
+		else units[0].extra = 'СЕКРЕТ';
+		return response(units, 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(Notice.messages.at(-1)).toContain('Неверная структура');
+	expect(Notice.messages.at(-1)).toContain(JSON.parse(env.requests[0].messages.at(-1).content).units[0].id);
+	expect(Notice.messages.at(-1)).not.toContain('СЕКРЕТ');
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("#58: диагностика блочной разметки после локальной сборки сохраняет ID", async () => {
+	const env = await setup({ text: 'Исходный абзац.', completion: async () => response([{ id: 'p1', text: '- Добавленный пункт' }], 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(Notice.messages.at(-1)).toContain('недопустимую разметку');
+	expect(Notice.messages.at(-1)).toContain('p1');
+	expect(env.app.vault.create).not.toHaveBeenCalled();
 });

@@ -47,7 +47,7 @@ export class TranslationModal extends Modal {
 			saveCopy.buttonEl.style.display = operation.canSave && operation.conflict ? "" : "none";
 			save.setDisabled(!operation.canSave); overwrite.setDisabled(!operation.canSave); saveCopy.setDisabled(!operation.canSave);
 			progress.setText(this.plugin.t(operation.partialResult && operation.stage === "translation-saving" ? "translation-partial-saving" : operation.partialResult && operation.stage === "translation-saved" ? "translation-partial-saved" : operation.stage) + (["translation-preparing", "translation-running", "translation-error", "translation-waiting"].includes(operation.stage) ? ` — ${Math.floor(operation.progress * 100)}%` : ""));
-			detail.setText(operation.detail ? this.plugin.t(operation.detail) + (operation.saveError ? ` ${operation.saveError}` : "") : "");
+			detail.setText(operation.detail ? this.plugin.t(operation.detail) + (operation.saveError ? ` ${operation.saveError}` : "") + (operation.protocolDetail ? ` ${operation.protocolDetail}` : "") : "");
 			const warning = operation.detail === "translation-open-error" || operation.detail === "translation-original-missing" || operation.detail === "translation-unresolved" || operation.detail === "translation-conflict" || operation.detail === "translation-target-changed";
 			const error = operation.stage === "translation-error" || operation.detail === "translation-title-error" || operation.detail === "translation-name";
 			setStatusTone(detail, warning ? "warning" : error ? "error" : "info");

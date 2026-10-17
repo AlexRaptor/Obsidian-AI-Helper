@@ -321,6 +321,13 @@ export class TranslationMarkdown {
 	private referenceKey(label: string): string { return label.trim().replace(/\s+/g, " ").toLowerCase(); }
 	private destination(text: string, start: number): { start: number; end: number; raw: string } {
 		let at = start;
+		// Obsidian permits bare local heading anchors containing spaces.
+		// Keep the entire anchor; treating its first word as the target freezes the label.
+		const localAnchor = text.slice(start).match(/^(#[^"'<>\r\n()]*[ \t][^"'<>\r\n()]*)\)$/);
+		if (localAnchor) {
+			const raw = localAnchor[1].trimEnd();
+			return { start, end: start + raw.length, raw };
+		}
 		if (text[at] === "<") {
 			const end = text.indexOf(">", at + 1); if (end < 0) unsupported();
 			return { start: at + 1, end, raw: text.slice(at + 1, end) };
