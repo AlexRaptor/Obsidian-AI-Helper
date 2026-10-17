@@ -1,0 +1,153 @@
+[
+  {
+    "sample": "article",
+    "run": 1,
+    "replayed": false,
+    "success": true,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 1,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27811",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27811
+      }
+    ],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "frontmatter": true,
+      "code": true,
+      "formula": true,
+      "inlineCode": true,
+      "footnote": true,
+      "block": true,
+      "embed": true,
+      "alreadyRussian": true
+    },
+    "elapsedSeconds": 74
+  },
+  {
+    "sample": "article",
+    "run": 2,
+    "replayed": false,
+    "success": false,
+    "stage": "translation-error",
+    "detail": "translation-invalid",
+    "protocolDetail": "Указанный диапазон перевода не совпадает с текстом или структурой оформления. (p23/a0_keep_block_identifier)",
+    "progress": 0,
+    "requests": 2,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27811",
+        "temperature": "server default",
+        "topP": "server default"
+      },
+      {
+        "request": 2,
+        "jsonResponse": true,
+        "maxTokens": "27811",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27811
+      },
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27811
+      }
+    ],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "frontmatter": false,
+      "code": false,
+      "formula": false,
+      "inlineCode": false,
+      "footnote": false,
+      "block": false,
+      "embed": false,
+      "alreadyRussian": false
+    },
+    "elapsedSeconds": 156
+  },
+  {
+    "sample": "article",
+    "run": 3,
+    "replayed": false,
+    "success": false,
+    "stage": "translation-error",
+    "detail": "translation-invalid",
+    "protocolDetail": "Указанный диапазон перевода не совпадает с текстом или структурой оформления. (p21/a0_keep_footnote_reference)",
+    "progress": 0,
+    "requests": 2,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27811",
+        "temperature": "server default",
+        "topP": "server default"
+      },
+      {
+        "request": 2,
+        "jsonResponse": true,
+        "maxTokens": "27811",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27811
+      },
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27811
+      }
+    ],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "frontmatter": false,
+      "code": false,
+      "formula": false,
+      "inlineCode": false,
+      "footnote": false,
+      "block": false,
+      "embed": false,
+      "alreadyRussian": false
+    },
+    "elapsedSeconds": 153
+  }
+]

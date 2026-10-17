@@ -78,6 +78,16 @@ function button(text: string): TestElement {
 function response(units: unknown, reason?: string): Response {
 	return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ units }) }, finish_reason: reason }] }));
 }
+type TestNode = string | { id: string; parts?: TestNode[] };
+function treeNodes(unit: { parts?: TestNode[] }): Exclude<TestNode, string>[] {
+	return (unit.parts ?? []).flatMap(part => typeof part === "string" ? [] : [part, ...treeNodes(part)]);
+}
+// The deterministic dictionary adapter translates prose, keeping typed source objects.
+function translateUnit(unit: { id: string; text: string; parts?: TestNode[] }, translate: (text: string) => string) {
+	const parts = (nodes: TestNode[]): TestNode[] => nodes.map(node => typeof node === "string" ? translate(node) : { ...node, ...(node.parts ? { parts: parts(node.parts) } : {}) });
+	return { ...unit, text: translate(unit.text), ...(unit.parts ? { parts: parts(unit.parts) } : {}) };
+}
+
 it("меню открытой заметки использует её редактор даже при другой активной заметке", async () => {
 	const env = await setup();
 	const other = Object.assign(new TFile(), { path: "Другая.md", extension: "md" });
@@ -340,7 +350,7 @@ it("после ошибки освобождает чат, а повтор пр�
 	const pending = deferred<Response>();
 	let attempts = 0;
 	const env = await setup({ completion: async body => {
-		if (!body.messages[0].content.includes("Translate every")) return pending.promise;
+		if (!body.messages.at(-1).content.startsWith('{"units":')) return pending.promise;
 		attempts++;
 		return attempts === 1 ? new Response("{}", { status: 503 }) : response([{ id: "p1", text: "Первый перевод." }, { id: "p2", text: "Второй перевод." }], "stop");
 	} });
@@ -478,7 +488,7 @@ it("сохраняет каркас статьи, код, формулы и св
 	const words: Record<string, string> = { Заголовок: "Heading", Раздел: "Section", Абзац: "Paragraph", важный: "important", и: "and", курсив: "italic", старый: "old", Задача: "Task", Вложенный: "Nested", продолжение: "continuation", Цитата: "Quote", Элемент: "Item", Код: "Code" };
 	const env = await setup({ text: source, completion: async body => {
 		const { units } = JSON.parse(body.messages.at(-1).content);
-		return response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word) })).reverse(), "stop");
+		return response(units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word)))).reverse(), "stop");
 	} });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
@@ -492,7 +502,7 @@ it("переводит явные подписи ссылок, изображе�
 	const expected = '[Оригинал](<./Статья.md>)\n\n[Caption](<../Цели/Файл.md#Раздел> "Секретная подсказка") and [Caption][ид].\n\n[ид]: ../Цели/Файл.md#Раздел\n\n[[../Цели/Файл.md#Раздел|Caption]] [[../Секретная цель.md]] ![[../Вложение.md#Раздел]] ![[../Фото.png|200x100]] ![[../Вложение.md|Caption]]\n\n![Caption](../Фото.png) <https://example.org/Секрет> https://example.org/секрет\n';
 	const env = await setup({ text: source, completion: async body => {
 		const { units } = JSON.parse(body.messages.at(-1).content);
-		return response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("Подпись", "Caption").replace(" и ", " and ") })), "stop");
+		return response(units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replaceAll("Подпись", "Caption").replace(" и ", " and ")))), "stop");
 	} });
 	for (const path of ["Цели/Файл.md", "Секретная цель.md", "Вложение.md", "Фото.png"]) env.files.set(path, "Содержимое цели");
 	env.commands.get("translate-current-note")!();
@@ -522,7 +532,7 @@ it("сохраняет вложенное выделение, экраниров
 	const source = "## **Важный *текст***\r\n\r\n- [ ] Первый\r\n  - Второй\r\n    Продолжение\r\n  Родитель\r\n\r\n> > ***Важный*** и __текст__  \r\n> > следующий\\\r\n> > конец\r\n\r\nПараграф\r\n    продолжение параграфа\r\n\r\nПуть \\*звезда\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
 	const expected = "[Оригинал](<./Статья.md>)\n\n## **Important *text***\r\n\r\n- [ ] First\r\n  - Second\r\n    Continuation\r\n  Parent\r\n\r\n> > ***Important*** и __text__  \r\n> > next\\\r\n> > end\r\n\r\nParagraph\r\n    paragraph continuation\r\n\r\nPath \\*star\\* &amp; ⟦AIH0:p1:0⟧.\r\n";
 	const words: Record<string, string> = { Важный: "Important", текст: "text", Первый: "First", Второй: "Second", Продолжение: "Continuation", Родитель: "Parent", следующий: "next", конец: "end", Параграф: "Paragraph", "продолжение параграфа": "paragraph continuation", Путь: "Path", звезда: "star" };
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/продолжение параграфа|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace(/продолжение параграфа|[А-Яа-яЁё]+/g, word => words[word] ?? word)))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -534,16 +544,17 @@ it("не обращается к модели для заметки только
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("---\ntitle: Свойство\n---\n[Оригинал](<./Статья.md>)\n\n\n```\nСекретный код\n```\n\n$$x = 1$$\n");
 	expect(env.requests).toHaveLength(0);
 });
-it("локально убирает пробелы модели возле выделения", async () => {
-	const env = await setup({ text: "Текст **важный**.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("важный", " important ") })), "stop") });
+it("отклоняет диапазон выделения с пробелами на границах", async () => {
+	const env = await setup({ text: "Текст **важный**.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("важный", " important ")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.files.get("Заметки/Статья — en.md")).toContain("Текст **important**.");
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain("диапазон перевода");
 });
 it("сохраняет пустые свойства, разделители и определения reference-ссылок с переносами", async () => {
 	const source = "---\n---\n\n[Подпись][] и [Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows и Microsoft Word.\n";
 	const expected = "---\n---\n[Оригинал](<./Статья.md>)\n\n\n[Caption][Подпись] and [Short][Короткая].\n\n[Подпись]:\n  <../Цель.md>\n  \"Секретная подсказка\"\n[Короткая]: ../Цель.md\n\n- - -\n\nMicrosoft Windows and Microsoft Word.\n";
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("Подпись", "Caption").replaceAll("Короткая", "Short").replaceAll(" и ", " and ") })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replaceAll("Подпись", "Caption").replaceAll("Короткая", "Short").replaceAll(" и ", " and ")))), "stop") });
 	env.files.set("Цель.md", "Цель");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
@@ -564,7 +575,7 @@ it.each(["Heading\n===", "Heading\r---"])("не позволяет модели 
 	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
 });
 it("жёсткий перенос абзаца не зависит от нормализации пробелов моделью", async () => {
-	const env = await setup({ text: "Первая строка  \nВторая строка", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replaceAll("  ", " ").replace("Первая строка", "First line").replace("Вторая строка", "Second line") })), "stop") });
+	const env = await setup({ text: "Первая строка  \nВторая строка", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replaceAll("  ", " ").replace("Первая строка", "First line").replace("Вторая строка", "Second line")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nFirst line  \nSecond line");
@@ -586,14 +597,14 @@ it.each(["разделитель после переноса", "пустая п�
 it.each([["", "- ```"], ["> ", "> ```"], ["  ", "1. ```"]])("не распознаёт новые списки и цитаты внутри ограждённого кода: %j / %j", async (prefix, code) => {
 	const block = ["```markdown", code, "Секретный код", "```"].map(line => prefix + line).join("\n");
 	const source = (prefix === "  " ? "- Пункт\n" : "") + block + "\n\nТекст";
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Пункт", "Item") })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Текст", "Text").replace("Пункт", "Item")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n" + (prefix === "  " ? "- Item\n" : "") + block + "\n\nText");
 	expect(JSON.stringify(env.requests)).not.toContain("Секретный код");
 });
 it("сохраняет теги после знаков препинания и не отправляет их модели", async () => {
-	const env = await setup({ text: "Текст (#секрет/вложенный).", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text") })), "stop") });
+	const env = await setup({ text: "Текст (#секрет/вложенный).", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Текст", "Text")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nText (#секрет/вложенный).");
@@ -612,7 +623,7 @@ it("переводит ячейки таблицы, сохраняя пусты�
 	const source = "До таблицы.\n\n| Имя | Значение | Пусто |\n| :--- | ---: | :---: |\n| Текст | **Жирный** и `секрет` | |\n| Сноска | Путь \\| часть | |\n\nПосле таблицы.";
 	const expected = "[Оригинал](<./Статья.md>)\n\nBefore table.\n\n| Name | Value | Empty |\n| :--- | ---: | :---: |\n| Text | **Bold** and `секрет` | |\n| Footnote | Path \\| part | |\n\nAfter table.";
 	const words: Record<string, string> = { "До таблицы": "Before table", "После таблицы": "After table", Имя: "Name", Значение: "Value", Пусто: "Empty", Текст: "Text", Жирный: "Bold", и: "and", Сноска: "Footnote", Путь: "Path", часть: "part" };
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/До таблицы|После таблицы|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace(/До таблицы|После таблицы|[А-Яа-яЁё]+/g, word => words[word] ?? word)))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -623,7 +634,7 @@ it("переводит многострочные определения сно�
 	const source = "Текст[^ид] и снова[^ид].\n\n[^ид]: Определение **важное**.\n    Продолжение с `секретом`.\n\n    Второй абзац.\n\nКонец.";
 	const expected = "[Оригинал](<./Статья.md>)\n\nText[^ид] and again[^ид].\n\n[^ид]: Definition **important**.\n    Continuation with `секретом`.\n\n    Second paragraph.\n\nEnd.";
 	const words: Record<string, string> = { Текст: "Text", и: "and", снова: "again", Определение: "Definition", важное: "important", Продолжение: "Continuation", с: "with", "Второй абзац": "Second paragraph", Конец: "End" };
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/Второй абзац|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace(/Второй абзац|[А-Яа-яЁё]+/g, word => words[word] ?? word)))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -636,7 +647,7 @@ it("переводит вложенные callout с таблицей и сно�
 	const source = ["Начало[^источник].", "", "> [!TIP]- **Мой заголовок**", "> Описание.", ">", "> | Имя | Значение |", "> | --- | ---: |", "> | Текст[^источник] | `секрет` |", ">", "> > [!custom]+ Вложенный", "> > - **Пункт**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> Конец.", "", "[^источник]: Источник.", "    Продолжение.", ""].join("\n");
 	const expected = ["[Оригинал](<./Статья.md>)", "", "Start[^источник].", "", "> [!TIP]- **My title**", "> Description.", ">", "> | Name | Value |", "> | --- | ---: |", "> | Text[^источник] | `секрет` |", ">", "> > [!custom]+ Nested", "> > - **Item**", "> >", "> > ```md", "> > > [!warning] Секретный код", "> > ```", ">", "> [!note]", "> End.", "", "[^источник]: Source.", "    Continuation.", ""].join("\n");
 	const words: Record<string, string> = { Начало: "Start", "Мой заголовок": "My title", Описание: "Description", Имя: "Name", Значение: "Value", Текст: "Text", Вложенный: "Nested", Пункт: "Item", Конец: "End", Источник: "Source", Продолжение: "Continuation" };
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/Мой заголовок|[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace(/Мой заголовок|[А-Яа-яЁё]+/g, word => words[word] ?? word)))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -656,7 +667,7 @@ it.each(["лишняя ячейка", "пропущенная ячейка", "д
 	} });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
-	expect(env.requests).toHaveLength(1);
+	expect(env.requests).toHaveLength(2);
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 	expect(Modal.opened[0].contentEl.getText()).toContain("неправильный или неполный");
 });
@@ -677,7 +688,7 @@ it("сохраняет таблицу без внешних разделител
 	const source = "Имя | Значение\r\n--- | ---\r\nТекст | [^ид]\r\n\r\n[^ид]:\r\n    Описание.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
 	const expected = "[Оригинал](<./Статья.md>)\n\nName | Value\r\n--- | ---\r\nText | [^ид]\r\n\r\n[^ид]:\r\n    Description.\r\n\r\n    ```ts\r\n    // Секретный код\r\n    ```\r\n";
 	const words: Record<string, string> = { Имя: "Name", Значение: "Value", Текст: "Text", Описание: "Description" };
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word) })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace(/[А-Яа-яЁё]+/g, word => words[word] ?? word)))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe(expected);
@@ -694,7 +705,7 @@ it.each(["", "---", "    Секретный код"])("не продолжает
 
 it("сохраняет ограждённый код непосредственно после маркера определения сноски", async () => {
 	const source = "Текст[^ид].\n\n[^ид]: ```ts\n    const secret = 1;\n    ```\n\n    Описание.";
-	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Описание", "Description") })), "stop") });
+	const env = await setup({ text: source, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Текст", "Text").replace("Описание", "Description")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\nText[^ид].\n\n[^ид]: ```ts\n    const secret = 1;\n    ```\n\n    Description.");
@@ -702,7 +713,7 @@ it("сохраняет ограждённый код непосредствен�
 });
 
 it("сохраняет упоминание сноски в начале абзаца", async () => {
-	const env = await setup({ text: "[^ид] Текст.\n\n[^ид]: Определение.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Определение", "Definition") })), "stop") });
+	const env = await setup({ text: "[^ид] Текст.\n\n[^ид]: Определение.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Текст", "Text").replace("Определение", "Definition")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n[^ид] Text.\n\n[^ид]: Definition.");
@@ -720,7 +731,7 @@ it("сохраняет в новой папке ссылки и встраива
 	env.files.delete("Ресурсы/схема.png"); env.files.delete(env.file.path); env.file.path = "Перенесено/Статья.md";
 	env.plugin.settings.translationFolder = "Изменено";
 	const { units } = JSON.parse(env.requests[0].messages.at(-1).content);
-	pending.resolve(response(units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Раздел", "Section").replace("Подробности", "Details").replace("Рисунок", "Picture").replace("Описание", "Description") })), "stop"));
+	pending.resolve(response(units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Раздел", "Section").replace("Подробности", "Details").replace("Рисунок", "Picture").replace("Описание", "Description")))), "stop"));
 	await vi.waitFor(() => expect(env.files.has("Переводы/Готовые/Статья — en.md")).toBe(true));
 	expect(env.files.get("Переводы/Готовые/Статья — en.md")).toBe('---\ntitle: Статья\n---\n[Оригинал](<../../Заметки/Статья.md>)\n\n# Section\n\n[Details](../../Материалы/Справка.md#История) ![Picture](../../Ресурсы/схема.png) ![[../../Материалы/Справка.md#История]]\n\n[Description][ист]\n\n[ист]: ../../Материалы/Справка.md "Подсказка"\n');
 	expect(env.app.vault.createFolder).toHaveBeenCalledWith("Переводы");
@@ -732,7 +743,7 @@ it("сохраняет в новой папке ссылки и встраива
 
 it("обновляет самоссылки на переведённые ATX/Setext-заголовки и сохраняет чужие заголовки и блоки", async () => {
 	const source = "# Раздел\n\nВторой раздел\n---\n\n[Начало](#Раздел) [[Статья#Второй раздел|Далее]] ![[#^блок]] [Снаружи](Справка.md#Раздел)\n\nТекст ^блок";
-	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Второй раздел", "Second section").replace("Раздел", "Section").replace("Начало", "Start").replace("Далее", "Next").replace("Снаружи", "Outside").replace("Текст", "Text") })), "stop") });
+	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Второй раздел", "Second section").replace("Раздел", "Section").replace("Начало", "Start").replace("Далее", "Next").replace("Снаружи", "Outside").replace("Текст", "Text")))), "stop") });
 	env.files.set("Заметки/Справка.md", "# Раздел");
 	env.files.set("Обратная.md", "[[Заметки/Статья#Раздел]]");
 	env.commands.get("translate-current-note")!();
@@ -748,7 +759,7 @@ it("сохраняет неразрешимые ссылки дословно с
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 	env.files.set("Заметки/Нет.md", "Случайная новая цель"); env.files.set("Нет.png", "Новая картинка");
-	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text").replace("Справка", "Reference").replace("Сайт", "Website") })), "stop"));
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Текст", "Text").replace("Справка", "Reference").replace("Сайт", "Website")))), "stop"));
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Переводы/Статья — en.md")).toBe("[Оригинал](<../Заметки/Статья.md>)\n\nText [Неизвестная](Нет.md) [[Нет|Подпись]] ![Фото](Нет.png) [Справка][нет].\n\n[нет]: Нет.md\n\n[Website](https://example.org/a_(b)?q=%2F#секция)");
 	expect(Modal.opened[0].contentEl.getText()).toContain("сохранены дословно");
@@ -785,7 +796,7 @@ it("фиксирует выбор Obsidian для короткой ссылки 
 	reading.resolve("[Справка](Справка)");
 	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 	resolve.mockClear();
-	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop"));
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Справка", "Reference")))), "stop"));
 	await vi.waitFor(() => expect(env.files.has("Переводы/Статья — en.md")).toBe(true));
 	expect(env.files.get("Переводы/Статья — en.md")).toContain("[Reference](../Материалы/Справка.md)");
 	expect(resolve).not.toHaveBeenCalled();
@@ -793,7 +804,7 @@ it("фиксирует выбор Obsidian для короткой ссылки 
 
 it("пересчитывает закодированные Markdown-пути, изображения с размером и reference-ссылки без явного идентификатора", async () => {
 	const source = '[Фото](../Ресурсы/фото%20%281%29.png) ![[Ресурсы/фото (1).png|200x100]] [Короткая][] [Короткая]\n\n[Короткая]: <../Материалы/Справка.md> "Подсказка"';
-	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы/Статьи" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Фото", "Photo").replaceAll("Короткая", "Short") })), "stop") });
+	const env = await setup({ text: source, settings: { translationFolderMode: "custom", translationFolder: "Переводы/Статьи" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Фото", "Photo").replaceAll("Короткая", "Short")))), "stop") });
 	env.files.set("Ресурсы/фото (1).png", "Картинка"); env.files.set("Материалы/Справка.md", "Справка");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
@@ -801,7 +812,7 @@ it("пересчитывает закодированные Markdown-пути, �
 });
 
 it("сохраняет назначение Markdown-ссылки на файл с закодированным знаком решётки", async () => {
-	const env = await setup({ text: "[Справка](../Материалы/Файл%23один.md#Раздел)", settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop") });
+	const env = await setup({ text: "[Справка](../Материалы/Файл%23один.md#Раздел)", settings: { translationFolderMode: "custom", translationFolder: "Переводы" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Справка", "Reference")))), "stop") });
 	env.files.set("Материалы/Файл#один.md", "# Раздел");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
@@ -816,13 +827,13 @@ it("закрепляет короткую ссылку по снимку и в �
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 	env.files.set("Заметки/Справка.md", "Новая одноимённая цель");
-	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Текст", "Text") })), "stop"));
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Текст", "Text")))), "stop"));
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toContain("Text [[../Материалы/Справка.md]]");
 });
 
 it("сохраняет самоссылку на отсутствующий заголовок дословно с предупреждением", async () => {
-	const env = await setup({ text: "# Раздел\n\n[Назад](#Отсутствует)", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Раздел", "Section").replace("Назад", "Back") })), "stop") });
+	const env = await setup({ text: "# Раздел\n\n[Назад](#Отсутствует)", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Раздел", "Section").replace("Назад", "Back")))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n# Section\n\n[Назад](#Отсутствует)");
@@ -834,7 +845,7 @@ it.each([
 	["> Раздел\n> ---", "Раздел", "> Section\n> ---", "Section"],
 	["# [Раздел](Справка.md)", "Раздел", "# [Section](./Справка.md)", "Section"],
 ])("обновляет самоссылку на заголовок со сложным оформлением: %s", async (heading, anchor, expectedHeading, expectedAnchor) => {
-	const env = await setup({ text: heading + "\n\n[Назад](#" + anchor + ")", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Раздел", "Section").replace("Первая", "First").replace("вторая", "second").replace("Назад", "Back") })), "stop") });
+	const env = await setup({ text: heading + "\n\n[Назад](#" + anchor + ")", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Раздел", "Section").replace("Первая", "First").replace("вторая", "second").replace("Назад", "Back")))), "stop") });
 	env.files.set("Заметки/Справка.md", "Справка");
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
@@ -848,7 +859,7 @@ it("закрепляет Markdown-ссылку и ссылку на оригин
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 	env.files.delete("Заметки/Справка.md"); env.files.delete("Заметки/Статья.md");
-	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ ...unit, text: unit.text.replace("Справка", "Reference") })), "stop"));
+	pending.resolve(response(JSON.parse(env.requests[0].messages.at(-1).content).units.map((unit: { id: string; text: string }) => (translateUnit(unit, text => text.replace("Справка", "Reference")))), "stop"));
 	await vi.waitFor(() => expect(button("Завершить")).toBeDefined());
 	expect(env.files.get("Заметки/Статья — en.md")).toBe("[Оригинал](<./Статья.md>)\n\n[Reference](./Справка.md)");
 });
@@ -1224,7 +1235,7 @@ it("оборванная следующая часть не прибавляет
 
 it("не отделяет селекторы начертания вне BMP от исходного символа", async () => {
 	const glyph = "\u{20000}\u{E0100}";
-	const env = await setup({ text: glyph.repeat(101), settings: { maxTokens: "180", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	const env = await setup({ text: glyph.repeat(101), settings: { maxTokens: "400", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — en.md")).toBe(true));
 	const units = env.requests.flatMap(body => JSON.parse(body.messages.at(-1).content).units);
@@ -1259,7 +1270,7 @@ it("после остановки до первой части продолжа�
 
 it("сохраняет непрерывное начало с предупреждением после свойств без повторного запроса", async () => {
 	const text = '---\ntitle: Оригинал\n---\nНачало статьи.\n\n' + 'Непереведённый хвост. '.repeat(100);
-	const env = await setup({ text, settings: { maxTokens: "500", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => ({ ...unit, text: "Переведённое начало." })), "stop") : new Response("Сбой", { status: 503 }) });
+	const env = await setup({ text, settings: { maxTokens: "500", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => (translateUnit(unit, text => "Переведённое начало."))), "stop") : new Response("Сбой", { status: 503 }) });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	button("Сохранить неполный перевод").click();
@@ -1270,7 +1281,7 @@ it("сохраняет непрерывное начало с предупреж
 });
 
 it("перед неизвестным HTML переводит только начало и не пропускает препятствие при продолжении", async () => {
-	const env = await setup({ text: "Начало.\n\n<div>Неизвестный текст</div>\n\nКонец.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => ({ ...unit, text: "Переведённое начало." })), "stop") });
+	const env = await setup({ text: "Начало.\n\n<div>Неизвестный текст</div>\n\nКонец.", completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => (translateUnit(unit, text => "Переведённое начало."))), "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	expect(env.app.vault.create).not.toHaveBeenCalled();
@@ -1287,7 +1298,7 @@ it.each(["сноска", "заголовок"])("не принимает час�
 	const dependent = kind === "сноска" ? "Ссылка на сноску[^позже]." : "[Перейти](#Позже).";
 	const target = kind === "сноска" ? "[^позже]: Переводимый текст сноски." : "# Позже\nТекст раздела.";
 	const env = await setup({ text: "Готовое начало.\n\n" + dependent + "\n\n" + "Большой промежуточный текст. ".repeat(100) + "\n\n" + target,
-		settings: { maxTokens: "180", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+		settings: { maxTokens: "400", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	expect(env.requests).toHaveLength(2);
@@ -1333,7 +1344,10 @@ it.each(["suffix", "translated"])("неполный перевод исполь�
 
 it("неполный результат сохраняет целую таблицу, переведённую сноску и reference-определение", async () => {
 	const beginning = "Текст[^а] и [подпись][ссылка].\n\n[^а]: Описание сноски.\n\n| Имя | Значение |\n| --- | --- |\n| Строка | Данные |";
-	const env = await setup({ text: beginning + "\n\n" + "Непереведённый хвост. ".repeat(100) + '\n\n[ссылка]: https://example.com', settings: { maxTokens: "800", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
+	const env = await setup({ text: beginning + "\n\n" + "Непереведённый хвост. ".repeat(100) + '\n\n[ссылка]: https://example.com', settings: { maxTokens: "800", translationPrompt: "" }, completion: async body => {
+		const units = JSON.parse(body.messages.at(-1).content).units;
+		return units.some((unit: { text: string }) => unit.text.includes("Непереведённый хвост")) ? new Response("Сбой", { status: 503 }) : response(units, "stop");
+	} });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	button("Сохранить неполный перевод").click();
@@ -1363,7 +1377,7 @@ it("английские предупреждения неполного пер�
 });
 
 it("сохраняет принятое начало внутри большого абзаца без непереведённого остатка", async () => {
-	const env = await setup({ text: "Длинный абзац статьи. ".repeat(200), settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => ({ ...unit, text: "Готовый фрагмент." })), "stop") : new Response("Сбой", { status: 503 }) });
+	const env = await setup({ text: "Длинный абзац статьи. ".repeat(200), settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units.map((unit: any) => (translateUnit(unit, text => "Готовый фрагмент."))), "stop") : new Response("Сбой", { status: 503 }) });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	button("Сохранить неполный перевод").click();
@@ -1429,7 +1443,7 @@ it("не сохраняет незавершённую строку таблиц
 });
 
 it("восстанавливает нужную защищённую сноску, игнорируя неиспользуемую reference-ссылку из хвоста", async () => {
-	const env = await setup({ text: 'Начало[^а].\n\n' + 'Непереведённый хвост. '.repeat(100) + '\n\n[^а]: `код`\n\n# Позже\n\n[лишняя]: #Позже', settings: { maxTokens: "300", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
+	const env = await setup({ text: 'Начало[^а].\n\n' + 'Непереведённый хвост. '.repeat(100) + '\n\n[^а]: `код`\n\n# Позже\n\n[лишняя]: #Позже', settings: { maxTokens: "600", translationPrompt: "" }, completion: async body => env.requests.length === 1 ? response(JSON.parse(body.messages.at(-1).content).units, "stop") : new Response("Сбой", { status: 503 }) });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	button("Сохранить неполный перевод").click();
@@ -1441,7 +1455,7 @@ it("восстанавливает нужную защищённую сноск�
 });
 
 it("ссылка на отдельный идентификатор списка не принимается без перевода самого списка", async () => {
-	const env = await setup({ text: 'Готовое начало.\n\n[Перейти](#^список).\n\n' + 'Непереведённый хвост. '.repeat(100) + '\n\n- Первый пункт.\n- Второй пункт.\n\n^список', settings: { maxTokens: "180", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
+	const env = await setup({ text: 'Готовое начало.\n\n[Перейти](#^список).\n\n' + 'Непереведённый хвост. '.repeat(100) + '\n\n- Первый пункт.\n- Второй пункт.\n\n^список', settings: { maxTokens: "400", translationPrompt: "" }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, "stop") });
 	env.commands.get("translate-current-note")!();
 	await vi.waitFor(() => expect(button("Сохранить неполный перевод").disabled).toBe(false));
 	expect(env.requests).toHaveLength(2);
@@ -1602,8 +1616,8 @@ it.each(["команда", "меню"])("#58: %s переводит подпис
 	const env = await setup({ text, settings: { translationLanguage: 'Русский' }, completion: async body => {
 		const payload = JSON.parse(body.messages.at(-1).content);
 		expect(JSON.stringify(payload)).not.toMatch(/⟦AIH/);
-		expect(payload.context).toBeDefined();
-		return response(payload.units.map((unit: { id: string; text: string }) => ({ id: unit.id, text: Object.entries(words).reduce((text, [from, to]) => text.replaceAll(from, to), unit.text) })), 'stop');
+		expect(payload.annotations.length).toBeGreaterThan(0);
+		return response(payload.units.map((unit: { id: string; text: string }) => translateUnit(unit, text => Object.entries(words).reduce((value, [from, to]) => value.replaceAll(from, to), text))), 'stop');
 	} });
 	env.files.set('Справка.md', 'Содержимое встраивания не читается.');
 	if (entry === 'команда') env.commands.get('translate-current-note')!();
@@ -1628,7 +1642,7 @@ it.each(["команда", "меню"])("#58: %s переводит подпис
 
 it.each(["ru", "en"])("#58: объясняет нарушения при скрытом прогрессе и продолжает после исправления (%s)", async language => {
 	const pending = deferred<Response>();
-	const env = await setup({ text: 'Прочитайте **важное** и [справку](https://example.org).', settings: { language }, completion: async body => env.requests.length === 1 ? pending.promise : response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	const env = await setup({ text: 'Прочитайте **важное** и [справку](https://example.org).', settings: { language }, completion: async body => env.requests.length === 1 ? pending.promise : response(env.requests.length === 2 ? JSON.parse(body.messages.at(-1).content).units.slice(1) : JSON.parse(body.messages.at(-1).content).units, 'stop') });
 	env.commands.get('translate-current-note')!();
 	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 	const units = JSON.parse(env.requests[0].messages.at(-1).content).units;
@@ -1649,9 +1663,9 @@ it.each([
 	['duplicate', 'Повторён идентификатор', 'Duplicate translated'],
 	['unknown', 'неизвестный идентификатор', 'Unknown fragment'],
 	['empty', 'Пустой перевод', 'Empty translated'],
-	['structure', 'недопустимую разметку', 'forbidden markup'],
+	['structure', 'диапазон перевода', 'annotation does not match'],
 	['format', 'Неверная структура', 'Invalid translation response'],
-	['old', 'неизвестный идентификатор', 'Unknown fragment'],
+	['old', 'Пропущен перевод', 'Missing translated'],
 ])('#58: отклоняет %s без записи и без вывода данных модели', async (damage, ru, en) => {
 	for (const language of ['ru', 'en']) {
 		const env = await setup({ text: 'Текст **важный**.', settings: { language }, completion: async body => {
@@ -1684,7 +1698,7 @@ it("#58: полная How to take notes собирается без потери
 		"next section": "следующий раздел", "related note": "связанная заметка", "a useful reference": "полезная справка",
 		"important ideas": "важные идеи", "examples": "примеры", "outdated advice": "устаревшие советы",
 	};
-	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => ({ id: unit.id, text: Object.entries(translations).reduce((value, [from, to]) => value.replaceAll(from, to), unit.text) })), "stop") });
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units.map((unit: { id: string; text: string }) => translateUnit(unit, text => Object.entries(translations).reduce((value, [from, to]) => value.replaceAll(from, to), text))), "stop") });
 	env.files.set("Справка/Метод.md", "Содержимое встроенной заметки.");
 	env.files.set("Вложения/Схема.svg", "Рисунок");
 	env.commands.get("translate-current-note")!();
@@ -1731,7 +1745,7 @@ it("#58: диагностика блочной разметки после ло�
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 });
 
-it("#58: воспроизводит пустой перевод связки после ссылки из ответа модели", async () => {
+it("#58: отклоняет старый ответ с потерянной подписью и запрашивает целые фразы", async () => {
 	const text = 'Read the **very *important*** [guide](https://example.org) before continuing.\nThe [results](https://example.org) **of the latest experiment** are reliable.\nKeep `cache.get(key)` and $E = mc^2$ unchanged while explaining their role.\nЭто русский текст, а **this useful [reference](https://example.org)** требует перевода.';
 	const reply = [
 		['p1~0', 'Прочитайте '], ['p1~1', 'очень '], ['p1~2', 'важное'], ['p1~4', 'руководство'], ['p1~5', ' перед продолжением.'],
@@ -1742,12 +1756,11 @@ it("#58: воспроизводит пустой перевод связки п�
 	const env = await setup({ text, completion: async () => response(reply.map(([id, text]) => ({ id, text })), 'stop') });
 	env.commands.get('translate-current-note')!();
 	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
-	expect(Notice.messages.at(-1)).toContain('Пустой перевод фрагмента. (p1~7)');
+	expect(Notice.messages.at(-1)).toContain('неизвестный идентификатор');
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 	const payload = JSON.parse(env.requests[0].messages.at(-1).content);
-	expect(payload.units.find((unit: { id: string }) => unit.id === 'p1~6').text).toBe('The ');
-	expect(payload.units.find((unit: { id: string }) => unit.id === 'p1~7').text).toBe('results');
-	expect(payload.units.find((unit: { id: string }) => unit.id === 'p1~12').text).toBe(' and ');
+	expect(payload.units[1].text).toBe('The results of the latest experiment are reliable.');
+	expect(payload.units.some((unit: { id: string }) => unit.id.includes('~'))).toBe(false);
 });
 
 
@@ -1758,6 +1771,421 @@ it("#58: минимальный ответ не может перенести п
 	} });
 	env.commands.get('translate-current-note')!();
 	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
-	expect(Notice.messages.at(-1)).toContain('Пустой перевод фрагмента. (p1~1)');
+	expect(Notice.messages.at(-1)).toContain('Пропущен перевод');
 	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it.each(['команда', 'меню'])("#58: %s переводит фразу целиком, убирает артикль и сохраняет подпись ссылки", async entry => {
+	const env = await setup({ text: 'The [results](https://example.org) **of the latest experiment** are reliable.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		const [link, emphasis] = treeNodes(unit);
+		return response([{ id: unit.id, parts: [{ id: link.id, parts: ['Результаты'] }, ' ', { id: emphasis.id, parts: ['последнего эксперимента'] }, ' надёжны.'] }], 'stop');
+	} });
+	if (entry === 'команда') env.commands.get('translate-current-note')!();
+	else {
+		const actions = new Map<string, () => void>();
+		env.events.get('file-menu')!({ addItem: (render: (item: any) => void) => {
+			let title = ''; const item = { setTitle: (value: string) => { title = value; return item; }, setIcon: () => item, onClick: (action: () => void) => { actions.set(title, action); return item; } }; render(item);
+		} }, env.file);
+		actions.get('Перевести текущую заметку')!();
+	}
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n[Результаты](https://example.org) **последнего эксперимента** надёжны.'));
+});
+
+it("#58: четыре фразы пользователя переводятся целиком с вложенными диапазонами и локальными значениями", async () => {
+	const text = 'Read the **very *important*** [guide](https://example.org) before continuing.\nThe [results](https://example.org) **of the latest experiment** are reliable.\nKeep `cache.get(key)` and $E = mc^2$ unchanged while explaining their role.\nЭто русский текст, а **this useful [reference](https://example.org)** требует перевода.';
+	const env = await setup({ text, settings: { translationLanguage: 'Русский' }, completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		expect(units).toHaveLength(4);
+		expect(units[1].text).toBe('The results of the latest experiment are reliable.');
+		return response(units.map((unit: { id: string; parts: TestNode[] }, i: number) => {
+			const ids = treeNodes(unit).map(node => node.id);
+			const parts: TestNode[][] = [
+				['Прочитайте ', { id: ids[0], parts: ['очень ', { id: ids[1], parts: ['важное'] }] }, ' ', { id: ids[2], parts: ['руководство'] }, ' перед продолжением.'],
+				[{ id: ids[0], parts: ['Результаты'] }, ' ', { id: ids[1], parts: ['последнего эксперимента'] }, ' надёжны.'],
+				['Оставьте ', { id: ids[0] }, ' и ', { id: ids[1] }, ' без изменений, объясняя их роль.'],
+				['Это русский текст, а ', { id: ids[0], parts: ['эта полезная ', { id: ids[1], parts: ['справка'] }] }, ' требует перевода.'],
+			];
+			return { id: unit.id, parts: parts[i] };
+		}), 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nПрочитайте **очень *важное*** [руководство](https://example.org) перед продолжением.\n[Результаты](https://example.org) **последнего эксперимента** надёжны.\nОставьте `cache.get(key)` и $E = mc^2$ без изменений, объясняя их роль.\nЭто русский текст, а **эта полезная [справка](https://example.org)** требует перевода.'));
+	expect(JSON.stringify(env.requests)).not.toMatch(/⟦AIH|cache.get|mc\^2/);
+});
+
+it("#58: переставляет независимые оформленные фразы по явно указанным диапазонам", async () => {
+	const env = await setup({ text: 'The [results](https://example.org) from **recent tests**.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		const [link, emphasis] = treeNodes(unit);
+		return response([{ id: unit.id, parts: ['В ', { id: emphasis.id, parts: ['недавних тестах'] }, ' получены ', { id: link.id, parts: ['результаты'] }, '.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nВ **недавних тестах** получены [результаты](https://example.org).'));
+});
+
+it.each(['missing', 'duplicate', 'unknown', 'empty', 'fields', 'type', 'parent'])("#58: повреждение аннотации %s блокирует запись и показывает безопасный ID", async damage => {
+	const env = await setup({ text: '**Первый [пример](https://example.org)** и *второй*.', completion: async body => {
+		const units = JSON.parse(body.messages.at(-1).content).units;
+		const unit = units[0]; const nodes = treeNodes(unit);
+		if (damage === 'missing') unit.parts = unit.parts.filter((part: TestNode) => typeof part === 'string' || part.id !== nodes.at(-1)!.id);
+		if (damage === 'duplicate') unit.parts.push({ ...nodes[0] });
+		if (damage === 'unknown') nodes[0].id = 'СЕКРЕТ ИЗ МОДЕЛИ';
+		if (damage === 'empty') nodes[0].parts = [' '];
+		if (damage === 'fields') Object.assign(nodes[0], { text: 'лишнее поле' });
+		if (damage === 'type') Object.assign(nodes[0], { parts: 42 });
+		if (damage === 'parent') { nodes[0].parts = nodes[0].parts!.filter(part => typeof part === 'string' || part.id !== nodes[1].id); unit.parts.push(nodes[1]); }
+		return response(units, 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain('p1');
+	expect(Notice.messages.at(-1)).not.toContain('СЕКРЕТ');
+	button('Завершить').click();
+	expect(env.plugin.translation.active).toBe(false);
+});
+
+it("#58: структура однозначно задаёт место повторяющейся подписи", async () => {
+	const env = await setup({ text: 'слово [слово](https://example.org) слово', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, parts: ['word ', { id: treeNodes(unit)[0].id, parts: ['word'] }, ' word'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nword [word](https://example.org) word'));
+});
+
+it("#58: общая граница вложенного выделения должна совпадать в переводе", async () => {
+	const env = await setup({ text: '**очень *важно***', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		const [outer, inner] = treeNodes(unit);
+		return response([{ id: unit.id, parts: [{ id: outer.id, parts: [{ id: inner.id, parts: ['very'] }, ' important'] }] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(Notice.messages.at(-1)).toContain('диапазон перевода');
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("#58: диапазон оформления не может разрезать Unicode-символ", async () => {
+	const env = await setup({ text: '**😊**', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, parts: ['\ud83d', { id: treeNodes(unit)[0].id, parts: ['\ude0a'] }] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain('недопустимую разметку');
+});
+
+it("#58: делит большой выделенный абзац без потери границ и принятого текста", async () => {
+	const text = 'Начало **' + 'Длинная связная фраза. '.repeat(150).trimEnd() + '** конец.';
+	const env = await setup({ text, settings: { maxTokens: '450', translationPrompt: '' }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text));
+	expect(env.requests.length).toBeGreaterThan(1);
+});
+
+it("#58: исчезновение артикля может совместить вложенные диапазоны без потери оформления", async () => {
+	const env = await setup({ text: '**The [results](https://example.org)** are reliable.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		const [outer, link] = treeNodes(unit);
+		return response([{ id: unit.id, parts: [{ id: outer.id, parts: [{ id: link.id, parts: ['Результаты'] }] }, ' надёжны.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n**[Результаты](https://example.org)** надёжны.'));
+});
+
+it("#58: один ограниченный повтор исправляет структуру ответа, сохраняя целую фразу", async () => {
+	const env = await setup({ text: 'The [results](https://example.org) are reliable.', completion: async body => {
+		if (env.requests.length === 2) expect(body.messages.slice(-3).map((message: { role: string }) => message.role)).toEqual(["assistant", "system", "user"]);
+		const unit = JSON.parse(body.messages.findLast((message: { role: string; content: string }) => message.role === 'user' && message.content.startsWith('{"units":')).content).units[0];
+		const node = { id: treeNodes(unit)[0].id, parts: ['Результаты'], ...(env.requests.length === 1 ? { extra: 'недопустимо' } : {}) };
+		return response([{ id: unit.id, parts: [node, ' надёжны.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n[Результаты](https://example.org) надёжны.'));
+	expect(env.requests).toHaveLength(2);
+});
+
+it("#58: не отправляет исправляющий запрос, если предыдущий ответ не помещается в бюджет", async () => {
+	const env = await setup({ text: 'Короткая заметка.', settings: { contextWindow: '4096', maxTokens: '512', translationPrompt: '' }, completion: async () => new Response(JSON.stringify({ choices: [{ message: { content: 'Неверный JSON ' + 'лишний текст '.repeat(4000) }, finish_reason: 'stop' }] })) });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.requests).toHaveLength(1);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain('Неверная структура');
+});
+
+it("#58: остановка отменяет ограниченный повтор и не принимает поздний ответ", async () => {
+	const pending = deferred<Response>(); let signal: AbortSignal | null | undefined;
+	const env = await setup({ text: 'Переведите [справку](https://example.org).', completion: async (body, requestSignal) => {
+		const units = JSON.parse(body.messages.at(-1).content).units;
+		if (env.requests.length === 1) { Object.assign(treeNodes(units[0])[0], { extra: 'Недопустимо' }); return response(units, 'stop'); }
+		signal = requestSignal; return pending.promise;
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+	button('Остановить').click();
+	expect(signal?.aborted).toBe(true);
+	pending.resolve(response(JSON.parse(env.requests[1].messages.at(-1).content).units, 'stop'));
+	await vi.waitFor(() => expect(env.plugin.translation.busy).toBe(false));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(button('Продолжить перевод').disabled).toBe(false);
+});
+
+it("#58: сохраняет одиночные символы оформления рядом с обычным текстом", async () => {
+	const text = 'Имя some_name и знак * рядом с **важным** текстом.';
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text));
+});
+
+it("#58: структурированный перевод целой фразы не дублирует текст и цитаты", async () => {
+	const env = await setup({ text: 'The [results](https://example.org) **of the latest experiment** are reliable.', completion: async body => {
+		const payload = JSON.parse(body.messages.at(-1).content);
+		const unit = payload.units[0]; const [link, emphasis] = payload.annotations[0].kinds;
+		return response([{ id: unit.id, parts: [{ id: link.id, parts: ['Результаты'] }, ' ', { id: emphasis.id, parts: ['последнего эксперимента'] }, ' надёжны.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n[Результаты](https://example.org) **последнего эксперимента** надёжны.'));
+});
+
+it("#58: переводит длинный документ с сотнями оформленных фраз и ограниченным запросом", async () => {
+	const text = Array.from({ length: 400 }, (_, i) => `**Фраза ${i}** и [справка ${i}](https://example.org).`).join(' ');
+	const env = await setup({ text, settings: { contextWindow: '8192', maxTokens: '1500', translationPrompt: '' }, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text), { timeout: 5000 });
+	expect(env.requests.length).toBeGreaterThan(1);
+});
+
+it("#58: восстанавливает локальные пробелы между оформленными словами без догадок о тексте", async () => {
+	const env = await setup({ text: 'Read **important** [results](https://example.org) now.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const [emphasis, link] = treeNodes(unit);
+		return response([{ id: unit.id, parts: ['Прочитайте', { id: emphasis.id, parts: ['важные'] }, { id: link.id, parts: ['результаты'] }, 'сейчас.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nПрочитайте **важные** [результаты](https://example.org) сейчас.'));
+});
+
+it("#58: запрашивает необязательный структурированный JSON для перевода", async () => {
+	const env = await setup({ text: 'Переведите [подпись](https://example.org).', completion: async body => {
+		expect(body.response_format?.type).toBe('json_schema');
+		return response(JSON.parse(body.messages.at(-1).content).units, 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.has('Заметки/Статья — en.md')).toBe(true));
+});
+
+it("#58: явный отказ от response_format возвращает обычный режим и запоминается для модели", async () => {
+	const env = await setup({ text: 'Короткая заметка.', completion: async body => body.response_format
+		? Response.json({ error: { message: 'response_format json_schema is not supported' } }, { status: 400 })
+		: response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.requests).toHaveLength(2);
+	expect(env.files.get('Заметки/Статья — en.md')).toContain('Короткая заметка.');
+	env.plugin.settings.translationSuffix = ' — ещё';
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.has('Заметки/Статья — ещё.md')).toBe(true));
+	expect(env.requests).toHaveLength(3);
+	expect(env.requests[2].response_format).toBeUndefined();
+});
+
+it.each([401, 429, 500])("#58: статус %s не вызывает отказ от JSON-режима и лишний запрос", async status => {
+	const env = await setup({ text: 'Заметка.', completion: async () => Response.json({ error: { message: 'response_format not supported' } }, { status }) });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.requests).toHaveLength(1);
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it.each(['stream-first', 'json-first'])("#58: два независимых отказа совместимости ограничены тремя запросами: %s", async order => {
+	const env = await setup({ text: 'Заметка.', completion: async body => {
+		const rejectsStream = () => Response.json({ error: { message: 'streaming is not supported' } }, { status: 400 });
+		const rejectsJson = () => Response.json({ error: { message: 'response_format json_schema is not supported' } }, { status: 400 });
+		if (order === 'stream-first') { if (body.stream) return rejectsStream(); if (body.response_format) return rejectsJson(); }
+		else { if (body.response_format) return rejectsJson(); if (body.stream) return rejectsStream(); }
+		return response(JSON.parse(body.messages.at(-1).content).units, 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.has('Заметки/Статья — en.md')).toBe(true));
+	expect(env.requests).toHaveLength(3);
+});
+
+it("#58: не сохраняет оборванную фразу после последнего оформленного объекта", async () => {
+	const env = await setup({ text: 'Это русский текст, а **this useful reference** требует перевода.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, parts: ['Это русский текст, а ', { id: treeNodes(unit)[0].id, parts: ['эта полезная справка'] }] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(env.requests).toHaveLength(2);
+	expect(Notice.messages.at(-1)).toContain('не завершена');
+});
+
+it("#58: сверяет полный перевод с оформлением и локально заменяет переведённые описания кода", async () => {
+	const env = await setup({ text: 'Keep `x` and $y$ unchanged.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const [code, math] = treeNodes(unit);
+		return response([{ id: unit.id, text: 'Оставьте код и формулу без изменений.', parts: ['Оставьте ', { id: code.id, type: 'keep', text: 'код' }, ' и ', { id: math.id, type: 'keep', text: 'формулу' }, ' без изменений.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nОставьте `x` и $y$ без изменений.'));
+});
+
+it("#58: оформление не может заменить слова или потерять окончание полного перевода", async () => {
+	const env = await setup({ text: 'The [results](https://example.org) are reliable.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, text: 'Результаты надёжны.', parts: [{ id: treeNodes(unit)[0].id, parts: ['Результаты.'] }] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain('диапазон перевода');
+});
+
+it.each(['Первая строка\nВторая строка', 'Первая строка  \nВторая строка', '**abcdefgh**ijklmnopqrstuvwxyz', 'a**b**'])("#58: уменьшение на границе сохраняет переносы и крайние токены: %s", async text => {
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, env.requests.length === 1 ? 'length' : 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`));
+});
+
+it("#58: не допускает потери выделения подчёркиванием внутри слова", async () => {
+	const env = await setup({ text: '_word_ tail.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, text: 'prefixsuffix.', parts: ['prefix', { id: treeNodes(unit)[0].id, parts: ['suffix'] }, '.'] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain('не совпадает');
+});
+
+it("#58: сохраняет окончание из полного перевода после точно совпавшего префикса оформления", async () => {
+	const env = await setup({ text: 'Это **useful [reference](https://example.org)** требует перевода.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const nodes = treeNodes(unit);
+		return response([{ id: unit.id, text: 'Это полезная ссылка требует перевода.', parts: ['Это ', { id: nodes[0].id, parts: ['полезная ', { id: nodes[1].id, parts: ['ссылка'] }] }] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nЭто **полезная [ссылка](https://example.org)** требует перевода.'));
+	expect(env.requests).toHaveLength(1);
+});
+
+it.each(['_word_`x`', '`x`_word_', '_word_**bold**'])("#58: проверяет границы выделения по восстановленному синтаксису: %s", async text => {
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe(`[Оригинал](<./Статья.md>)\n\n${text}`));
+});
+it("#58: отклоняет повреждённый Unicode в окончании полного перевода", async () => {
+	const env = await setup({ text: 'Read **guide** now.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, text: 'Read guide \ud800.', parts: ['Read ', { id: treeNodes(unit)[0].id, parts: ['guide'] }] }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+
+it("#58: собирает оформление из обязательных точных цитат полного перевода", async () => {
+	const env = await setup({ text: 'Read the **very *important*** [guide](https://example.org) before continuing.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const nodes = treeNodes(unit);
+		return response([{ id: unit.id, text: 'Прочитайте очень важное руководство перед продолжением.', labels: Object.fromEntries(nodes.map((node, i) => [node.id, { text: ['очень важное', 'важное', 'руководство'][i], occurrence: 1 }])) }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nПрочитайте **очень *важное*** [руководство](https://example.org) перед продолжением.'));
+});
+
+it.each(['missing', 'unknown', 'empty', 'case', 'occurrence', 'parent', 'extra'])("#58: отклоняет неверные точные подписи: %s", async kind => {
+	const env = await setup({ text: '**The [answer](https://example.org)** is clear.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const nodes = treeNodes(unit);
+		const labels: Record<string, { text: string; occurrence: number; extra?: string }> = { [nodes[0].id]: { text: 'Ответ', occurrence: 1 }, [nodes[1].id]: { text: 'Ответ', occurrence: 1 } };
+		if (kind === 'missing') delete labels[nodes[1].id];
+		if (kind === 'unknown') labels.foreign = { text: 'Ответ', occurrence: 1 };
+		if (kind === 'empty') labels[nodes[1].id].text = '';
+		if (kind === 'case') labels[nodes[1].id].text = 'ответ';
+		if (kind === 'occurrence') labels[nodes[1].id].occurrence = 2;
+		if (kind === 'parent') labels[nodes[1].id].text = 'понятен';
+		if (kind === 'extra') labels[nodes[1].id].extra = 'не разрешено';
+		return response([{ id: unit.id, text: 'Ответ понятен.', labels }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
+it("#58: точные подписи различают одинаковые вхождения и защищённый код", async () => {
+	const env = await setup({ text: '[Go](https://example.org) and [Go](https://example.org) with `x`.', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const nodes = treeNodes(unit);
+		return response([{ id: unit.id, text: 'Идите и Идите с кодом.', labels: { [nodes[0].id]: { text: 'Идите', occurrence: 1 }, [nodes[1].id]: { text: 'Идите', occurrence: 2 }, [nodes[2].id]: { text: 'кодом', occurrence: 1 } } }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n[Идите](https://example.org) и [Идите](https://example.org) с `x`.'));
+});
+
+it("#58: отклоняет повтор ключа подписи в исходном JSON", async () => {
+	const env = await setup({ text: '[Guide](https://example.org).', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0]; const id = JSON.stringify(treeNodes(unit)[0].id);
+		const content = `{"units":[{"id":${JSON.stringify(unit.id)},"text":"Руководство.","labels":{${id}:{"text":"Руководство","occurrence":1},${id}:{"text":"Руководство","occurrence":1}}}]}`;
+		return Response.json({ choices: [{ message: { content }, finish_reason: 'stop' }] });
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain("(p1/");
+});
+
+it.each(['Read **guide**.', 'Read [guide](https://example.org).'])("#58: точные цитаты не добавляют исходные пробелы в китайский перевод: %s", async text => {
+	const env = await setup({ text, settings: { translationLanguage: 'Chinese' }, completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, text: '阅读指南。', labels: { [treeNodes(unit)[0].id]: { text: '指南', occurrence: 1 } } }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + (text.includes('**') ? '阅读**指南**。' : '阅读[指南](https://example.org)。')));
+});
+
+it("#58: восстанавливает завершающий идентификатор блока без участия модели", async () => {
+	const env = await setup({ text: 'Stable reference. ^stable', completion: async body => {
+		const payload = JSON.parse(body.messages.at(-1).content); const unit = payload.units[0];
+		expect(unit.text).toBe('Stable reference.');
+		expect(JSON.stringify(payload)).not.toMatch(/block identifier|stable$/);
+		return response([{ id: unit.id, text: 'Стабильная ссылка.', labels: {} }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\nСтабильная ссылка. ^stable'));
+});
+
+it("#58: не считает одну пунктуацию переводом словесной подписи", async () => {
+	const env = await setup({ text: '[Guide](https://example.org).', completion: async body => {
+		const unit = JSON.parse(body.messages.at(-1).content).units[0];
+		return response([{ id: unit.id, text: ',.', labels: { [treeNodes(unit)[0].id]: { text: ',', occurrence: 1 } } }], 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	expect(Notice.messages.at(-1)).toContain('Пустой перевод');
+});
+
+it("#58: сохраняет завершающие сноски локально, не перемещая вложенную сноску", async () => {
+	const text = 'Первый текст.[^а][^б] ^stable\n\n**Вложенный текст[^а]**\n\n[^а]: Первая сноска.\n[^б]: Вторая сноска.';
+	const env = await setup({ text, completion: async body => {
+		const payload = JSON.parse(body.messages.at(-1).content);
+		expect(payload.units[0].text).toBe('Первый текст.');
+		expect(treeNodes(payload.units[0])).toHaveLength(0);
+		expect(treeNodes(payload.units[1])).toHaveLength(2);
+		return response(payload.units, 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text));
+});
+
+it.each(['_abc_ tail', 'lead _abc_', '**abc** tail', 'lead **abc**'])("#58: деление не теряет пробел возле крайнего маркера: %s", async text => {
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, env.requests.length === 1 ? 'length' : 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text));
+});
+
+it.each(['*Первое **важное** слово* дальше', '_Первое __важное__ слово_ дальше', '*первое**важное**слово* дальше', '**Первое *важное* слово** дальше', 'lead\t_abc_\ttail'])("#58: сохраняет оба направления вложенного выделения и табуляцию: %s", async text => {
+	const env = await setup({ text, completion: async body => response(JSON.parse(body.messages.at(-1).content).units, 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Статья — en.md')).toBe('[Оригинал](<./Статья.md>)\n\n' + text));
 });

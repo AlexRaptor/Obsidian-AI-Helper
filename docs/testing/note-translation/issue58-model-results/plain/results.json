@@ -1,0 +1,119 @@
+[
+  {
+    "sample": "plain",
+    "run": 1,
+    "replayed": false,
+    "success": true,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 1,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27674
+      }
+    ],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "code": true,
+      "formula": true,
+      "foreignSpanTranslated": true,
+      "russianPrefix": true,
+      "russianEnding": true,
+      "links": true
+    },
+    "elapsedSeconds": 20
+  },
+  {
+    "sample": "plain",
+    "run": 2,
+    "replayed": false,
+    "success": false,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 1,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27674
+      }
+    ],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "code": true,
+      "formula": true,
+      "foreignSpanTranslated": false,
+      "russianPrefix": true,
+      "russianEnding": true,
+      "links": true
+    },
+    "elapsedSeconds": 14
+  },
+  {
+    "sample": "plain",
+    "run": 3,
+    "replayed": false,
+    "success": true,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 1,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [
+      {
+        "status": 200,
+        "structured": true,
+        "stream": true,
+        "maxTokens": 27674
+      }
+    ],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "code": true,
+      "formula": true,
+      "foreignSpanTranslated": true,
+      "russianPrefix": true,
+      "russianEnding": true,
+      "links": true
+    },
+    "elapsedSeconds": 15
+  }
+]

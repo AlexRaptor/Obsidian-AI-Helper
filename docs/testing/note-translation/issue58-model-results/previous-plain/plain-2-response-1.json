@@ -1,0 +1,4 @@
+{
+  "content": "{\"units\": [{\"id\": \"p1/l1\", \"text\": \"Прочитайте очень важную инструкцию, прежде чем продолжить.\", \"labels\": {}}, {\"id\": \"p1/l2\", \"text\": \"Результаты последнего эксперимента надёжны.\", \"labels\": {}}, {\"id\": \"p1/l3\", \"text\": \"Сохраняйте inline code и mathematical expression без изменений, объясняя их роль.\", \"labels\": {\"a0_keep_inline_code\": {\"text\": \"inline code\", \"occurrence\": 1}, \"a1_keep_mathematical_expression\": {\"text\": \"mathematical expression\", \"occurrence\": 1}}}, {\"id\": \"p1/l4\", \"text\": \"Это русский текст, а this useful reference требует перевода.\", \"labels\": {}}]}",
+  "finishReason": "stop"
+}

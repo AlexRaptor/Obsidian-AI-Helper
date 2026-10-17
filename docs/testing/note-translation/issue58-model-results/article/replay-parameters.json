@@ -1,0 +1,11 @@
+{
+  "model": "qwen/qwen3.8-27b",
+  "temperature": "server default",
+  "topP": "server default",
+  "maxTokens": "operation budget",
+  "contextWindow": "65536",
+  "responseWait": "unlimited",
+  "translationLanguage": "Русский",
+  "promptSha256": "61aff72c45fc1e002130b614d6e7a669f32c2afa902706636b52e17f1cc0ccf9",
+  "protocolSha256": "941d294cb3a2f30188c0f660bb27dc4e0fb2416e8f209cded808e871e89db813"
+}

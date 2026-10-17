@@ -1,0 +1,105 @@
+[
+  {
+    "sample": "phrases",
+    "run": 1,
+    "replayed": true,
+    "success": true,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 2,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      },
+      {
+        "request": 2,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "code": true,
+      "formula": true,
+      "foreignSpanTranslated": true,
+      "russianPrefix": true,
+      "russianEnding": true,
+      "links": true
+    },
+    "elapsedSeconds": 0
+  },
+  {
+    "sample": "phrases",
+    "run": 2,
+    "replayed": true,
+    "success": true,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 1,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "code": true,
+      "formula": true,
+      "foreignSpanTranslated": true,
+      "russianPrefix": true,
+      "russianEnding": true,
+      "links": true
+    },
+    "elapsedSeconds": 0
+  },
+  {
+    "sample": "phrases",
+    "run": 3,
+    "replayed": true,
+    "success": true,
+    "stage": "translation-saved",
+    "protocolDetail": "",
+    "progress": 1,
+    "requests": 1,
+    "requestParameters": [
+      {
+        "request": 1,
+        "jsonResponse": true,
+        "maxTokens": "27674",
+        "temperature": "server default",
+        "topP": "server default"
+      }
+    ],
+    "wireRequests": [],
+    "fixtureChecks": {
+      "originalUnchanged": true,
+      "noServiceMarkers": true,
+      "noProtocolDescriptions": true,
+      "code": true,
+      "formula": true,
+      "foreignSpanTranslated": true,
+      "russianPrefix": true,
+      "russianEnding": true,
+      "links": true
+    },
+    "elapsedSeconds": 0
+  }
+]

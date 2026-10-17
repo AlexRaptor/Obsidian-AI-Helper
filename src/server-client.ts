@@ -40,6 +40,7 @@ export interface ChatMessage {
 }
 
 export interface ChatParams {
+	responseSchema?: Record<string, unknown>;
 	responseWait?: string;
 	signal?: AbortSignal;
 	onText?: (content: string) => void;
@@ -129,6 +130,11 @@ function contextLengthExceeded(error: unknown, message: string): boolean {
 }
 
 class UnsupportedStreamingError extends Error {}
+class UnsupportedJsonResponseError extends Error {}
+function explicitlyRejectsJsonResponse(message: string): boolean {
+	return /response[_ -]format|json[_ -]schema|structured (?:output|response)/i.test(message)
+		&& /not supported|unsupported|not implemented|unrecognized|unknown|invalid|not available|disabled/i.test(message);
+}
 
 function explicitlyRejectsStreaming(message: string): boolean {
 	return /\bstream(?:ing)?(?:\s+(?:mode|parameter|responses?))?["']?\s+(?:is\s+)?(?:not supported|unsupported|not implemented|disabled)\b/i.test(message)
@@ -168,6 +174,7 @@ function numericParam(
 }
 
 export function createServerClient(fetchImpl: ClientFetch): ServerClient {
+	const unsupportedJson = new Set<string>();
 	async function request<T>(
 		operation: (signal: AbortSignal, resetWait: () => void) => Promise<ServerClientResult<T>>,
 		timeoutMs: number | undefined,
@@ -288,10 +295,12 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		const timeoutMs = responseWait.seconds === undefined ? undefined : responseWait.seconds * 1000;
 
 		return request(async (signal, resetWait) => {
-			const attempt = async (streaming: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
+			const attempt = async (streaming: boolean, structured: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
 				const requestBody: Record<string, unknown> = { ...body, stream: streaming };
+				if (structured) requestBody.response_format = { type: "json_schema", json_schema: { name: "structured_response", schema: params?.responseSchema } };
 				if (!streaming) delete requestBody.stream_options;
-				const reject = (message: string, error?: unknown, canExceedContext = true): ServerClientResult<ChatCompletionResult> => {
+				const reject = (message: string, error?: unknown, canExceedContext = true, canRejectJson = true): ServerClientResult<ChatCompletionResult> => {
+					if (structured && canRejectJson && explicitlyRejectsJsonResponse(message) && !contextLengthExceeded(error, message)) throw new UnsupportedJsonResponseError(message);
 					if (streaming && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
 					const contextLength = canExceedContext && contextLengthExceeded(error, message);
 					return { ok: false, error: { message, ...(contextLength ? { code: "context-length" as const } : {}) } };
@@ -304,7 +313,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				});
 				if (!response.ok) {
 					const error = await readServerError(response);
-					return reject(error.message, error.error, [400, 413, 422].includes(response.status));
+					return reject(error.message, error.error, [400, 413, 422].includes(response.status), [400, 422].includes(response.status));
 				}
 
 				const fail = (code: "empty" | "incomplete"): ServerClientResult<ChatCompletionResult> => ({
@@ -359,6 +368,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 							throw new ClientError("Model server returned a stream error.", "stream-error");
 						}
 						const message = parsed.error.message;
+						if (structured && !content && explicitlyRejectsJsonResponse(message) && !contextLengthExceeded(parsed.error, message)) throw new UnsupportedJsonResponseError(message);
 						if (streaming && !content && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
 						if (contextLengthExceeded(parsed.error, message)) throw new ClientError(message, "context-length");
 						throw new Error(message);
@@ -414,12 +424,18 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				}
 
 			};
-			try {
-				return await attempt(true);
-			} catch (error) {
-				if (!(error instanceof UnsupportedStreamingError) || signal.aborted) throw error;
-				// One explicit compatibility fallback shares cancellation and the request's waiting policy.
-				return await attempt(false);
+			const formatKey = JSON.stringify([serverUrl, model]);
+			let streaming = true; let structured = !!params?.responseSchema && !unsupportedJson.has(formatKey);
+			for (;;) {
+				try { return await attempt(streaming, structured); }
+				catch (error) {
+					if (signal.aborted) throw error;
+					if (error instanceof UnsupportedStreamingError && streaming) { streaming = false; continue; }
+					if (error instanceof UnsupportedJsonResponseError && structured) {
+						unsupportedJson.add(formatKey); structured = false; continue;
+					}
+					throw error;
+				}
 			}
 		}, timeoutMs, params?.signal, "timeout");
 	}

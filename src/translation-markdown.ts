@@ -1,3 +1,4 @@
+import { TranslationProtocol } from "./translation-protocol";
 import { stripHeading, stripHeadingForLink } from "obsidian";
 import type { TranslationLinks } from "./translation-links";
 /** Reversible translation ranges. Source syntax and protected contents stay local. */
@@ -8,9 +9,14 @@ export class TranslationMarkdownError extends Error {
 }
 function unsupported(): never { throw new TranslationMarkdownError("unsupported"); }
 function invalid(): never { throw new TranslationMarkdownError("invalid"); }
+function tokenIndex(token: string): number { return Number(token.match(/:(\d+)⟧$/)![1]); }
+function restoreTokens(text: string, values: readonly string[]): string {
+	return text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, token => values[tokenIndex(token)]);
+}
 
 export class TranslationMarkdown {
 	readonly units: TranslationUnit[] = [];
+	readonly protocol: TranslationProtocol;
 	readonly frontmatterEnd: number;
 	blocked = false;
 	coverage = 1;
@@ -60,6 +66,8 @@ export class TranslationMarkdown {
 			this.blocked = true;
 			this.coverage = this.source.length / source.length;
 		}
+		const ranges = new Map(this.ranges.map(range => [range.id, range]));
+		this.protocol = new TranslationProtocol(this.units.map(unit => ({ ...unit, protected: ranges.get(unit.id)!.protected })));
 	}
 	private referenceRanges(ranges: Range[]): Range[] {
 		const keys = new Set(ranges.flatMap(range => range.protected.flatMap(token => {
@@ -149,8 +157,7 @@ export class TranslationMarkdown {
 		return this.headingProse(range, this.inline(source, range, false));
 	}
 	private headingProse(range: Range, text: string): string {
-		let index = 0;
-		return text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.headingText[index++]);
+		return restoreTokens(text, range.headingText);
 	}
 	private add(start: number, end: number): void {
 		const value = this.source.slice(start, end);
@@ -484,25 +491,12 @@ export class TranslationMarkdown {
 		for (const unit of value.units) {
 			const expected = units.find(expected => expected.id === unit?.id);
 			const original = expected && this.ranges.find(range => range.id === expected.id.split(".")[0]);
-			const range = original && expected ? { ...original, text: expected.text, protected: (expected.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? []).map(token => original.protected[Number(token.match(/:(\d+)⟧$/)![1])]) } : undefined;
+			const range = original && expected ? { ...original, text: expected.text, protected: (expected.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? []).map(token => original.protected[tokenIndex(token)]) } : undefined;
 			if (!range || translated.has(unit.id) || typeof unit.text !== "string" || !unit.text.trim()) invalid();
 			const tokens = unit.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? [];
-			const expectedTokens = range.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? [];
-			if (tokens.length !== expectedTokens.length || tokens.some((token: string, i: number) => token !== expectedTokens[i])) invalid();
-			for (let i = 0; i < expectedTokens.length; i++) {
-				if (!/^[*_~]+$/.test(range.protected[i])) continue;
-				const token = expectedTokens[i];
-				const originalAt = range.text.indexOf(token);
-				const translatedAt = unit.text.indexOf(token);
-				const boundary = (text: string, at: number) => at < 0 || at >= text.length ? "edge" : /\s/u.test(text[at]) ? "space" : "text";
-				if (boundary(range.text, originalAt - 1) !== boundary(unit.text, translatedAt - 1)
-					|| boundary(range.text, originalAt + token.length) !== boundary(unit.text, translatedAt + token.length)) invalid();
-			}
-			const segments = (text: string) => text.trim().split(/⟦AIH\d+:p\d+:\d+⟧/g);
-			const originalSegments = segments(range.text);
-			if (segments(unit.text).some((segment: string, index: number) => !!segment.trim() !== !!originalSegments[index].trim())) invalid();
-			let lineIndex = 0;
-			const proseLines = unit.text.trim().replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => /^[ \t]*\\?\r?\n[ \t]*$/.test(range.protected[lineIndex++]) ? "\n" : "");
+			const expectedTokens: string[] = range.text.match(/⟦AIH\d+:p\d+:\d+⟧/g) ?? [];
+			if (tokens.length !== expectedTokens.length || new Set(tokens).size !== tokens.length || tokens.some((token: string) => !expectedTokens.includes(token))) invalid();
+			const proseLines = unit.text.trim().replace(/⟦AIH\d+:p\d+:\d+⟧/g, (token: string) => /^[ \t]*\\?\r?\n[ \t]*$/.test(original!.protected[tokenIndex(token)]) ? "\n" : "");
 			if (/(^|\n)[ \t]*(?:[=-]+[ \t]*(?:\n|$)|(?:[-+>:=]|\d+[.)])(?:\s|$))/.test(proseLines)) invalid();
 			const plain = unit.text.trim().replace(/⟦AIH\d+:p\d+:\d+⟧/g, "");
 			// Model prose cannot create local structure, placeholders, or Markdown.
@@ -539,12 +533,11 @@ export class TranslationMarkdown {
 		for (const range of ranges) {
 			const text = accepted.get(range.id);
 			if (text === undefined) continue;
-			let index = 0;
-			translated.set(range.id, text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]));
+			translated.set(range.id, restoreTokens(text, range.protected));
 			headingProse.set(range.id, this.headingProse(range, text));
 		}
 		for (const range of ranges) {
-			if (!translated.has(range.id)) { let index = 0; translated.set(range.id, range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++])); }
+			if (!translated.has(range.id)) { translated.set(range.id, restoreTokens(range.text, range.protected)); }
 		}
 		const headings = new Map<string, string>();
 		for (const heading of this.headings.filter(heading => heading.end <= end)) {
@@ -568,8 +561,7 @@ export class TranslationMarkdown {
 			// Dependency validation proved this definition contains no untranslated prose.
 			let restored = ""; let cursor = definition.start;
 			for (const range of this.ranges.filter(range => range.start >= definition.start && range.end <= definition.end)) {
-				let index = 0;
-				restored += this.source.slice(cursor, range.start) + range.text.replace(/⟦AIH\d+:p\d+:\d+⟧/g, () => range.protected[index++]);
+				restored += this.source.slice(cursor, range.start) + restoreTokens(range.text, range.protected);
 				cursor = range.end;
 			}
 			body += "\n\n" + restored + this.source.slice(cursor, definition.end);
