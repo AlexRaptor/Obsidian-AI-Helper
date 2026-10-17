@@ -19,6 +19,7 @@ export class TranslationModal extends Modal {
 		const cancel = new ButtonComponent(actions).onClick(() => { if (this.plugin.translation.busy) this.plugin.translation.stop(); else { this.plugin.translation.cancel(); this.close(); } });
 		new ButtonComponent(actions).setButtonText(this.plugin.t("translation-hide")).onClick(() => this.close());
 		const retry = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-retry")).onClick(() => this.plugin.translation.retry());
+		const retryOpen = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-retry-open")).onClick(() => { void this.plugin.translation.retryOpen(); });
 		const save = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-save")).onClick(() => { void this.plugin.translation.save(); });
 		const partial = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-save-partial")).onClick(() => { void this.plugin.translation.savePartial(); });
 		const overwrite = new ButtonComponent(actions).setButtonText(this.plugin.t("translation-overwrite")).setWarning().onClick(() => { void this.plugin.translation.save("overwrite"); });
@@ -35,6 +36,8 @@ export class TranslationModal extends Modal {
 			}) : undefined;
 		const update = () => {
 			const operation = this.plugin.translation;
+			retryOpen.buttonEl.style.display = operation.canRetryOpen ? "" : "none";
+			retryOpen.setDisabled(!operation.canRetryOpen);
 			partial.setDisabled(!operation.canSavePartial);
 			partial.buttonEl.style.display = operation.busy || operation.canSave || !operation.active ? "none" : "";
 			retry.setButtonText(this.plugin.t(operation.needsName ? "translation-retry" : "translation-continue"));
@@ -45,7 +48,7 @@ export class TranslationModal extends Modal {
 			save.setDisabled(!operation.canSave); overwrite.setDisabled(!operation.canSave); saveCopy.setDisabled(!operation.canSave);
 			progress.setText(this.plugin.t(operation.partialResult && operation.stage === "translation-saving" ? "translation-partial-saving" : operation.partialResult && operation.stage === "translation-saved" ? "translation-partial-saved" : operation.stage) + (["translation-preparing", "translation-running", "translation-error", "translation-waiting"].includes(operation.stage) ? ` — ${Math.floor(operation.progress * 100)}%` : ""));
 			detail.setText(operation.detail ? this.plugin.t(operation.detail) + (operation.saveError ? ` ${operation.saveError}` : "") : "");
-			const warning = operation.detail === "translation-unresolved" || operation.detail === "translation-conflict" || operation.detail === "translation-target-changed";
+			const warning = operation.detail === "translation-open-error" || operation.detail === "translation-original-missing" || operation.detail === "translation-unresolved" || operation.detail === "translation-conflict" || operation.detail === "translation-target-changed";
 			const error = operation.stage === "translation-error" || operation.detail === "translation-title-error" || operation.detail === "translation-name";
 			setStatusTone(detail, warning ? "warning" : error ? "error" : "info");
 			detail.style.display = operation.detail ? "" : "none";
@@ -53,7 +56,7 @@ export class TranslationModal extends Modal {
 			path.style.display = operation.savedPath || operation.conflict ? "" : "none";
 			setStatusTone(status, operation.stage === "translation-error" ? "error" : operation.stage === "translation-saved" ? "success" : "info");
 			cancel.setButtonText(this.plugin.t(operation.busy ? "translation-stop" : operation.needsName || operation.canSave ? "translation-cancel" : "translation-finish"));
-			cancel.setDisabled(operation.stage === "translation-saving");
+			cancel.setDisabled(operation.stage === "translation-saving" || operation.stage === "translation-opening");
 			retry.buttonEl.style.display = operation.canRetry ? "" : "none";
 			retry.setDisabled(!operation.canRetry);
 			copy?.setDisabled(!operation.debugResponse);

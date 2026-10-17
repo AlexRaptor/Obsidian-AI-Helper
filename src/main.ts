@@ -76,6 +76,11 @@ export class AiHelperPlugin extends Plugin {
 		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();
 		this.addCommand({ id: "translate-current-note", name: this.t("translation-command"), callback: () => this.translateNote() });
+		this.addCommand({ id: "retry-open-translation", name: this.t("translation-retry-open"), callback: () => {
+			if (this.unloading || !this.translation.canRetryOpen) return;
+			this.showTranslationProgress();
+			void this.translation.retryOpen();
+		} });
 
 		const adapter = this.app.vault?.adapter;
 		this.noteSearch = createNoteSearch({
@@ -274,6 +279,10 @@ export class AiHelperPlugin extends Plugin {
 			if (!file || file.extension !== "md") { showStatusNotice(this.t("translation-note-required"), "warning"); return; }
 			if (!this.translation.start(file)) return;
 		}
+		this.showTranslationProgress();
+	}
+
+	private showTranslationProgress(): void {
 		this.translationModal?.close();
 		this.translationModal = new TranslationModal(this); this.translationModal.open();
 	}

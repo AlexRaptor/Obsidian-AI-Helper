@@ -15,6 +15,8 @@ async function setup(options: { metadata?: (url: string, init?: RequestInit) => 
 	const view = Object.assign(Object.create(MarkdownView.prototype), { file, getMode: () => "source", editor: { getValue: () => options.text ?? "Видимый текст.\n\nВторой абзац." } });
 	const opened: unknown[] = [];
 	const leaf = { view, openFile: vi.fn(async (...args: unknown[]) => { opened.push(args); }) };
+	const leaves: unknown[] = [leaf];
+	const fresh = { openFile: vi.fn(async (...args: unknown[]) => { opened.push(args); }) };
 	const right = { openFile: vi.fn(async (...args: unknown[]) => { opened.push(args); }) };
 	const commands = new Map<string, () => void>();
 	const events = new Map<string, (...args: any[]) => void>();
@@ -39,7 +41,8 @@ async function setup(options: { metadata?: (url: string, init?: RequestInit) => 
 		metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
 		workspace: { activeLeaf: leaf, getActiveViewOfType: (type: unknown) => type === MarkdownView ? view : null, getActiveFile: () => file, getLeavesOfType: (type: string) => type === "markdown" ? [leaf] : [],
 			on: (name: string, callback: (...args: any[]) => void) => { events.set(name, callback); return {}; }, onLayoutReady: () => {}, detachLeavesOfType: () => {},
-			createLeafBySplit: vi.fn(() => right), getLeaf: () => right, setActiveLeaf: vi.fn() } } as unknown as App;
+			iterateAllLeaves: (callback: (leaf: unknown) => void) => leaves.forEach(callback),
+			createLeafBySplit: vi.fn(() => { leaves.push(right); return right; }), getLeaf: vi.fn((newLeaf?: boolean) => { if (newLeaf) { leaves.push(fresh); return fresh; } return leaf; }), setActiveLeaf: vi.fn() } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, { id: "obsidian-ai-helper" } as PluginManifest); plugins.push(plugin);
 	vi.spyOn(plugin, "loadData").mockResolvedValue({ ...DEFAULT_SETTINGS, serverUrl: "http://server/v1", model: "model", contextWindow: "32000", language: "ru", translationLanguage: "English", translationSuffix: " — en", systemPrompt: "СЕКРЕТ ЧАТА", ...options.settings });
 	vi.spyOn(plugin, "addCommand").mockImplementation((command: any) => { commands.set(command.id, command.callback); return command; });
@@ -50,7 +53,7 @@ async function setup(options: { metadata?: (url: string, init?: RequestInit) => 
 		const chat = factory({} as WorkspaceLeaf) as ChatView; await chat.onOpen();
 		return { chat, root: chat.contentEl as unknown as TestElement };
 	};
-	return { plugin, app, file, files, folders, view, leaf, right, opened, commands, events, network, requests, openChat };
+	return { plugin, app, file, files, folders, view, leaf, leaves, fresh, right, opened, commands, events, network, requests, openChat };
 }
 it("команда переводит видимые абзацы и открывает отдельную заметку рядом", async () => {
 	const env = await setup();
@@ -1454,4 +1457,140 @@ it("незакрытый большой блок останавливает пе
 	button("Сохранить неполный перевод").click();
 	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
 	expect(env.files.get("Заметки/Статья — en.md")).not.toMatch(/защищённая|```/);
+});
+
+
+it("создаёт новую пару после закрытия исходной области, сохраняя другие области", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ completion: () => pending.promise });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	const other = { view: {}, openFile: vi.fn() };
+	env.leaves.splice(0, 1, other as unknown as typeof env.leaf);
+	Object.assign(env.app.workspace, { activeLeaf: other });
+	pending.resolve(response([{ id: "p1", text: "Готовый перевод." }, { id: "p2", text: "Второй абзац." }], "stop"));
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.leaf.openFile).not.toHaveBeenCalled();
+	expect(other.openFile).not.toHaveBeenCalled();
+	expect(env.app.workspace.getLeaf).toHaveBeenCalledWith(true);
+	expect(env.fresh.openFile).toHaveBeenCalledWith(env.file, { state: { mode: "preview" }, active: false });
+	expect(env.app.workspace.createLeafBySplit).toHaveBeenCalledWith(env.fresh, "vertical", false);
+	expect(env.right.openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "Заметки/Статья — en.md" }), { state: { mode: "preview" }, active: true });
+	expect(env.app.workspace.setActiveLeaf).toHaveBeenCalledWith(env.right, { focus: true });
+});
+
+it.each(["удалён", "переименован", "не Markdown"])("открывает только перевод с пояснением, если оригинал %s", async kind => {
+	const pending = deferred<Response>();
+	const env = await setup({ completion: () => pending.promise });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	if (kind === "не Markdown") env.file.extension = "txt";
+	else { env.files.delete(env.file.path); if (kind === "переименован") { env.file.path = "Заметки/Новое имя.md"; env.files.set(env.file.path, "Новый текст."); } }
+	pending.resolve(response([{ id: "p1", text: "Готовый перевод." }, { id: "p2", text: "Второй абзац." }], "stop"));
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(env.opened).toHaveLength(1);
+	expect(env.app.workspace.createLeafBySplit).not.toHaveBeenCalled();
+	expect(env.leaf.openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "Заметки/Статья — en.md" }), { state: { mode: "preview" }, active: true });
+	expect(Modal.opened[0].contentEl.getText()).toContain("По исходному пути больше нет Markdown-заметки");
+	expect(env.app.vault.create).toHaveBeenCalledTimes(1);
+});
+
+it.each(["ru", "en"])("повторяет только открытие сохранённого результата после сбоя (%s)", async language => {
+	const env = await setup({ settings: { language } });
+	env.right.openFile.mockRejectedValueOnce(Error("Область недоступна")).mockRejectedValueOnce(Error("Ещё недоступна"));
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	const retryLabel = language === "ru" ? "Повторить открытие" : "Retry opening";
+	expect(Modal.opened[0].contentEl.getText()).toContain("Заметки/Статья — en.md");
+	button(retryLabel).click(); button(retryLabel).click();
+	await vi.waitFor(() => expect(env.right.openFile).toHaveBeenCalledTimes(2));
+	await vi.waitFor(() => expect(button(retryLabel).disabled).toBe(false));
+	button(retryLabel).click();
+	await vi.waitFor(() => expect(env.right.openFile).toHaveBeenCalledTimes(3));
+	await vi.waitFor(() => expect(button(retryLabel).style.display).toBe("none"));
+	expect(env.requests).toHaveLength(1);
+	expect(env.app.vault.create).toHaveBeenCalledTimes(1);
+	expect(env.app.workspace.createLeafBySplit).toHaveBeenCalledTimes(1);
+	expect(env.app.workspace.setActiveLeaf).toHaveBeenCalledWith(env.right, { focus: true });
+});
+
+it.each([true, false])("фиксирует открытие рядом=%s и сохраняет другую область при переключении", async sideBySide => {
+	const pending = deferred<Response>();
+	const env = await setup({ settings: { translationOpenSideBySide: sideBySide }, completion: () => pending.promise });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	const other = { view: {}, openFile: vi.fn() };
+	env.leaves.push(other);
+	Object.assign(env.app.workspace, { activeLeaf: other, getLeaf: vi.fn(() => other) });
+	env.plugin.settings.translationOpenSideBySide = !sideBySide;
+	env.files.set(env.file.path, "Оригинал изменён после запуска.");
+	pending.resolve(response([{ id: "p1", text: "Готовый перевод." }, { id: "p2", text: "Второй абзац." }], "stop"));
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	if (sideBySide) {
+		expect(other.openFile).not.toHaveBeenCalled();
+		expect(env.leaf.openFile).toHaveBeenCalledWith(env.file, { state: { mode: "preview" }, active: false });
+		expect(env.app.workspace.createLeafBySplit).toHaveBeenCalledWith(env.leaf, "vertical", false);
+		expect(env.right.openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "Заметки/Статья — en.md" }), { state: { mode: "preview" }, active: true });
+	} else {
+		expect(env.app.workspace.getLeaf).toHaveBeenCalledWith(false);
+		expect(other.openFile).toHaveBeenCalledWith(expect.objectContaining({ path: "Заметки/Статья — en.md" }), { state: { mode: "preview" }, active: true });
+		expect(env.leaf.openFile).not.toHaveBeenCalled();
+		expect(env.app.workspace.createLeafBySplit).not.toHaveBeenCalled();
+	}
+	expect(env.files.get(env.file.path)).toBe("Оригинал изменён после запуска.");
+	expect(env.app.vault.create).toHaveBeenCalledTimes(1);
+});
+
+it("ошибка открытия освобождает модель для чата и слот для нового перевода", async () => {
+	const env = await setup();
+	env.leaf.openFile.mockRejectedValueOnce(Error("Нет области"));
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(button("Повторить открытие").style.display).toBe("");
+	const { chat, root } = await env.openChat();
+	try {
+		root.find("ai-helper-input").value = "Вопрос после сохранения";
+		root.find("ai-helper-send").click();
+		await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+		await vi.waitFor(() => expect(root.find("ai-helper-send").getAttribute("aria-label")).toBe("Отправить"));
+	} finally { await chat.onClose(); }
+	env.plugin.settings.translationSuffix = " — новый";
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.files.has("Заметки/Статья — новый.md")).toBe(true));
+	expect(env.requests).toHaveLength(3);
+	expect(button("Повторить открытие").style.display).toBe("none");
+});
+
+it("после скрытия окна сообщает сохранённый путь и позволяет повторить только открытие командой", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ completion: () => pending.promise });
+	env.right.openFile.mockRejectedValueOnce(Error("Нет области"));
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	button("Скрыть").click();
+	pending.resolve(response([{ id: "p1", text: "Готовый перевод." }, { id: "p2", text: "Второй абзац." }], "stop"));
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(Modal.opened).toHaveLength(0);
+	expect(Notice.messages.at(-1)).toContain("Заметки/Статья — en.md");
+	expect(Notice.messages.at(-1)).toContain("Повторить открытие");
+	env.commands.get("retry-open-translation")!();
+	await vi.waitFor(() => expect(env.app.workspace.setActiveLeaf).toHaveBeenCalledWith(env.right, { focus: true }));
+	expect(env.requests).toHaveLength(1);
+	expect(env.app.vault.create).toHaveBeenCalledTimes(1);
+	expect(Modal.opened).toHaveLength(1);
+});
+
+it("объясняет исчезновение оригинала уведомлением после скрытия прогресса", async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ completion: () => pending.promise });
+	env.commands.get("translate-current-note")!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	button("Скрыть").click();
+	env.files.delete(env.file.path);
+	pending.resolve(response([{ id: "p1", text: "Готовый перевод." }, { id: "p2", text: "Второй абзац." }], "stop"));
+	await vi.waitFor(() => expect(env.plugin.translation.active).toBe(false));
+	expect(Notice.messages.at(-1)).toContain("По исходному пути больше нет Markdown-заметки");
+	expect(Notice.messages.at(-1)).toContain("Заметки/Статья — en.md");
+	expect(env.opened).toHaveLength(1);
+	expect(env.app.workspace.createLeafBySplit).not.toHaveBeenCalled();
 });

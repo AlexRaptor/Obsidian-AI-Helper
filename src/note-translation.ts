@@ -7,10 +7,11 @@ import { TranslationParts, TranslationPartsError } from "./translation-parts";
 import { showStatusNotice } from "./ui-status";
 import type { LocaleKey } from "./i18n";
 import { TranslationLinks, snapshotTranslationTargets, relativePath, encodeDestination } from "./translation-links";
+import { TranslationOpening } from "./translation-opening";
 import { TranslationSave, translationName } from "./translation-save";
 import { TranslationMarkdown, TranslationMarkdownError } from "./translation-markdown";
 
-export type TranslationStage = "translation-waiting" | "translation-preparing" | "translation-running" | "translation-saving" | "translation-saved" | "translation-error" | "translation-cancelled";
+export type TranslationStage = "translation-waiting" | "translation-preparing" | "translation-running" | "translation-saving" | "translation-opening" | "translation-saved" | "translation-error" | "translation-cancelled";
 interface TranslationSnapshot {
 	path: string;
 	caseInsensitive: Promise<boolean>;
@@ -40,6 +41,8 @@ export class NoteTranslation {
 	saveError = "";
 	active = false;
 	busy = false;
+	private failedOpen?: { opening: TranslationOpening; unresolved: boolean };
+	get canRetryOpen(): boolean { return !this.busy && !!this.failedOpen; }
 	private readySave?: { snapshot: TranslationSnapshot; save: TranslationSave };
 	get needsName(): boolean { return this.stage === "translation-waiting" && !this.readySave; }
 	get canSave(): boolean { return !this.busy && !!this.readySave; }
@@ -58,7 +61,7 @@ export class NoteTranslation {
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private update(stage: TranslationStage, detail?: LocaleKey): void { this.stage = stage; this.detail = detail; this.listeners.forEach(listener => listener()); }
 	stop(): void {
-		if (!this.busy || this.stage === "translation-saving") return;
+		if (!this.busy || this.stage === "translation-saving" || this.stage === "translation-opening") return;
 		this.controller?.abort(); this.controller = undefined; this.release?.(); this.release = undefined;
 		this.busy = false; this.response = undefined;
 		this.update("translation-error");
@@ -81,16 +84,16 @@ export class NoteTranslation {
 		await this.save();
 	}
 	cancel(): void {
-		this.controller?.abort(); this.release?.(); this.release = undefined; this.controller = undefined; this.busy = false; this.active = false; this.response = undefined; this.retryWork = undefined; this.readySave = undefined; this.snapshot = undefined;
+		this.controller?.abort(); this.release?.(); this.release = undefined; this.controller = undefined; this.busy = false; this.active = false; this.response = undefined; this.retryWork = undefined; this.readySave = undefined; this.snapshot = undefined; this.failedOpen = undefined;
 		this.update("translation-cancelled");
 	}
 	dispose(): void { this.cancel(); this.listeners.clear(); }
 	start(file: TFile): boolean {
-		if (this.active) return true;
+		if (this.active || this.busy) return true;
 		const lease = this.acquire();
 		if (!lease) return false;
 		const { app } = this.plugin;
-		this.active = true; this.busy = true; this.savedPath = ""; this.saveError = ""; this.response = undefined; this.progress = 0; this.partialResult = false; this.snapshot = undefined;
+		this.active = true; this.busy = true; this.savedPath = ""; this.saveError = ""; this.response = undefined; this.progress = 0; this.partialResult = false; this.snapshot = undefined; this.failedOpen = undefined;
 		const controller = new AbortController(); this.controller = controller;
 		const path = file.path;
 		const leaves = app.workspace.getLeavesOfType("markdown");
@@ -264,8 +267,11 @@ export class NoteTranslation {
 			if (this.readySave !== ready) return;
 			if (!file) { this.update("translation-waiting", ready.save.conflict?.changed ? "translation-target-changed" : "translation-conflict"); return; }
 			this.savedPath = file.path;
-			try { await this.open(ready.snapshot, file, this.controller!.signal); if (this.readySave !== ready) return; this.update("translation-saved", ready.snapshot.links?.unresolved ? "translation-unresolved" : undefined); }
-			catch { if (this.readySave !== ready) return; this.update("translation-saved", "translation-open-error"); }
+			const opening = new TranslationOpening(this.plugin.app, ready.snapshot.path, file.path, ready.snapshot.leaf, ready.snapshot.settings.translationOpenSideBySide);
+			try { const detail = await opening.open(this.controller!.signal); if (this.readySave !== ready) return; this.opened(detail ?? (ready.snapshot.links?.unresolved ? "translation-unresolved" : undefined)); }
+			catch { if (this.readySave !== ready) return; this.failedOpen = { opening, unresolved: !!ready.snapshot.links?.unresolved }; this.update("translation-saved", "translation-open-error");
+				showStatusNotice(`${this.plugin.t("translation-open-error")} ${this.savedPath}\n${this.plugin.t("translation-open-command-hint")}`, "warning");
+			}
 			this.active = false; this.readySave = undefined; this.snapshot = undefined; this.retryWork = undefined;
 		} catch (error) {
 			if (this.readySave === ready) {
@@ -275,17 +281,24 @@ export class NoteTranslation {
 		}
 		finally { if (this.readySave === ready || !this.active) { this.busy = false; this.listeners.forEach(listener => listener()); } }
 	}
-	private async open(snapshot: TranslationSnapshot, result: TFile, signal: AbortSignal): Promise<void> {
-		const workspace = this.plugin.app.workspace;
-		const options = { state: { mode: "preview" }, active: true };
-		let leaf = snapshot.leaf ?? workspace.getLeaf(false);
-		if (snapshot.settings.translationOpenSideBySide) {
-			const original = this.plugin.app.vault.getFileByPath(snapshot.path);
-			if (original) { await leaf.openFile(original, { ...options, active: false }); if (signal.aborted) return; }
-			leaf = workspace.createLeafBySplit(leaf, "vertical");
+	private opened(detail?: LocaleKey): void {
+		this.update("translation-saved", detail);
+		if (detail === "translation-original-missing") showStatusNotice(`${this.plugin.t(detail)} ${this.savedPath}`, "warning");
+	}
+	async retryOpen(): Promise<void> {
+		if (!this.canRetryOpen) return;
+		const failed = this.failedOpen!;
+		const controller = new AbortController(); this.controller = controller;
+		this.busy = true; this.update("translation-opening");
+		try {
+			const detail = await failed.opening.open(controller.signal);
+			if (controller.signal.aborted || this.failedOpen !== failed) return;
+			this.failedOpen = undefined;
+			this.opened(detail ?? (failed.unresolved ? "translation-unresolved" : undefined));
+		} catch {
+			if (!controller.signal.aborted && this.failedOpen === failed) this.update("translation-saved", "translation-open-error");
+		} finally {
+			if (this.controller === controller) { this.busy = false; this.listeners.forEach(listener => listener()); }
 		}
-		if (signal.aborted) return;
-		await leaf.openFile(result, options);
-		if (!signal.aborted) workspace.setActiveLeaf(leaf, { focus: true });
 	}
 }
