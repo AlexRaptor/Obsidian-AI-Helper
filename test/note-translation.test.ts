@@ -1730,3 +1730,34 @@ it("#58: диагностика блочной разметки после ло�
 	expect(Notice.messages.at(-1)).toContain('p1');
 	expect(env.app.vault.create).not.toHaveBeenCalled();
 });
+
+it("#58: воспроизводит пустой перевод связки после ссылки из ответа модели", async () => {
+	const text = 'Read the **very *important*** [guide](https://example.org) before continuing.\nThe [results](https://example.org) **of the latest experiment** are reliable.\nKeep `cache.get(key)` and $E = mc^2$ unchanged while explaining their role.\nЭто русский текст, а **this useful [reference](https://example.org)** требует перевода.';
+	const reply = [
+		['p1~0', 'Прочитайте '], ['p1~1', 'очень '], ['p1~2', 'важное'], ['p1~4', 'руководство'], ['p1~5', ' перед продолжением.'],
+		['p1~6', 'Результаты'], ['p1~7', ' '], ['p1~9', ' последнего эксперимента'], ['p1~10', ' надёжны.'],
+		['p1~11', 'Оставьте '], ['p1~12', ' '], ['p1~13', ' без изменений, объясняя их роль.'],
+		['p1~14', 'Это русский текст, а '], ['p1~15', 'эта полезная '], ['p1~16', 'справка'], ['p1~18', ' требует перевода.'],
+	];
+	const env = await setup({ text, completion: async () => response(reply.map(([id, text]) => ({ id, text })), 'stop') });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(Notice.messages.at(-1)).toContain('Пустой перевод фрагмента. (p1~7)');
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+	const payload = JSON.parse(env.requests[0].messages.at(-1).content);
+	expect(payload.units.find((unit: { id: string }) => unit.id === 'p1~6').text).toBe('The ');
+	expect(payload.units.find((unit: { id: string }) => unit.id === 'p1~7').text).toBe('results');
+	expect(payload.units.find((unit: { id: string }) => unit.id === 'p1~12').text).toBe(' and ');
+});
+
+
+it("#58: минимальный ответ не может перенести перевод артикля в подпись ссылки", async () => {
+	const env = await setup({ text: 'The [results](https://example.org).', completion: async body => {
+		const { units } = JSON.parse(body.messages.at(-1).content);
+		return response(units.map((unit: { id: string; text: string }) => ({ id: unit.id, text: unit.text === 'The ' ? 'Результаты' : unit.text === 'results' ? ' ' : unit.text })), 'stop');
+	} });
+	env.commands.get('translate-current-note')!();
+	await vi.waitFor(() => expect(env.plugin.translation.canRetry).toBe(true));
+	expect(Notice.messages.at(-1)).toContain('Пустой перевод фрагмента. (p1~1)');
+	expect(env.app.vault.create).not.toHaveBeenCalled();
+});
