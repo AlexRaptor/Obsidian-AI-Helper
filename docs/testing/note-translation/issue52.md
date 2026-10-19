@@ -7,21 +7,19 @@
 ## Подготовка и восстановление
 
 Общее совместимое хранилище: `docs/testing/note-translation/translation-vault/`.
-Генератор: `docs/testing/note-translation/prepare_vault.py`. Дополнительный исходник
-этого сценария: `docs/testing/note-translation/issue52-source.md`.
+Генератор: `docs/testing/prepare_vault.py`. Исходник
+этого сценария уже включён в общую папку заметок: `docs/testing/note-translation/notes/Статьи/Сложные конструкции.md`.
 
 Закрыть тестовое хранилище перед обновлением. Из корня репозитория выполнить:
 
 ```sh
-python3 docs/testing/note-translation/prepare_vault.py --dest "docs/testing/note-translation/translation-vault"
-cp docs/testing/note-translation/issue52-source.md "docs/testing/note-translation/translation-vault/Статьи/Сложные конструкции.md"
+python3 docs/testing/prepare_vault.py --source docs/testing/note-translation/notes --dest "docs/testing/note-translation/translation-vault"
 ```
 
 Генератор собирает и устанавливает плагин. В существующем хранилище выбрать
 режим 2 для обновления со своими настройками или режим 1 для полного сброса.
 Эти режимы удаляют прежние заметки тестового хранилища. Для восстановления
-повторить обе команды с закрытым хранилищем; повторное копирование исходника
-обязательно. Не использовать рабочее хранилище.
+повторить команду с закрытым хранилищем; скрипт восстановит все исходные заметки. Не использовать рабочее хранилище.
 
 Открыть это хранилище в Obsidian, включить плагин, настроить модель-сервер
 и модель диалога. В настройках перевода выбрать английский язык и свободный

@@ -19,6 +19,11 @@ class PrepareVaultTests(unittest.TestCase):
         self.repository = self.root / 'репозиторий'
         self.repository.mkdir()
         self.vault = self.root / 'хранилище с пробелами'
+        self.notes = self.root / 'исходные заметки'
+        (self.notes / 'Раздел').mkdir(parents=True)
+        (self.notes / 'Раздел' / 'Пример.md').write_text('# Проверка\n\nТестовая заметка.\n', encoding='utf-8')
+        (self.notes / 'Вложения').mkdir()
+        (self.notes / 'Вложения' / 'Пример.bin').write_bytes(bytes(range(256)))
         for name, content in {'manifest.json': json.dumps({'id': 'test-plugin'}), 'main.js': 'новая сборка', 'styles.css': 'новые стили'}.items():
             (self.repository / name).write_text(content, encoding='utf-8')
         self.patch_repository = patch.object(generator, 'REPOSITORY', self.repository)
@@ -47,12 +52,12 @@ class PrepareVaultTests(unittest.TestCase):
 
     def run_generator(self, answers=()):
         with patch('builtins.input', side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
-            return generator.main(['--dest', str(self.vault)])
+            return generator.main(['--source', str(self.notes), '--dest', str(self.vault)])
 
     def assert_notes(self):
-        self.assertEqual({path.name for path in self.vault.iterdir() if path.name != '.obsidian'}, set(generator.NOTES))
-        for name, text in generator.NOTES.items():
-            self.assertEqual((self.vault / name).read_text(encoding='utf-8'), text)
+        expected = {str(path.relative_to(self.notes)): path.read_bytes() for path in self.notes.rglob('*') if path.is_file()}
+        actual = {name: data[0] for name, data in self.snapshot(self.vault).items() if not name.startswith('.obsidian/')}
+        self.assertEqual(actual, expected)
 
     def test_new_and_empty_vault_build_install_and_use_manifest_id(self):
         for empty in (False, True):
@@ -134,9 +139,86 @@ class PrepareVaultTests(unittest.TestCase):
         file.write_text('Сохранить.', encoding='utf-8')
         for destination in (self.repository, self.repository.parent, file):
             with self.subTest(destination=destination), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                generator.main(['--dest', str(destination)])
+                generator.main(['--source', str(self.notes), '--dest', str(destination)])
         self.assertEqual(file.read_text(encoding='utf-8'), 'Сохранить.')
         self.build.assert_not_called()
+
+    def test_no_arguments_print_instructions_without_changes(self):
+        self.populate()
+        before = self.snapshot(self.root)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch('builtins.input') as prompt:
+            self.assertEqual(generator.main([]), 0)
+        self.assertIn('--source', output.getvalue())
+        self.assertIn('--dest', output.getvalue())
+        self.assertIn('Пример', output.getvalue())
+        self.assertEqual(self.snapshot(self.root), before)
+        prompt.assert_not_called()
+        self.build.assert_not_called()
+
+    def test_source_is_required_when_other_arguments_are_given(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            generator.main(['--dest', str(self.vault)])
+        self.assertEqual(error.exception.code, 2)
+        self.assertFalse(self.vault.exists())
+        self.build.assert_not_called()
+
+    def test_default_destination_is_next_to_source(self):
+        self.vault = self.notes.with_name(self.notes.name + '-vault')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(generator.main(['--source', str(self.notes)]), 0)
+        self.assert_notes()
+
+    def test_rejects_missing_or_file_source_without_changing_destination(self):
+        self.populate()
+        before = self.snapshot(self.vault)
+        for source in (self.root / 'нет папки', self.notes / 'Раздел' / 'Пример.md'):
+            with self.subTest(source=source), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                generator.main(['--source', str(source), '--dest', str(self.vault)])
+        self.assertEqual(self.snapshot(self.vault), before)
+        self.build.assert_not_called()
+
+    def test_rejects_overlapping_paths_in_both_directions(self):
+        for source, destination in ((self.notes, self.notes), (self.notes, self.notes / 'внутри'), (self.notes / 'Раздел', self.notes)):
+            before = self.snapshot(self.root)
+            with self.subTest(source=source, destination=destination), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                generator.main(['--source', str(source), '--dest', str(destination)])
+            self.assertEqual(self.snapshot(self.root), before)
+        self.build.assert_not_called()
+
+    def test_rejects_overlap_through_symlink(self):
+        alias = self.root / 'псевдоним'
+        alias.symlink_to(self.notes, target_is_directory=True)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            generator.main(['--source', str(alias), '--dest', str(self.notes)])
+        self.build.assert_not_called()
+
+    def test_rejects_obsidian_settings_in_source(self):
+        self.populate()
+        before = self.snapshot(self.vault)
+        (self.notes / '.obsidian').mkdir()
+        (self.notes / '.obsidian' / 'app.json').write_text('{}')
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.run_generator(['1'])
+        self.assertEqual(self.snapshot(self.vault), before)
+        self.build.assert_not_called()
+
+    def test_rejects_symlinks_in_source(self):
+        self.populate()
+        before = self.snapshot(self.vault)
+        (self.notes / 'ссылка.md').symlink_to(self.vault / 'Старая заметка.md')
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.run_generator(['1'])
+        self.assertEqual(self.snapshot(self.vault), before)
+        self.build.assert_not_called()
+
+    def test_source_copy_failure_preserves_existing_vault(self):
+        self.populate()
+        before = self.snapshot(self.vault)
+        with patch.object(generator.shutil, 'copytree', side_effect=OSError('Ошибка чтения исходника')):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_generator(['2'])
+        self.assertEqual(self.snapshot(self.vault), before)
 
 
 if __name__ == '__main__':

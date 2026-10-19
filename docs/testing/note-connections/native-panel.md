@@ -5,10 +5,10 @@
 Подготовка: установить зависимости проекта (`npm install`) и закрыть тестовое хранилище в Obsidian перед созданием или обновлением. Из корня репозитория выполнить:
 
 ```sh
-python3 docs/testing/note-connections/prepare_vault.py --dest docs/testing/note-connections/native-panel-vault
+python3 docs/testing/prepare_vault.py --source docs/testing/note-connections/notes --dest docs/testing/note-connections/native-panel-vault
 ```
 
-Скрипт создаёт две заметки (`Обучение.md` и `Расписание.md`), выполняет `npm run build` и устанавливает `main.js`, `manifest.json`, `styles.css` в `.obsidian/plugins/<id из manifest.json>/`. При запуске из другой папки указывать абсолютные пути скрипта и назначения; корень проекта для сборки определяется автоматически. Для непустого назначения доступно меню: полная замена; замена с сохранением настроек и обновлением плагина; замена только контента без сборки; отмена. Варианты 1–3 удаляют прежний контент за пределами `.obsidian`.
+Скрипт создаёт две заметки (`Обучение.md` и `Расписание.md`), выполняет `npm run build` и устанавливает `main.js`, `manifest.json`, `styles.css` в `.obsidian/plugins/<id из manifest.json>/`. При запуске из другой папки указывать абсолютные пути скрипта, исходной папки и назначения; корень проекта для сборки определяется автоматически. Без параметров скрипт выводит справку и пример запуска, не изменяя файлы. Для непустого назначения доступно меню: полная замена; замена с сохранением настроек и обновлением плагина; замена только контента без сборки; отмена. Варианты 1–3 удаляют прежний контент за пределами `.obsidian`.
 
 Точный путь тестового хранилища: `docs/testing/note-connections/native-panel-vault/`. Открыть его в Obsidian, отключить Restricted mode, включить установленный плагин и настроить embedding-модель и модель диалога с известным окном контекста. Генератор не копирует настройки подключения из других хранилищ.
 
@@ -21,5 +21,5 @@ python3 docs/testing/note-connections/prepare_vault.py --dest docs/testing/note-
 Автоматические проверки генератора (во временных папках):
 
 ```sh
-python3 -m unittest discover -s docs/testing/note-connections -p 'test_prepare_vault.py' -v
+python3 -m unittest discover -s docs/testing -p 'test_prepare_vault.py' -v
 ```

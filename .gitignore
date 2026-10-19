@@ -14,4 +14,7 @@ docs/testing/note-translation/translation-vault/
 
 # Локальное хранилище ручной проверки поиска связей
 docs/testing/note-connections/native-panel-vault/
-docs/testing/note-connections/__pycache__/
+docs/testing/**/__pycache__/
+
+# Хранилища общего генератора при стандартном имени папки данных
+docs/testing/**/notes-vault/

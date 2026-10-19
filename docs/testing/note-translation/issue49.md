@@ -6,16 +6,16 @@
 проверяет вызовы API, но не рендерер и рабочее пространство приложения.
 
 Хранилище: `docs/testing/note-translation/translation-vault/`.
-Генератор и исходные данные: `docs/testing/note-translation/prepare_vault.py`.
+Общий генератор: `docs/testing/prepare_vault.py`; исходные данные: `docs/testing/note-translation/notes/`.
 Подготовка: из корня репозитория выполнить
-`python3 docs/testing/note-translation/prepare_vault.py`. Скрипт сам собирает
+`python3 docs/testing/prepare_vault.py --source docs/testing/note-translation/notes --dest docs/testing/note-translation/translation-vault`. Скрипт сам собирает
 и устанавливает плагин в `.obsidian/plugins/`. Затем включить плагин
 по README этой папки, настроить модель-сервер и модель диалога.
 Для восстановления закрыть хранилище, повторить запуск и выбрать режим
 замены из меню (описание вариантов — в README). Настройки плагина сохраняет
 вариант 2; только контент заменяет вариант 3. Для существующего хранилища
 передать его путь через `--dest`. Либо создать новую копию командой
-`python3 docs/testing/note-translation/prepare_vault.py --dest /tmp/note-translation-49-vault`.
+`python3 docs/testing/prepare_vault.py --source docs/testing/note-translation/notes --dest /tmp/note-translation-49-vault`.
 В повторе этот путь заменяет путь хранилища во всех шагах. При отказе от
 перезаписи существующее хранилище не изменяется.
 

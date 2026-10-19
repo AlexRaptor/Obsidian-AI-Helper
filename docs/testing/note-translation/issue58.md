@@ -71,12 +71,12 @@ node docs/testing/note-translation/check_model.mjs \
 Для повторения именно в интерфейсе закрыть тестовое хранилище и выполнить:
 
 ```sh
-python3 docs/testing/note-translation/prepare_vault.py --dest docs/testing/note-translation/translation-vault
+python3 docs/testing/prepare_vault.py --source docs/testing/note-translation/notes --dest docs/testing/note-translation/translation-vault
 ```
 
 Для существующей папки выбрать режим 2 для обновления плагина с сохранением
 настроек, режим 1 для полного сброса, режим 3 только для восстановления контента
-или 4 для отмены. Генератор содержит статью, `Справка/Метод.md` и
+или 4 для отмены. Папка `notes/` содержит статью, `Справка/Метод.md` и
 `Вложения/Схема.svg`. Повторный запуск восстанавливает начальное состояние;
 результаты перед ним сохранить вне тестового хранилища. Четыре фразы взять из
 `issue58-phrases.md` в той же папке тестирования.

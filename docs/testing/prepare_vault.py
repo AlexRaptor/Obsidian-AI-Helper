@@ -1,17 +1,13 @@
-"""Собрать тестовое хранилище для ручной проверки поиска связей (#60)."""
+"""Собрать тестовое хранилище из папки заметок для ручного тестирования."""
 import argparse
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import sys
 
-REPOSITORY = Path(__file__).resolve().parents[3]
-DEFAULT_DEST = Path(__file__).resolve().parent / 'native-panel-vault'
-NOTES = {
-    'Обучение.md': '# Обучение\n\nАктивное вспоминание помогает удерживать знания. Нужно определить расписание повторений.\n',
-    'Расписание.md': '# Расписание\n\nПовторяйте изученное через день и через неделю. Проверяйте себя без подсказок.\n',
-}
+REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 def choose_mode(vault):
@@ -33,7 +29,7 @@ def choose_mode(vault):
         print('Введите 1, 2, 3 или 4.')
 
 
-def prepare(vault, mode):
+def prepare(notes, vault, mode):
     plugin_id = None
     if mode != '3':
         subprocess.run(['npm', 'run', 'build'], cwd=REPOSITORY, check=True)
@@ -42,9 +38,9 @@ def prepare(vault, mode):
         if not isinstance(plugin_id, str) or not plugin_id or plugin_id in ('.', '..') or '/' in plugin_id or '\\' in plugin_id:
             raise ValueError('Недопустимый id плагина в manifest.json.')
     vault.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.note-connections-vault-', dir=vault.parent) as staging:
+    with tempfile.TemporaryDirectory(prefix='.test-vault-', dir=vault.parent) as staging:
         prepared = Path(staging) / 'vault'
-        prepared.mkdir()
+        shutil.copytree(notes, prepared)
         if mode == '2' and (vault / '.obsidian').exists():
             shutil.copytree(vault / '.obsidian', prepared / '.obsidian')
         if mode != '3':
@@ -52,8 +48,6 @@ def prepare(vault, mode):
             plugin_directory.mkdir(parents=True, exist_ok=True)
             for artifact in ('main.js', 'manifest.json', 'styles.css'):
                 shutil.copy2(REPOSITORY / artifact, plugin_directory / artifact)
-        for name, content in NOTES.items():
-            (prepared / name).write_text(content, encoding='utf-8')
         # Finish every build/copy before replacing existing data.
         if mode == '3':
             for entry in vault.iterdir():
@@ -79,9 +73,24 @@ def prepare(vault, mode):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--dest', type=Path, default=DEFAULT_DEST)
-    args = parser.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Пример из корня репозитория:\n  python3 docs/testing/prepare_vault.py '
+               '--source docs/testing/note-connections/notes '
+               '--dest docs/testing/note-connections/native-panel-vault',
+    )
+    parser.add_argument('--source', type=Path, required=True, help='Папка с тестовыми заметками и вложениями.')
+    parser.add_argument('--dest', type=Path, help='Хранилище назначения; по умолчанию соседняя с исходником папка <имя>-vault.')
+    arguments = sys.argv[1:] if argv is None else argv
+    if not arguments:
+        parser.print_help()
+        return 0
+    args = parser.parse_args(arguments)
+    notes = args.source.expanduser().resolve()
+    if not notes.is_dir():
+        parser.error('Исходная папка с заметками не существует или не является папкой.')
+    args.dest = args.dest if args.dest is not None else notes.with_name(notes.name + '-vault')
     vault = args.dest.expanduser().resolve()
     if vault == REPOSITORY or vault in REPOSITORY.parents:
         parser.error('Хранилище нельзя создавать вместо репозитория или его родительской папки.')
@@ -90,12 +99,18 @@ def main(argv=None):
         parser.error('Папка назначения не должна содержать сам генератор.')
     if vault.exists() and not vault.is_dir():
         parser.error('Путь назначения занят файлом, а не папкой.')
+    if notes == vault or notes in vault.parents or vault in notes.parents:
+        parser.error('Исходная папка и хранилище назначения не должны пересекаться.')
+    if (notes / '.obsidian').exists():
+        parser.error('Исходные данные должны содержать заметки и вложения без папки .obsidian.')
+    if any(path.is_symlink() for path in notes.rglob('*')):
+        parser.error('Исходные данные должны содержать обычные файлы и папки без символических ссылок.')
     mode = choose_mode(vault)
     if mode == '4':
         print('Перезапись отменена. Хранилище не изменено.')
         return 0
     try:
-        prepare(vault, mode)
+        prepare(notes, vault, mode)
     except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
         parser.exit(1, f'Не удалось подготовить хранилище: {error}\n')
     return 0
