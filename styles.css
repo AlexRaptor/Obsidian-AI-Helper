@@ -686,3 +686,7 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 	background-color: var(--text-success);
 	color: var(--background-primary);
 }
+
+.ai-helper-connection-select {
+	margin-inline-end: var(--size-4-2);
+}
