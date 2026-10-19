@@ -120,7 +120,7 @@ describe("ordinary fallback in the chat window", () => {
 		const { view, root, input, send } = await setup(fetch);
 		input.value = "next draft";
 		fallback.resolve(answer()); await flushPromises();
-		expect(root.find("ai-helper-messages").children).toHaveLength(2);
+		expect(root.find("ai-helper-messages").children.filter(child => child.classes.has("ai-helper-message"))).toHaveLength(2);
 		expect(root.getText()).toContain("ordinary answer");
 		expect(input.value).toBe("next draft");
 		expect(view.getMessages()).toEqual([{ role: "user", content: "question" }, { role: "model", content: "ordinary answer" }]);
@@ -155,7 +155,7 @@ describe("ordinary fallback in the chat window", () => {
 		root.find("ai-helper-clear-btn").click();
 		body.resolve({ error: { message: "Streaming is not supported" } }); await flushPromises();
 		expect(fetch).toHaveBeenCalledTimes(1);
-		expect(root.find("ai-helper-messages").children).toHaveLength(0);
+		expect(root.find("ai-helper-messages").children.filter(child => child.classes.has("ai-helper-message"))).toHaveLength(0);
 		await view.onClose();
 	});
 });

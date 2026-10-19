@@ -663,10 +663,6 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 }
 
 .ai-helper-connections {
-	flex: 0 1 auto;
-	max-height: 55%;
-	min-height: 0;
-	overflow-y: auto;
 	overflow-wrap: anywhere;
 }
 

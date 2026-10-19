@@ -105,7 +105,7 @@ it.each(['unknown', 'links', 'marker', 'empty', 'incomplete', 'malformed', 'dupl
 		} });
 		env.commands.get('find-note-connections')!();
 		await vi.waitFor(() => expect(env.root.getText()).toContain('Предложения не опубликованы'));
-		expect(env.root.children.flatMap(child => child.children).some(child => child.classes.has('ai-helper-connection'))).toBe(false);
+		expect(() => env.root.find('ai-helper-connection')).toThrow('Element not found');
 		expect(env.chat.getMessages()).toEqual([]); await env.chat.onClose();
 	});
 
@@ -395,4 +395,24 @@ it.each(['```text\nНезакрытый пример.', '~~~md\nНезакрыт
 	await vi.waitFor(() => expect(env.root.getText()).toContain('Границы блока'));
 	expect(env.files.get('Заметки/Мысль.md')).toBe(source); expect(env.root.getText()).toContain('Снять выбор');
 	expect(env.root.getText()).not.toContain('Добавлено связей: 1'); await env.chat.onClose();
+});
+
+it.skipIf(!process.env.AI_HELPER_LAYOUT_BROWSER).each([1, 5])('предложения и раскрытые фрагменты прокручиваются до низа области чата: %s карточек', async count => {
+	const env = await setup({ notes: Object.fromEntries(Array.from({ length: count }, (_, index) => [index === 0 ? 'Примеры/Практика.md' : `Примеры/Повторение-${index}.md`, '# Проверка знаний\nВспомните изученное самостоятельно.\n\n## Через день\nПроверьте знания на следующий день.\n\n## Через неделю\nВернитесь к материалу через неделю.'])) });
+	await env.run();
+	const { checkChatLayout } = await import('./helpers/browser-layout');
+	checkChatLayout(env.root);
+	await env.chat.onClose();
+}, 20000);
+
+it('показывает новый поиск над прежним диалогом и сохраняет прокрутку при выборе карточки', async () => {
+	let ordinary = true;
+	const env = await setup({ completion: async body => ordinary ? Response.json({ choices: [{ message: { content: 'Предыдущий длинный ответ.\n'.repeat(100) }, finish_reason: 'stop' }] }) : answer(JSON.parse(body.messages.at(-1).content).candidate.id) });
+	env.root.find('ai-helper-input').value = 'Объясни повторение'; env.root.find('ai-helper-send').click();
+	await vi.waitFor(() => expect(env.chat.getMessages()).toHaveLength(2)); ordinary = false;
+	const viewport = env.root.find('ai-helper-messages');
+	viewport.clientHeight = 400; viewport.scrollHeight = 2000; viewport.scrollTop = 1600; viewport.dispatchEvent({ type: 'scroll' });
+	await env.run(); expect(viewport.scrollTop).toBe(0);
+	viewport.scrollTop = 120; env.root.find('ai-helper-connection-select').click(); expect(viewport.scrollTop).toBe(120);
+	await env.chat.onClose();
 });

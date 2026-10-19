@@ -1,4 +1,4 @@
-import { NoteConnections } from "./note-connections";
+import { NoteConnections, type ConnectionResult } from "./note-connections";
 import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType, type EventRef, type TFile } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
 import { isEmbeddingConfigured } from "./note-search";
@@ -42,6 +42,7 @@ export class ChatView extends ItemView implements HoverParent {
 	conversation = new Conversation();
 	readonly connections: NoteConnections;
 	private connectionsEl: HTMLElement | null = null;
+	private displayedConnections?: ConnectionResult;
 	private searchEnabled = false;
 	private searchType: "notes" | "folders" | "mixed" = "notes";
 	private searchTypeSelect: DropdownComponent | null = null;
@@ -281,7 +282,13 @@ export class ChatView extends ItemView implements HoverParent {
 		root.empty();
 		const result = this.connections.result;
 		root.hidden = !result;
+		const reveal = result !== this.displayedConnections;
+		this.displayedConnections = result;
 		if (!result) return;
+		if (reveal && this.messagesEl) {
+			this.followingMessages = false;
+			this.messagesEl.scrollTop = 0;
+		}
 		root.createEl("h3", { text: `${this.t("connections-title")}: ${result.path}` });
 		const status = root.createDiv({ text: this.t(result.status) });
 		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : ["connections-model", "connections-invalid", "search-failed", "search-storage", "search-query-failed"].includes(result.status) ? "error" : "warning");
@@ -377,9 +384,9 @@ export class ChatView extends ItemView implements HoverParent {
 			void this.plugin.noteSearch.pause().catch(() => showStatusNotice(this.t("search-storage"), "error"));
 		});
 		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
-		this.connectionsEl = container.createDiv({ cls: "ai-helper-connections" });
-		this.renderConnections();
 		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
+		this.connectionsEl = this.messagesEl.createDiv({ cls: "ai-helper-connections" });
+		this.renderConnections();
 
 		this.messageInput.mount(container);
 	}
