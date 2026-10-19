@@ -25,12 +25,12 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	vi.stubGlobal('fetch', network);
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => '/связи';
 	let chat: ChatView;
-	const app = { vault: { adapter, on: () => ({}), offref() {}, getMarkdownFiles: () => [...entries.values()], getFiles: () => [...entries.values()], getFileByPath: (path: string) => entries.get(path) ?? null, read: vi.fn(async (file: TFile) => files.get(file.path)!) }, metadataCache: { getFirstLinkpathDest: (name: string, from: string) => {
+	const app = { fileManager: { generateMarkdownLink: (file: TFile) => '[[' + file.path.replace(/\.md$/, '') + ']]' }, vault: { adapter, on: () => ({}), offref() {}, getMarkdownFiles: () => [...entries.values()], getFiles: () => [...entries.values()], getFileByPath: (path: string) => entries.get(path) ?? null, read: vi.fn(async (file: TFile) => files.get(file.path)!), process: vi.fn(async (file: TFile, update: (text: string) => string) => { const next = update(files.get(file.path)!); files.set(file.path, next); if (editor.file === file) text = next; return next; }) }, metadataCache: { getFirstLinkpathDest: (name: string, from: string) => {
 		const parts = from.split('/').slice(0, -1);
 		for (const part of name.split('/')) { if (part === '..') parts.pop(); else if (part !== '.') parts.push(part); }
 		const local = parts.join('/');
 		return entries.get(local) ?? entries.get(local + '.md') ?? entries.get(name) ?? entries.get(name + '.md') ?? [...entries.values()].find(file => file.basename === name);
-	} }, workspace: { getActiveViewOfType: (type: unknown) => type === MarkdownView ? editor : null, getLeavesOfType: (type: string) => type === 'ai-helper-chat' && chat ? [{ view: chat }] : [], on: () => ({}), onLayoutReady() {}, detachLeavesOfType() {}, ensureSideLeaf: async () => ({ view: chat }), revealLeaf: async () => {}, openLinkText: vi.fn(async () => {}) } } as unknown as App;
+	} }, workspace: { getActiveViewOfType: (type: unknown) => type === MarkdownView ? editor : null, getLeavesOfType: (type: string) => type === 'markdown' ? [{ view: editor }] : type === 'ai-helper-chat' && chat ? [{ view: chat }] : [], on: () => ({}), onLayoutReady() {}, detachLeavesOfType() {}, ensureSideLeaf: async () => ({ view: chat }), revealLeaf: async () => {}, openLinkText: vi.fn(async () => {}) } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, { id: 'obsidian-ai-helper' } as PluginManifest); plugins.push(plugin);
 	vi.spyOn(plugin, 'loadData').mockResolvedValue({ ...DEFAULT_SETTINGS, language: 'ru', serverUrl: 'http://server/v1', model: 'диалог', embeddingServerUrl: 'http://server/v1', embeddingModel: 'смысл', contextWindow: '32000', autoUpdateNotes: false, systemPrompt: 'СЕКРЕТ ОБЫЧНОГО ДИАЛОГА', ...options.settings });
 	vi.spyOn(plugin, 'addCommand').mockImplementation((command: any) => { commands.set(command.id, command.callback); return command; });
@@ -39,7 +39,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	if (options.index !== false) for (const path of files.keys()) { try { await plugin.noteSearch.index(path); } catch {} }
 	requests.length = 0; embeddings.length = 0; vi.mocked(app.vault.read).mockClear();
 	const root = chat.contentEl as unknown as TestElement;
-	return { plugin, chat, root, requests, embeddings, files, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента')); } };
+	return { plugin, chat, root, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента')); } };
 }
 function answer(id: string, explanation = 'Практика дополняет активное вспоминание расписанием повторений через день и неделю.', finish = 'stop') { return Response.json({ choices: [{ message: { content: JSON.stringify({ candidate: id, explanation }) }, finish_reason: finish }] }); }
 
@@ -230,3 +230,169 @@ it.each(['> ~~~md\n> [[Примеры/Практика]]', '- ~~~md\n  [[При�
 		const env = await setup({ source: 'Активное вспоминание.\n\n' + example + '\n\n[[Архив/Связанная]]', notes: { 'Архив/Связанная.md': 'СВЯЗАННЫЙ МАТЕРИАЛ ПОСЛЕ КОНТЕЙНЕРА' } });
 		await env.run(); expect(env.requests).toHaveLength(1); expect(JSON.stringify(env.requests)).not.toContain('СВЯЗАННЫЙ МАТЕРИАЛ ПОСЛЕ КОНТЕЙНЕРА'); await env.chat.onClose();
 	});
+
+const sourceText = '# Обучение\nАктивное вспоминание помогает удерживать знания.';
+const explanation = 'Практика дополняет активное вспоминание расписанием повторений через день и неделю.';
+it('добавляет только выбранную связь обычным Markdown и не меняет другие заметки', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Пример продолжения активного вспоминания.' } }); await env.run();
+	const before = new Map(env.files);
+	env.root.find('ai-helper-connection-select').click();
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	const path = env.root.find('ai-helper-connection-link').getText().replace(/\.md$/, '');
+	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText + '\n\n<!-- ai-helper:related-notes:start -->\n## Связанные заметки\n- [[' + path + ']] — ' + explanation + '\n<!-- ai-helper:related-notes:end -->\n');
+	for (const [path, text] of before) if (path !== 'Заметки/Мысль.md') expect(env.files.get(path)).toBe(text);
+	expect(env.root.getText()).toContain('Добавлено'); await env.chat.onClose();
+});
+
+it.each(['clear', 'new', 'close'])('сохраняет несохранённый выбор при действии %s', async action => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	env.root.find('ai-helper-connection-select').click();
+	const count = env.requests.length;
+	if (action === 'clear') env.root.find('ai-helper-clear-btn').click();
+	else if (action === 'new') env.commands.get('find-note-connections')!();
+	else { await env.chat.onClose(); const reopened = new ChatView({} as WorkspaceLeaf, env.plugin); Object.assign(reopened, { app: env.app }); await reopened.onOpen(); expect((reopened.contentEl as unknown as TestElement).getText()).toContain('Снять выбор'); await reopened.onClose(); return; }
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сначала добавьте выбранные связи или снимите выбор'));
+	expect(env.root.getText()).toContain('Снять выбор'); expect(env.requests).toHaveLength(count);
+	await env.chat.onClose();
+});
+
+it('после изменения исходника требует новый поиск даже при восстановлении прежнего текста', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	env.setText(sourceText + '\nРучная правка.'); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Запустите новый поиск'));
+	env.setText(sourceText); env.root.find('ai-helper-connections-add').click();
+	await new Promise(resolve => setTimeout(resolve, 30));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText); expect(env.root.getText()).toContain('Снять выбор'); await env.chat.onClose();
+});
+
+it('отказывает, если найденная заметка меняется, пока запись ожидает блокировку файла', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => {
+		const target = env.app.vault.getFileByPath('Примеры/Практика.md')!;
+		env.files.set(target.path, 'Содержимое изменилось перед записью.'); Object.assign(target, { stat: { mtime: 2, size: 100 } });
+		const next = update(env.files.get(file.path)!); env.files.set(file.path, next); return next;
+	});
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('выбор сохранён'));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText); expect(env.root.getText()).toContain('Снять выбор'); await env.chat.onClose();
+});
+
+it('ошибка записи сохраняет выбор, повтор очищает ошибку и добавляет связь ровно один раз', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	vi.mocked(env.app.vault.process).mockRejectedValueOnce(new Error('Нет доступа'));
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Не удалось добавить связи'));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText); expect(env.root.getText()).toContain('Снять выбор');
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.root.getText()).not.toContain('Не удалось добавить связи');
+	expect(env.files.get('Заметки/Мысль.md')!.match(/\[\[Примеры\/Практика\]\]/g)).toHaveLength(1); await env.chat.onClose();
+});
+
+it.each([
+	{ suffix: '\n', tail: true },
+	{ suffix: '\n  \n\t', tail: true },
+	{ suffix: '\n\nТекст после старого блока.', tail: false },
+])('сохраняет заголовок и ручные правки, дополняя только конечный блок: $suffix', async ({ suffix, tail }) => {
+	const old = '<!-- ai-helper:related-notes:start -->\n## My heading\n- Ручная строка со своим объяснением.\n<!-- ai-helper:related-notes:end -->';
+	const source = sourceText + '\n\n' + old + suffix;
+	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	const line = '- [[Примеры/Практика]] — ' + explanation + '\n';
+	expect(env.files.get('Заметки/Мысль.md')).toBe(tail ? source.replace('<!-- ai-helper:related-notes:end -->', line + '<!-- ai-helper:related-notes:end -->') : source + '\n\n<!-- ai-helper:related-notes:start -->\n## Связанные заметки\n' + line + '<!-- ai-helper:related-notes:end -->\n');
+	await env.chat.onClose();
+});
+
+it.each([
+	'<!-- ai-helper:related-notes:start -->\nРучное объяснение без конца.',
+	'<!-- ai-helper:related-notes:end -->',
+	'<!-- ai-helper:related-notes:start -->\n<!-- ai-helper:related-notes:start -->\n<!-- ai-helper:related-notes:end -->\n<!-- ai-helper:related-notes:end -->',
+	'Текст <!-- ai-helper:related-notes:start --> внутри строки.',
+])('отказывает при повреждённых границах, сохраняя исходник и выбор: %s', async block => {
+	const source = sourceText + '\n\n' + block;
+	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Границы блока'));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(source); expect(env.root.getText()).toContain('Снять выбор'); await env.chat.onClose();
+});
+
+it('позволяет добавить следующую связь в том же поиске, отклонить и вернуть карточку', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Пример продолжения активного вспоминания.' } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	env.root.find('ai-helper-connection-reject').click(); expect(env.root.getText()).toContain('Вернуть');
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Продолжение]]'));
+	const text = env.files.get('Заметки/Мысль.md')!;
+	expect(text.match(/ai-helper:related-notes:start/g)).toHaveLength(1);
+	expect(text.match(/\[\[Примеры\/Практика\]\]/g)).toHaveLength(1); expect(text.match(/\[\[Примеры\/Продолжение\]\]/g)).toHaveLength(1);
+	expect(env.requests).toHaveLength(2); await env.chat.onClose();
+});
+
+it.each(['исходник', 'цель', 'редактор', 'удаление', 'перемещение'])('проверяет актуальность перед сохранением: %s', async kind => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	if (kind === 'исходник') env.files.set('Заметки/Мысль.md', sourceText + '\nПравка на диске.');
+	if (kind === 'цель') env.files.set('Примеры/Практика.md', 'Изменённая практика.');
+	if (kind === 'редактор') env.setText(sourceText + '\nНесохранённая правка.');
+	if (kind === 'удаление') env.entries.delete('Заметки/Мысль.md');
+	if (kind === 'перемещение') Object.assign(env.editor.file, { path: 'Перемещена.md' });
+	const before = new Map(env.files); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('выбор сохранён'));
+	expect(env.files).toEqual(before); expect(env.root.getText()).toContain('Снять выбор'); await env.chat.onClose();
+});
+
+it('повторное нажатие во время записи не запускает вторую запись', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	const pending = deferred<void>(); const process = vi.mocked(env.app.vault.process).getMockImplementation()!;
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => { await pending.promise; return process(file, update); });
+	const button = env.root.find('ai-helper-connections-add'); button.click(); button.click();
+	await vi.waitFor(() => expect(env.app.vault.process).toHaveBeenCalledTimes(1));
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	pending.resolve(); await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Заметки/Мысль.md')!.match(/\[\[Примеры\/Практика\]\]/g)).toHaveLength(1); await env.chat.onClose();
+});
+
+it('проверяет исходный текст внутри атомарной записи и не берёт текст другого редактора', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	const file = env.editor.file;
+	Object.assign(env.editor, { file: env.app.vault.getFileByPath('Примеры/Практика.md') }); env.setText(env.files.get('Примеры/Практика.md')!);
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (_file, update) => {
+		env.files.set(file.path, sourceText + '\nКонкурирующая запись.');
+		const next = update(env.files.get(file.path)!); env.files.set(file.path, next); return next;
+	});
+	env.root.find('ai-helper-connections-add').click(); await vi.waitFor(() => expect(env.root.getText()).toContain('Запустите новый поиск'));
+	expect(env.files.get(file.path)).toBe(sourceText + '\nКонкурирующая запись.'); await env.chat.onClose();
+});
+
+it('сохраняет Markdown-ссылку, выбранную нативным генератором Obsidian', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	Object.assign(env.app.fileManager, { generateMarkdownLink: () => '[Практика](../Примеры/Практика.md)' });
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Заметки/Мысль.md')).toContain('- [Практика](../Примеры/Практика.md) — ' + explanation); await env.chat.onClose();
+});
+
+it('заново разрешает существующие ссылки перед записью и сообщает причину пропуска', async () => {
+	const source = sourceText + '\n[[Примеры/Практика#Раздел|подпись]]';
+	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source } });
+	const resolve = env.app.metadataCache.getFirstLinkpathDest;
+	vi.spyOn(env.app.metadataCache, 'getFirstLinkpathDest').mockReturnValue(null);
+	await env.run();
+	vi.mocked(env.app.metadataCache.getFirstLinkpathDest).mockImplementation(resolve);
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 0'));
+	expect(env.root.getText()).toContain('ссылка уже существует'); expect(env.files.get('Заметки/Мысль.md')).toBe(source);
+	expect(env.app.vault.process).not.toHaveBeenCalled(); await env.chat.onClose();
+});
+
+it.each(['```text\nНезакрытый пример.', '~~~md\nНезакрытый пример.'])('не сообщает об успехе, если добавленный блок оказался бы внутри кода: %s', async code => {
+	const source = sourceText + '\n\n' + code;
+	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Границы блока'));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(source); expect(env.root.getText()).toContain('Снять выбор');
+	expect(env.root.getText()).not.toContain('Добавлено связей: 1'); await env.chat.onClose();
+});

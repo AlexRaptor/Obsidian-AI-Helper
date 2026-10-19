@@ -18,3 +18,6 @@ docs/testing/**/__pycache__/
 
 # Хранилища общего генератора при стандартном имени папки данных
 docs/testing/**/notes-vault/
+
+# Хранилище ручной проверки безопасного добавления связей
+docs/testing/note-connections-save/editor-sync-vault/

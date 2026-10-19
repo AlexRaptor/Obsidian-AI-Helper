@@ -1,3 +1,4 @@
+import type { NoteConnections } from "./note-connections";
 import { ConversationModel } from "./conversation-model";
 import { NoteTranslation } from "./note-translation";
 import { TranslationModal } from "./translation-modal";
@@ -26,6 +27,7 @@ import { chatEditorSelection } from "./editor-selection";
 import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
 
 export class AiHelperPlugin extends Plugin {
+	pendingConnections?: NoteConnections;
 	conversationModel = new ConversationModel(() => this.noteSearch);
 	translation = new NoteTranslation(this);
 	private translationModal?: TranslationModal;

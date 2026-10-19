@@ -79,7 +79,9 @@ export class ChatView extends ItemView implements HoverParent {
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
 		this.plugin = plugin;
-		this.connections = new NoteConnections(plugin, () => this.renderConnections());
+		this.connections = plugin.pendingConnections ?? new NoteConnections(plugin, () => this.renderConnections());
+		plugin.pendingConnections = undefined;
+		this.connections.attach(() => this.renderConnections());
 		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration(), () => {
 			return this.app.workspace?.getActiveViewOfType?.(MarkdownView)?.file ?? this.plugin.currentNote ?? null;
 		}, () => this.app.vault.getMarkdownFiles?.() ?? [], () => readSelectedFragment(this.app, this.plugin.currentMarkdownView), this.openFragment);
@@ -213,7 +215,12 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	async onClose(): Promise<void> {
-		this.connections.clear();
+		if (this.connections.hasSelection || this.connections.writing) {
+			this.plugin.pendingConnections = this.connections;
+			showStatusNotice(this.t("connections-retained"), "warning");
+			this.connections.cancel();
+		} else this.connections.clear();
+		this.connections.attach(() => {});
 		this.connectionsEl = null;
 		this.fragmentModal?.close();
 		this.fragmentModal = undefined;
@@ -257,7 +264,7 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	clearConversation(): void {
-		this.connections.clear();
+		if (!this.connections.clear()) return;
 		this.hoverPopover?.unload();
 		this.hoverPopover = null;
 		this.cancelRequest(false);
@@ -279,6 +286,8 @@ export class ChatView extends ItemView implements HoverParent {
 		const status = root.createDiv({ text: this.t(result.status) });
 		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : ["connections-model", "connections-invalid", "search-failed", "search-storage", "search-query-failed"].includes(result.status) ? "error" : "warning");
 		if (this.connections.active) new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
+		if (this.connections.summary) setStatusTone(root.createDiv({ text: this.connections.summary }), "success");
+		if (result.suggestions.length) new ButtonComponent(root).setButtonText(this.t("connections-add")).setDisabled(this.connections.writing || this.connections.active || !result.suggestions.some(item => item.selected && !item.added)).onClick(() => { void this.connections.addSelected(); }).buttonEl.addClass("ai-helper-connections-add", "mod-cta");
 		if (result.partial) setStatusTone(root.createDiv({ text: this.t("search-partial") }), "warning");
 		if (result.suggestions.length) root.createDiv({ text: this.t("connections-similarity-help") });
 		for (const suggestion of result.suggestions) {
@@ -289,6 +298,11 @@ export class ChatView extends ItemView implements HoverParent {
 				void this.plugin.noteSearch.open(suggestion.source, Keymap.isModEvent(event)).catch(error => showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "warning"));
 			});
 			card.createDiv({ text: suggestion.explanation });
+			if (suggestion.added) setStatusTone(card.createSpan({ text: this.t("connections-added") }), "success");
+			else {
+				new ButtonComponent(card).setButtonText(this.t(suggestion.selected ? "connections-unselect" : "connections-select")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion)).buttonEl.addClass("ai-helper-connection-select");
+				new ButtonComponent(card).setButtonText(this.t(suggestion.rejected ? "connections-restore" : "connections-reject")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion, true)).buttonEl.addClass("ai-helper-connection-reject");
+			}
 			for (const fragment of suggestion.fragments) {
 				const details = card.createEl("details", { cls: "ai-helper-source" });
 				const summary = details.createEl("summary", { text: `${this.t("search-fragment")}${fragment.headings.length ? `: ${fragment.headings.join(" → ")}` : ""} — ` });

@@ -1,4 +1,4 @@
-/** Locale-independent block contract, shared by analysis and future saving. */
+/** Locale-independent block contract, shared by analysis and saving. */
 export const RELATED_NOTES_START = '<!-- ai-helper:related-notes:start -->';
 export const RELATED_NOTES_END = '<!-- ai-helper:related-notes:end -->';
 
@@ -142,4 +142,22 @@ function markdownDestination(text: string, start: number): { text: string; end: 
 	}
 	const rest = text.slice(i).match(/^(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\s*\)/);
 	return rest ? { text: destination, end: i + rest[0].length - 1 } : undefined;
+}
+
+/** Preserve every existing byte, inserting only before the final closing marker. */
+export function appendRelatedNotes(text: string, lines: string[], heading: string): string {
+	const parsed = relatedNotesBlocks(text);
+	if (parsed.malformed) throw new Error("malformed-related-notes");
+	const newline = text.includes("\r\n") ? "\r\n" : "\n";
+	const tail = parsed.blocks[parsed.blocks.length - 1];
+	if (tail && !text.slice(tail.end).trim()) {
+		const closing = text.lastIndexOf(RELATED_NOTES_END, tail.end);
+		const lineStart = text.lastIndexOf("\n", closing - 1) + 1;
+		return text.slice(0, lineStart) + lines.join(newline) + newline + text.slice(lineStart);
+	}
+	const separator = !text ? "" : text.endsWith(newline + newline) ? "" : text.endsWith(newline) ? newline : newline + newline;
+	const next = text + separator + [RELATED_NOTES_START, "## " + heading, ...lines, RELATED_NOTES_END, ""].join(newline);
+	const updated = relatedNotesBlocks(next);
+	if (updated.malformed || updated.blocks.length !== parsed.blocks.length + 1 || updated.blocks[updated.blocks.length - 1].start !== text.length + separator.length) throw new Error("malformed-related-notes");
+	return next;
 }
