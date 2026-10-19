@@ -96,7 +96,9 @@ export async function lmStudioPromptTokens(fetch: ClientFetch, serverUrl: string
 		if (signal.aborted) return undefined;
 		const selected = loaded.filter(entry => entry.identifier === selectedId);
 		if (selected.length !== 1) return undefined;
-		const prompt = await selected[0].applyPromptTemplate(messages);
+		if (messages.some(message => message.role === "tool" || message.tool_calls)) return undefined;
+		const plain = messages.map(message => ({ role: message.role === "tool" ? "user" as const : message.role, content: message.content }));
+		const prompt = await selected[0].applyPromptTemplate(plain);
 		if (signal.aborted || typeof prompt !== "string" || !prompt.length) return undefined;
 		const tokens = await selected[0].countTokens(prompt);
 		return !signal.aborted && Number.isSafeInteger(tokens) && tokens > 0 ? { tokens, method: "lmstudio" } : undefined;

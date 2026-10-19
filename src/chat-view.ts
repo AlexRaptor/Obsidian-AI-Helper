@@ -10,7 +10,8 @@ import { readNoteSnapshot, readSelectedFragment, snapshotMessage, type NoteSnaps
 import { FragmentSnapshotModal } from "./fragment-snapshot-modal";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
-import type { ChatMessage } from "./server-client";
+import { ChatNoteAction } from "./chat-note-actions";
+import type { ChatMessage, ChatCompletionResult, ServerClientResult } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
 import { effectiveContextWindow } from "./context-window";
 import { conservativePromptTokens } from "./prompt-tokens";
@@ -73,6 +74,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private rendered = new Map<DisplayMessage, MessageRow>();
 	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
+	private actionSequence = 0;
 	private releaseChatPriority: (() => void) | null = null;
 	private renderRevision = 0;
 	private activeMessage: DisplayMessage | null = null;
@@ -515,10 +517,10 @@ export class ChatView extends ItemView implements HoverParent {
 	private toRequestMessages(): ChatMessage[] {
 		return this.conversation
 			.getMessages()
-			.map((m) => ({
-				role: (m.role === "model" ? "assistant" : m.role) as ChatMessage["role"],
+			.flatMap((m): ChatMessage[] => m.toolMessages ?? [{
+				role: m.role === "model" ? "assistant" : "user",
 				content: snapshotMessage(m.content, m.snapshots),
-			}));
+			}]);
 	}
 
 	private detachMarkdown(): void {
@@ -785,7 +787,8 @@ export class ChatView extends ItemView implements HoverParent {
 			showStatusNotice(this.t("mention-question-required"), "warning"); return;
 		}
 		if (!text) return;
-		if (this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
+		const canCreate = !!this.app.fileManager?.getNewFileParent;
+		if (!canCreate && this.searchEnabled && this.searchType !== "folders" && !this.requireEmbeddingConfiguration()) return;
 
 		const modelLease = this.plugin.conversationModel?.tryAcquire();
 		if (this.plugin.conversationModel && !modelLease) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
@@ -802,6 +805,8 @@ export class ChatView extends ItemView implements HoverParent {
 		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
 		this.messages.push(pending);
 		this.activeMessage = pending;
+		const turn = this.conversation.reserveTurn();
+		const activePath = this.app.workspace?.getActiveFile?.()?.path ?? this.plugin.currentNote?.path ?? "";
 		const request = new AbortController();
 		this.activeRequest = request;
 		const { settings, serverClient } = this.plugin;
@@ -838,12 +843,30 @@ export class ChatView extends ItemView implements HoverParent {
 		const serverUrl = settings.serverUrl.trim();
 		const model = settings.model;
 
+		let recordedAction = false;
+		const action = new ChatNoteAction(this.app, activePath,
+			`create-${++this.actionSequence}`, () => {
+				if (this.activeRequest !== request || this.plugin.isUnloading) throw new Error(this.t("chat-stopped"));
+			}, key => this.t(key));
+		const runAction = (streamText = true) => action.run(serverClient, serverUrl, model, requestMessages, streamText ? params : { ...params, onText: undefined },
+			effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value), (result, protocol) => {
+				if (!this.messages.includes(pending)) return;
+				const fact = result.status === "completed" ? `${this.t("action-created")} ${result.link}`
+					: `${this.t("action-folders")} ${result.createdFolders.join(", ")}`;
+				this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);
+				this.conversation.addMessage({ role: "model", content: fact, toolMessages: protocol }, turn);
+				recordedAction = true;
+				this.messages.splice(this.messages.indexOf(pending), 0, { role: "model", content: fact, kind: "text" });
+				void this.renderMessages();
+			});
+		let routed: ServerClientResult<ChatCompletionResult> | undefined;
+
 		const priority = modelLease ?? this.plugin.noteSearch?.acquireChatPriority?.();
 		this.releaseChatPriority = priority?.release ?? null;
 		this.setThinking(true);
 		try {
 			await this.renderMessages();
-			if (!useFolders) await priority?.ready;
+			if (!useFolders || canCreate) await priority?.ready;
 			if (this.activeRequest !== request) return;
 			if (!settings.contextWindow.trim()) await this.plugin.contextWindowConnection?.refresh();
 			if (this.activeRequest !== request) return;
@@ -876,7 +899,17 @@ export class ChatView extends ItemView implements HoverParent {
 							break;
 						}
 					}
+					if (canCreate && useSearch && !routed) {
+						// Resolve creation against the discussion and explicit snapshots before
+						// consulting automatic search. Plain discussion retains the search path.
+						const unavailable = files.find(file => this.app.vault.getFileByPath(file.path) !== file);
+						if (unavailable) throw this.unavailableNote(unavailable);
+						routed = await runAction(false);
+						if (this.activeRequest !== request) return;
+						if (recordedAction || !routed.ok || routed.value.toolsUnsupported) break;
+					}
 					if (useSearch) {
+						if (!useFolders && !this.requireEmbeddingConfiguration()) throw new NoteSearchError("search-query-failed");
 						const searchInstruction = useMixed ? MIXED_SEARCH_INSTRUCTION : useFolders ? FOLDER_SEARCH_INSTRUCTION : NOTE_SEARCH_INSTRUCTION;
 						const instruction = hasSnapshots ? `${searchInstruction} ${ATTACHMENT_SEARCH_INSTRUCTION}` : searchInstruction;
 						const contextWindow = () => {
@@ -990,18 +1023,19 @@ export class ChatView extends ItemView implements HoverParent {
 			// Validate the whole attachment set before sending any of its snapshots.
 			const unavailable = files.find(file => this.app.vault.getFileByPath(file.path) !== file);
 			if (unavailable) throw this.unavailableNote(unavailable);
-			const result = await serverClient.chat(serverUrl, model, requestMessages, params);
+			const result = routed && (recordedAction || !routed.ok || routed.value.toolsUnsupported) ? routed : canCreate && !useSearch ? await runAction()
+				: await serverClient.chat(serverUrl, model, requestMessages, params);
 			if (this.activeRequest !== request) return;
 
 			if (result.ok) {
 				const { content, usage } = result.value;
 				// Commit the turn together so failed attempts never enter request history.
-				this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text });
-				this.conversation.addMessage({ role: "model", content });
+				if (!recordedAction) this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);
+				this.conversation.addMessage({ role: "model", content }, turn);
 				this.conversation.recordUsage(usage);
 				// A completion can load a previously cold model; refresh its runtime limit.
 				if (!settings.contextWindow.trim()) void this.plugin.contextWindowConnection?.refresh();
-				pending.content = content;
+				pending.content = result.value.toolsUnsupported ? `${this.t("action-unsupported")}\n\n${content}` : content;
 				pending.kind = "text";
 			} else {
 				const message = result.error.code === "empty" ? this.t("chat-empty-response")
@@ -1011,8 +1045,9 @@ export class ChatView extends ItemView implements HoverParent {
 					: result.error.code === "stream-error" ? this.t("chat-stream-error")
 					: result.error.code === "invalid-params" ? this.t("chat-invalid-params")
 					: result.error.code === "invalid-response-wait" ? this.t("setting-response-wait-invalid") : result.error.message;
-				if (pending.kind === "text") pending.error = message;
-				else { pending.content = message; pending.kind = "error"; }
+				const explanation = result.error.toolsUnsupported ? `${this.t("action-unsupported")}\n\n${message}` : message;
+				if (pending.kind === "text") pending.error = explanation;
+				else { pending.content = explanation; pending.kind = "error"; }
 				this.messageInput.restoreIfEmpty(draft);
 			}
 		} catch (error) {

@@ -32,14 +32,28 @@ class ClientError extends Error {
 
 export type ServerClientResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; error: { message: string; code?: ClientErrorCode } };
+	| { ok: false; error: { message: string; code?: ClientErrorCode; toolsUnsupported?: boolean } };
+
+export interface ToolCall {
+	id: string;
+	type: "function";
+	function: { name: string; arguments: string };
+}
+
+export interface ChatTool {
+	type: "function";
+	function: { name: string; description: string; parameters: Record<string, unknown> };
+}
 
 export interface ChatMessage {
-	role: "system" | "user" | "assistant";
+	role: "system" | "user" | "assistant" | "tool";
 	content: string;
+	tool_calls?: ToolCall[];
+	tool_call_id?: string;
 }
 
 export interface ChatParams {
+	tools?: ChatTool[];
 	responseSchema?: Record<string, unknown>;
 	responseWait?: string;
 	signal?: AbortSignal;
@@ -58,11 +72,13 @@ export interface ChatCompletionUsage {
 }
 
 export interface ChatCompletionBody {
-	choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
+	choices?: Array<{ message?: { content?: string | null; tool_calls?: ToolCall[]; refusal?: string | null }; finish_reason?: string | null }>;
 	usage?: ChatCompletionUsage;
 }
 
 export interface ChatCompletionResult {
+	toolsUnsupported?: boolean;
+	toolCalls?: ToolCall[];
 	finishReason?: string;
 	content: string;
 	usage?: TokenUsage;
@@ -129,6 +145,11 @@ function contextLengthExceeded(error: unknown, message: string): boolean {
 	return /context[_ -]length[_ -]exceeded|maximum context length|context (?:window|size) (?:is |was )?exceeded|exceeds? (?:the )?(?:available |maximum )?context|too many (?:input )?tokens|prompt (?:is )?too long/i.test(message);
 }
 
+class UnsupportedToolsError extends Error {}
+function explicitlyRejectsTools(message: string): boolean {
+	return /\b(?:tools?|tool_choice|function(?:s|_calling)?)\b/i.test(message)
+		&& /not supported|unsupported|not implemented|unrecognized|unknown|not available|disabled|does not support|doesn't support/i.test(message);
+}
 class UnsupportedStreamingError extends Error {}
 class UnsupportedJsonResponseError extends Error {}
 function explicitlyRejectsJsonResponse(message: string): boolean {
@@ -144,6 +165,19 @@ function explicitlyRejectsStreaming(message: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseToolCalls(raw: unknown): ToolCall[] | undefined {
+	if (raw === undefined) return undefined;
+	if (!Array.isArray(raw) || !raw.length) throw new ClientError("Invalid function call.", "invalid-stream");
+	const ids = new Set<string>();
+	return raw.map(value => {
+		if (!isRecord(value) || typeof value.id !== "string" || !value.id.trim() || ids.has(value.id) ||
+			value.type !== "function" || !isRecord(value.function) || typeof value.function.name !== "string" ||
+			!value.function.name || typeof value.function.arguments !== "string") throw new ClientError("Invalid function call.", "invalid-stream");
+		ids.add(value.id);
+		return { id: value.id, type: "function", function: { name: value.function.name, arguments: value.function.arguments } };
+	});
 }
 
 function parseUsage(raw: unknown): TokenUsage | undefined {
@@ -175,6 +209,7 @@ function numericParam(
 
 export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 	const unsupportedJson = new Set<string>();
+	const unsupportedTools = new Set<string>();
 	async function request<T>(
 		operation: (signal: AbortSignal, resetWait: () => void) => Promise<ServerClientResult<T>>,
 		timeoutMs: number | undefined,
@@ -265,6 +300,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			stream_options: { include_usage: true },
 		};
 
+		if (params?.tools?.length) body.tools = params.tools;
+
 		const invalidParams: string[] = [];
 		const temperature = numericParam(params?.temperature, invalidParams, "temperature");
 		if (temperature !== undefined) body.temperature = temperature;
@@ -294,12 +331,14 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 		}
 		const timeoutMs = responseWait.seconds === undefined ? undefined : responseWait.seconds * 1000;
 
-		return request(async (signal, resetWait) => {
+		const outcome = await request(async (signal, resetWait) => {
 			const attempt = async (streaming: boolean, structured: boolean): Promise<ServerClientResult<ChatCompletionResult>> => {
 				const requestBody: Record<string, unknown> = { ...body, stream: streaming };
+				if (unsupportedTools.has(JSON.stringify([serverUrl, model]))) delete requestBody.tools;
 				if (structured) requestBody.response_format = { type: "json_schema", json_schema: { name: "structured_response", schema: params?.responseSchema } };
 				if (!streaming) delete requestBody.stream_options;
 				const reject = (message: string, error?: unknown, canExceedContext = true, canRejectJson = true): ServerClientResult<ChatCompletionResult> => {
+					if (requestBody.tools && canRejectJson && explicitlyRejectsTools(message) && !contextLengthExceeded(error, message)) throw new UnsupportedToolsError(message);
 					if (structured && canRejectJson && explicitlyRejectsJsonResponse(message) && !contextLengthExceeded(error, message)) throw new UnsupportedJsonResponseError(message);
 					if (streaming && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
 					const contextLength = canExceedContext && contextLengthExceeded(error, message);
@@ -329,13 +368,17 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 						return reject(data.error.message, data.error);
 					}
 					if (!isRecord(data) || !Array.isArray(data.choices) || !isRecord(data.choices[0]) ||
-						!isRecord(data.choices[0].message) || typeof data.choices[0].message.content !== "string" ||
-						!data.choices[0].message.content.trim()) return fail("empty");
-					const content = data.choices[0].message.content;
+						!isRecord(data.choices[0].message)) return fail("empty");
+					const message = data.choices[0].message;
+					const content = typeof message.content === "string" ? message.content : "";
+					if (message.refusal || ["length", "content_filter"].includes(String(data.choices[0].finish_reason)) && message.tool_calls) return fail("incomplete");
+					const toolCalls = parseToolCalls(message.tool_calls);
+					if (toolCalls && !requestBody.tools) throw new ClientError("Unrequested function call.", "invalid-stream");
+					if (!content.trim() && !toolCalls?.length) return fail("empty");
 					if (signal.aborted) return fail("incomplete");
 					resetWait();
 					params?.onText?.(content);
-					return { ok: true, value: { content, usage: parseUsage(data.usage), finishReason: typeof data.choices[0].finish_reason === "string" ? data.choices[0].finish_reason : undefined } };
+					return { ok: true, value: { content, ...(toolCalls ? { toolCalls } : {}), usage: parseUsage(data.usage), finishReason: typeof data.choices[0].finish_reason === "string" ? data.choices[0].finish_reason : undefined } };
 				}
 				if (!response.body) return fail("incomplete");
 				const reader = response.body.getReader();
@@ -344,6 +387,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				let afterCR = false;
 				let dataLines: string[] = [];
 				let content = "";
+				const toolDeltas = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>();
+				let refused = false;
 				let usage: TokenUsage | undefined;
 				let finishReason: string | undefined;
 				let completed = false;
@@ -369,6 +414,7 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 						}
 						const message = parsed.error.message;
 						if (structured && !content && explicitlyRejectsJsonResponse(message) && !contextLengthExceeded(parsed.error, message)) throw new UnsupportedJsonResponseError(message);
+						if (requestBody.tools && !content && !toolDeltas.size && explicitlyRejectsTools(message)) throw new UnsupportedToolsError(message);
 						if (streaming && !content && explicitlyRejectsStreaming(message)) throw new UnsupportedStreamingError(message);
 						if (contextLengthExceeded(parsed.error, message)) throw new ClientError(message, "context-length");
 						throw new Error(message);
@@ -376,6 +422,32 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 					if (!Array.isArray(parsed.choices)) return;
 					const choice = parsed.choices.find((value: unknown) => isRecord(value) && (value.index === 0 || value.index === undefined));
 					if (!isRecord(choice)) return;
+					if (isRecord(choice.delta)) {
+						if (choice.delta.refusal) refused = true;
+						if (choice.delta.tool_calls !== undefined) {
+							if (!requestBody.tools || !Array.isArray(choice.delta.tool_calls)) throw new ClientError("Invalid function delta.", "invalid-stream");
+							for (const raw of choice.delta.tool_calls) {
+								if (!isRecord(raw) || typeof raw.index !== "number" || !Number.isSafeInteger(raw.index) || raw.index < 0 || raw.index > 31 ||
+									raw.function !== undefined && !isRecord(raw.function)) throw new ClientError("Invalid function delta.", "invalid-stream");
+								const previous = toolDeltas.get(raw.index) ?? { id: "", type: "", function: { name: "", arguments: "" } };
+								for (const field of ["id", "type"] as const) {
+									if (raw[field] !== undefined) {
+										if (typeof raw[field] !== "string") throw new ClientError("Invalid function delta.", "invalid-stream");
+										previous[field] += raw[field];
+									}
+								}
+								if (isRecord(raw.function)) for (const field of ["name", "arguments"] as const) {
+									if (raw.function[field] !== undefined) {
+										if (typeof raw.function[field] !== "string") throw new ClientError("Invalid function delta.", "invalid-stream");
+										previous.function[field] += raw.function[field];
+									}
+								}
+								if (previous.function.arguments.length > 1_048_576) throw new ClientError("Function arguments exceed the available response size.", "incomplete");
+								toolDeltas.set(raw.index, previous);
+								resetWait();
+							}
+						}
+					}
 					if (isRecord(choice.delta) && typeof choice.delta.content === "string" && choice.delta.content) {
 						content += choice.delta.content;
 						if (!signal.aborted) { resetWait(); params?.onText?.(content); }
@@ -414,8 +486,10 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 						if (part.done) break;
 					}
 					if (signal.aborted || !completed) return fail("incomplete");
-					if (!content.trim()) return fail("empty");
-					return { ok: true, value: { content, usage, finishReason } };
+					if (refused || toolDeltas.size && finishReason !== "tool_calls") return fail("incomplete");
+					const toolCalls = toolDeltas.size ? parseToolCalls([...toolDeltas.entries()].sort(([a], [b]) => a - b).map(([, value]) => value)) : undefined;
+					if (!content.trim() && !toolCalls?.length) return fail("empty");
+					return { ok: true, value: { content, ...(toolCalls ? { toolCalls } : {}), usage, finishReason } };
 				} finally {
 					signal.removeEventListener("abort", onAbort);
 					// Do not make confirmed completion wait for the transport cancellation handshake.
@@ -427,9 +501,16 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 			const formatKey = JSON.stringify([serverUrl, model]);
 			let streaming = true; let structured = !!params?.responseSchema && !unsupportedJson.has(formatKey);
 			for (;;) {
-				try { return await attempt(streaming, structured); }
+				try {
+					const result = await attempt(streaming, structured);
+					return result.ok && params?.tools?.length && unsupportedTools.has(formatKey)
+						? { ok: true, value: { ...result.value, toolsUnsupported: true } } : result;
+				}
 				catch (error) {
 					if (signal.aborted) throw error;
+					if (error instanceof UnsupportedToolsError && !unsupportedTools.has(formatKey)) {
+						unsupportedTools.add(formatKey); continue;
+					}
 					if (error instanceof UnsupportedStreamingError && streaming) { streaming = false; continue; }
 					if (error instanceof UnsupportedJsonResponseError && structured) {
 						unsupportedJson.add(formatKey); structured = false; continue;
@@ -438,6 +519,8 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 				}
 			}
 		}, timeoutMs, params?.signal, "timeout");
+		return !outcome.ok && params?.tools?.length && unsupportedTools.has(JSON.stringify([serverUrl, model]))
+			? { ok: false, error: { ...outcome.error, toolsUnsupported: true } } : outcome;
 	}
 
 	async function embeddings(serverUrl: string, model: string, input: string[], apiKey?: string, signal?: AbortSignal): Promise<ServerClientResult<number[][]>> {

@@ -14,6 +14,14 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"action-created": "Note created:",
+	"action-invalid": "The model returned an invalid note creation call. Nothing was written.",
+	"action-path": "Invalid note name or folder. Choose a valid location inside the vault, outside the Obsidian configuration folder.",
+	"action-single": "Only one note creation per instruction is supported. The completed result is preserved.",
+	"action-incomplete": "The model did not return a complete response. Reduce the task; incomplete text was not saved as a result.",
+	"action-budget": "The full task, tool descriptions, results and response reserve do not fit the available context, or its size is unknown. Reduce the task.",
+	"action-folders": "Created folders left in the vault:",
+	"action-unsupported": "This model server and model explicitly rejected tools. Note creation is unavailable; ordinary conversation remains available.",
 	"connections-close": "Close panel",
 	"connections-discard-warning": "Unsaved selection will be lost. Search is kept only until the plugin is unloaded or restarted.",
 	"connections-count": "Connection suggestion count",
@@ -448,6 +456,14 @@ export const en = {
 } as const;
 
 export const ru = {
+	"action-created": "Создана заметка:",
+	"action-invalid": "Модель вернула неверный вызов создания заметки. Ничего не записано.",
+	"action-path": "Недопустимое имя заметки или папка. Выберите допустимое место внутри хранилища вне служебной папки Obsidian.",
+	"action-single": "Поддерживается одно создание заметки за поручение. Выполненный результат сохранён.",
+	"action-incomplete": "Модель не вернула полный ответ. Уменьшите задачу; незавершённый текст не сохранён как результат.",
+	"action-budget": "Полное поручение, описания инструментов, результаты и резерв ответа не помещаются в доступный контекст или его размер неизвестен. Уменьшите задачу.",
+	"action-folders": "В хранилище остались созданные папки:",
+	"action-unsupported": "Модель-сервер и выбранная модель явно отказались от инструментов. Создание заметок недоступно; обычное обсуждение доступно.",
 	"connections-close": "Закрыть панель",
 	"connections-discard-warning": "Несохранённый выбор будет потерян. Поиск сохраняется только до выгрузки или перезапуска плагина.",
 	"connections-count": "Количество предложений связей",
