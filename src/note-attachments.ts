@@ -1,6 +1,6 @@
 import { MarkdownView, type App, type EditorPosition, type TFile } from "obsidian";
 
-export interface NoteSnapshot { title: string; path: string; markdown: string; }
+export interface NoteSnapshot { title: string; path: string; markdown: string; targetId?: string; version?: string; }
 export interface SelectedFragmentSnapshot extends NoteSnapshot {
 	range: { from: EditorPosition; to: EditorPosition };
 }

@@ -23,6 +23,7 @@ import { createNoteSearch, sourceBudgetBytes, NoteSearchError, isValidMinimumSim
 import { normalizeSimilarityAppearance } from "./similarity-appearance";
 import { createContextWindowConnection } from "./context-window";
 
+import { noteEditHistory } from "./note-edit-history";
 import { chatEditorSelection } from "./editor-selection";
 
 import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descriptions";
@@ -64,6 +65,7 @@ export class AiHelperPlugin extends Plugin {
 	async onload(): Promise<void> {
 		this.unloading = false;
 		this.registerEditorExtension(chatEditorSelection);
+		this.registerEditorExtension(noteEditHistory);
 		const rememberNote = () => {
 			const view = this.app.workspace.getActiveViewOfType?.(MarkdownView);
 			if (view) this.currentMarkdownView = view;

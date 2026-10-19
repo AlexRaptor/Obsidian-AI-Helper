@@ -10,6 +10,7 @@ import { readNoteSnapshot, readSelectedFragment, snapshotMessage, type NoteSnaps
 import { FragmentSnapshotModal } from "./fragment-snapshot-modal";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
+import { ChatNoteTargets } from "./chat-note-targets";
 import { ChatNoteAction } from "./chat-note-actions";
 import type { ChatMessage, ChatCompletionResult, ServerClientResult } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
@@ -75,6 +76,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
 	private actionSequence = 0;
+	private noteTargets?: ChatNoteTargets;
 	private releaseChatPriority: (() => void) | null = null;
 	private renderRevision = 0;
 	private activeMessage: DisplayMessage | null = null;
@@ -290,6 +292,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.hoverPopover = null;
 		this.cancelRequest(false);
 		this.conversation.clear();
+		this.noteTargets = undefined;
 		this.messages = [];
 		this.followingMessages = true;
 		this.updateContextIndicators();
@@ -844,19 +847,21 @@ export class ChatView extends ItemView implements HoverParent {
 		const model = settings.model;
 
 		let recordedAction = false;
+		const targets = this.noteTargets ??= new ChatNoteTargets(this.app, key => this.t(key));
+		const checkAction = () => {
+			if (this.activeRequest !== request || this.plugin.isUnloading) throw new Error(this.t("chat-stopped"));
+		};
 		const action = new ChatNoteAction(this.app, activePath,
-			`create-${++this.actionSequence}`, () => {
-				if (this.activeRequest !== request || this.plugin.isUnloading) throw new Error(this.t("chat-stopped"));
-			}, key => this.t(key));
+			`action-${++this.actionSequence}`, checkAction, key => this.t(key), targets);
 		const runAction = (streamText = true) => action.run(serverClient, serverUrl, model, requestMessages, streamText ? params : { ...params, onText: undefined },
 			effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value), (result, protocol) => {
 				if (!this.messages.includes(pending)) return;
-				const fact = result.status === "completed" ? `${this.t("action-created")} ${result.link}`
-					: `${this.t("action-folders")} ${result.createdFolders.join(", ")}`;
+				const fact = result.status === "completed" ? `${this.t(result.operation === "edit" ? "action-edited" : "action-created")} ${result.link}`
+					: result.status === "conflict" ? result.message : `${this.t("action-folders")} ${result.createdFolders.join(", ")}`;
 				this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);
 				this.conversation.addMessage({ role: "model", content: fact, toolMessages: protocol }, turn);
 				recordedAction = true;
-				this.messages.splice(this.messages.indexOf(pending), 0, { role: "model", content: fact, kind: "text" });
+				if (result.status !== "conflict") this.messages.splice(this.messages.indexOf(pending), 0, { role: "model", content: fact, kind: "text" });
 				void this.renderMessages();
 			});
 		let routed: ServerClientResult<ChatCompletionResult> | undefined;
@@ -878,7 +883,11 @@ export class ChatView extends ItemView implements HoverParent {
 							snapshots = [];
 							fileSnapshots = [];
 							fileSnapshots = await Promise.all(files.map(async file => {
-								try { return await readNoteSnapshot(this.app, file); }
+								try {
+									const snapshot = await readNoteSnapshot(this.app, file);
+									checkAction();
+									return canCreate ? targets.register(file, snapshot.markdown, true) : snapshot;
+								}
 								catch { throw this.unavailableNote(file); }
 							}));
 							if (this.activeRequest !== request) return;
