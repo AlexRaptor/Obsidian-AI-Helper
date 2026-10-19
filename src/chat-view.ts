@@ -292,25 +292,32 @@ export class ChatView extends ItemView implements HoverParent {
 		if (result.suggestions.length) root.createDiv({ text: this.t("connections-similarity-help") });
 		for (const suggestion of result.suggestions) {
 			const card = root.createDiv({ cls: "ai-helper-connection" });
-			const link = card.createEl("a", { cls: "internal-link ai-helper-connection-link", text: suggestion.source.path, attr: { href: suggestion.source.path, "data-href": suggestion.source.path } });
-			link.addEventListener("click", event => {
-				event.preventDefault();
-				void this.plugin.noteSearch.open(suggestion.source, Keymap.isModEvent(event)).catch(error => showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "warning"));
-			});
+			this.renderConnectionLink(card, suggestion.source, suggestion.source.path, "ai-helper-connection-link");
 			card.createDiv({ text: suggestion.explanation });
-			if (suggestion.added) setStatusTone(card.createSpan({ text: this.t("connections-added") }), "success");
+			if (suggestion.added) card.createSpan({ cls: "ai-helper-connection-added", text: this.t("connections-added") });
 			else {
 				new ButtonComponent(card).setButtonText(this.t(suggestion.selected ? "connections-unselect" : "connections-select")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion)).buttonEl.addClass("ai-helper-connection-select");
 				new ButtonComponent(card).setButtonText(this.t(suggestion.rejected ? "connections-restore" : "connections-reject")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion, true)).buttonEl.addClass("ai-helper-connection-reject");
 			}
-			for (const fragment of suggestion.fragments) {
+			for (const [index, fragment] of suggestion.fragments.entries()) {
 				const details = card.createEl("details", { cls: "ai-helper-source" });
-				const summary = details.createEl("summary", { text: `${this.t("search-fragment")}${fragment.headings.length ? `: ${fragment.headings.join(" → ")}` : ""} — ` });
-				const similarity = summary.createSpan({ text: `${this.t("connections-similarity")}: ${fragment.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
+				const summary = details.createEl("summary", { cls: "ai-helper-source-summary", text: this.t("search-fragment") });
+				const similarity = summary.createSpan({ cls: "ai-helper-source-similarity", text: `${this.t("connections-similarity")}: ${fragment.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
 				similarity.style.color = similarityColor(fragment.similarity, normalizeSimilarityAppearance(this.plugin.settings.similarityAppearance));
+				this.renderConnectionLink(summary, fragment, `[${index + 1}] ${fragment.path}${fragment.headings.length ? " → " + fragment.headings.join(" → ") : ""}`, "ai-helper-source-link");
 				details.createEl("pre", { text: fragment.text });
 			}
 		}
+	}
+
+
+	private renderConnectionLink(parent: HTMLElement, source: NoteSource, text: string, cls: string): void {
+		const linktext = source.path + (source.headings.length ? `#${source.headings[source.headings.length - 1]}` : "");
+		const link = parent.createEl("a", { cls: `internal-link ${cls}`, text, attr: { href: linktext, "data-href": linktext } });
+		link.addEventListener("click", event => {
+			event.preventDefault(); event.stopPropagation();
+			void this.plugin.noteSearch.open(source, Keymap.isModEvent(event)).catch(error => showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "warning"));
+		});
 	}
 
 	private buildStructure(): void {
