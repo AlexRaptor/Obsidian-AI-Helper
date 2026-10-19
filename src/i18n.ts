@@ -14,6 +14,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"connections-close": "Close panel",
+	"connections-discard-warning": "Unsaved selection will be lost. Search is kept only until the plugin is unloaded or restarted.",
 	"connections-count": "Connection suggestion count",
 	"connections-count-desc": "Useful suggestions per portion, from 1 to 20. Default: 5. Applies to new searches.",
 	"connections-count-invalid": "Enter an integer from 1 to 20.",
@@ -21,7 +23,7 @@ export const en = {
 	"connections-restart-unavailable": "Could not read the note for a new search. Results and selection are preserved.",
 	"connections-target-unavailable": "Skipped: candidate could not be read. Selection is preserved.",
 	"connections-restart-warning": "Selection will be lost when starting a new search.",
-	"connections-restart": "New search — discard selection",
+	"connections-restart": "Start new search",
 	"connections-exhausted": "No more suggestions in this search",
 	"connections-command": "Find connections for current note",
 	"connections-folder-command": "Find connections for current note in selected folders",
@@ -446,6 +448,8 @@ export const en = {
 } as const;
 
 export const ru = {
+	"connections-close": "Закрыть панель",
+	"connections-discard-warning": "Несохранённый выбор будет потерян. Поиск сохраняется только до выгрузки или перезапуска плагина.",
 	"connections-count": "Количество предложений связей",
 	"connections-count-desc": "Полезных предложений в порции: от 1 до 20. По умолчанию 5. Применяется к новым поискам.",
 	"connections-count-invalid": "Введите целое число от 1 до 20.",
@@ -453,7 +457,7 @@ export const ru = {
 	"connections-restart-unavailable": "Не удалось прочитать заметку для нового поиска. Результаты и выбор сохранены.",
 	"connections-target-unavailable": "Пропущено: не удалось прочитать кандидата, выбор сохранён.",
 	"connections-restart-warning": "Выбор будет потерян при запуске нового поиска.",
-	"connections-restart": "Новый поиск — сбросить выбор",
+	"connections-restart": "Начать новый поиск",
 	"connections-exhausted": "Больше предложений в этом поиске нет",
 	"connections-command": "Найти связи для текущей заметки",
 	"connections-folder-command": "Найти связи для текущей заметки в выбранных папках",

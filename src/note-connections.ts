@@ -1,3 +1,4 @@
+import { showStatusNotice } from "./ui-status";
 import { readNoteSnapshot } from "./note-attachments";
 import { noteFragments } from "./note-fragments";
 import type { AiHelperSettings } from "./settings";
@@ -42,6 +43,9 @@ function connectionSourceFragments(path: string, text: string) {
 export class NoteConnections {
 	result?: ConnectionResult;
 	writing = false;
+	private writeFinished = Promise.resolve();
+	private finishWrite?: () => void;
+	finishWriting(): Promise<void> { return this.writeFinished; }
 	summary?: string;
 	private search?: { result: ConnectionResult; settings: AiHelperSettings; folders?: readonly string[]; groups?: NoteSource[][]; files: Map<string, TFile>; snapshots: Map<string, CandidateSnapshot>; cursor: number };
 	get canContinue(): boolean { return !!this.search && (!this.search.groups || this.search.cursor < this.search.groups.length); }
@@ -49,12 +53,13 @@ export class NoteConnections {
 	private attemptedWrite?: { result: ConnectionResult; text: string };
 	private restart?: { file: TFile; folders?: readonly string[] };
 	get canRestart(): boolean { return !!this.restart; }
+	dismissRestart(): void { this.restart = undefined; this.changed(); }
 	async restartConfirmed(): Promise<void> {
 		const next = this.restart;
-		if (!next || this.writing) return;
+		if (!next || this.writing || this.rejectBusy()) return;
 		try {
 			const snapshot = await readNoteSnapshot(this.plugin.app, next.file);
-			if (this.restart !== next || this.writing) return;
+			if (this.restart !== next || this.writing || this.rejectBusy()) return;
 			if (this.plugin.app.vault.getFileByPath(next.file.path) !== next.file) throw new Error('unavailable');
 			for (const item of this.result?.suggestions ?? []) item.selected = false;
 			this.restart = undefined;
@@ -109,10 +114,14 @@ export class NoteConnections {
 	}
 
 	cancel(): void {
+		this.restart = undefined;
 		this.request?.abort(); this.request = undefined;
 		this.release?.(); this.release = undefined;
 		if (this.result?.status === 'connections-running') this.result.status = 'connections-cancelled';
 		this.changed();
+	}
+	dispose(): void {
+		this.cancel(); this.search = undefined; this.restart = undefined; this.result = undefined; this.summary = undefined; this.attemptedWrite = undefined; this.changed();
 	}
 	get hasSelection(): boolean { return !!this.result?.suggestions.some(item => item.selected && !item.added); }
 	attach(changed: () => void): void { this.changed = changed; }
@@ -121,9 +130,9 @@ export class NoteConnections {
 		if (this.result) this.result.status = 'connections-pending';
 		this.changed(); return false;
 	}
-	clear(): boolean {
-		if (!this.canReplace()) return false;
-		this.cancel(); this.search = undefined; this.restart = undefined; this.attemptedWrite = undefined; this.result = undefined; this.summary = undefined; this.changed(); return true;
+	clear(discard = false): boolean {
+		if (this.writing || (!discard && !this.canReplace())) return false;
+		this.dispose(); return true;
 	}
 
 
@@ -184,7 +193,9 @@ export class NoteConnections {
 		if (result.stale) { result.status = 'connections-source-changed'; this.changed(); return; }
 		const selected = result.suggestions.filter(item => item.selected && !item.added);
 		if (!selected.length) return;
-		this.writing = true; this.summary = undefined; this.changed();
+		this.writing = true;
+		this.writeFinished = new Promise(resolve => { this.finishWrite = resolve; });
+		this.summary = undefined; this.changed();
 		try {
 			const { vault, metadataCache } = this.plugin.app;
 			if (vault.getFileByPath(result.file.path) !== result.file) this.sourceCheck(result, result.text);
@@ -232,10 +243,16 @@ export class NoteConnections {
 			if (selected.some(item => item.skipped === 'connections-duplicates')) this.summary += ' ' + this.plugin.t('connections-duplicates');
 		} catch (error) {
 			result.status = error instanceof Error && error.message === 'malformed-related-notes' ? 'connections-block-error' : error instanceof Error && error.message === 'source-changed' ? 'connections-source-changed' : 'connections-write-error';
-		} finally { this.writing = false; this.changed(); }
+		} finally { this.writing = false; this.finishWrite?.(); this.finishWrite = undefined; this.changed(); }
+	}
+
+	private rejectBusy(): boolean {
+		if (!this.plugin.conversationModel.busy) return false;
+		showStatusNotice(this.plugin.t("translation-busy"), "warning"); return true;
 	}
 
 	async start(file: TFile, raw: string, folders?: readonly string[]): Promise<void> {
+		if (this.rejectBusy()) return;
 		if (!this.canReplace()) {
 			if (!this.writing) { this.restart = { file, folders }; this.changed(); }
 			return;
@@ -254,6 +271,7 @@ export class NoteConnections {
 
 	async more(): Promise<void> {
 		if (this.active || this.writing || !this.canContinue || this.result?.stale) return;
+		if (this.rejectBusy()) return;
 		const search = this.search!;
 		const { result, settings, folders } = search;
 		const { file } = result;
@@ -362,7 +380,9 @@ export class NoteConnections {
 			search.cursor = cursor;
 			result.status = result.suggestions.length ? 'connections-ready' : 'connections-none';
 			this.sourceCheck(result, result.text);
-			this.sourceCheck(result, (await readNoteSnapshot(this.plugin.app, result.file)).markdown);
+			const snapshot = await readNoteSnapshot(this.plugin.app, result.file);
+			if (!live()) return;
+			this.sourceCheck(result, snapshot.markdown);
 		} catch (error) {
 			if (this.result === result && !request.signal.aborted) result.status = result.stale ? 'connections-source-changed' : error instanceof NoteSearchError ? error.code : 'search-failed';
 		} finally {

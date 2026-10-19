@@ -9,13 +9,15 @@ import type { ServerClientResult } from "../src/server-client";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 
 describe("chat toggle", () => {
-	it.each(["ribbon", "command"])("opens, closes and reopens the sidebar through %s", async (trigger) => {
+	it.each(["ribbon", "command"])("opens, hides and reveals the same sidebar through %s", async (trigger) => {
 		const leaf = { detach: vi.fn(() => { leaves = []; }) };
 		let leaves: typeof leaf[] = [];
+		const dock = { collapsed: false, collapse() { this.collapsed = true; } };
 		const workspace = {
+			rightSplit: dock,
 			getLeavesOfType: vi.fn(() => leaves),
 			ensureSideLeaf: vi.fn(async () => { leaves = [leaf]; }),
-			revealLeaf: vi.fn(),
+			revealLeaf: vi.fn(async () => { dock.collapsed = false; }),
 		};
 		const plugin = new AiHelperPlugin({ workspace } as unknown as App, {} as PluginManifest);
 		const ribbon = vi.spyOn(plugin, "addRibbonIcon");
@@ -29,10 +31,12 @@ describe("chat toggle", () => {
 		expect(workspace.ensureSideLeaf).toHaveBeenCalledWith(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
 		expect(leaves).toHaveLength(1);
 		await toggle();
-		expect(leaf.detach).toHaveBeenCalledTimes(1);
-		expect(leaves).toHaveLength(0);
+		expect(dock.collapsed).toBe(true);
+		expect(leaf.detach).not.toHaveBeenCalled();
+		expect(leaves).toHaveLength(1);
 		await toggle();
-		expect(workspace.ensureSideLeaf).toHaveBeenCalledTimes(2);
+		expect(dock.collapsed).toBe(false);
+		expect(workspace.ensureSideLeaf).toHaveBeenCalledTimes(1);
 		expect(leaves).toHaveLength(1);
 	});
 });

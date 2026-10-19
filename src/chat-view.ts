@@ -1,3 +1,4 @@
+import type { ConnectionDiscardModal } from "./connection-discard-modal";
 import { NoteConnections, type CandidateSnapshot, type ConnectionResult } from "./note-connections";
 import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType, type EventRef, type TFile } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
@@ -65,6 +66,7 @@ export class ChatView extends ItemView implements HoverParent {
 	private contextTitleEl: HTMLElement | null = null;
 	private messageInput: MessageInput;
 	private fragmentModal?: FragmentSnapshotModal;
+	private discardModal?: ConnectionDiscardModal;
 	private clearBtn: HTMLElement | null = null;
 	private messages: DisplayMessage[] = [];
 	private thinking: boolean = false;
@@ -216,11 +218,9 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	async onClose(): Promise<void> {
-		if (this.connections.hasSelection || this.connections.writing) {
-			this.plugin.pendingConnections = this.connections;
-			showStatusNotice(this.t("connections-retained"), "warning");
-			this.connections.cancel();
-		} else this.connections.clear();
+		this.connections.cancel();
+		const writing = this.connections.writing;
+		if (!this.plugin.isUnloading && (writing || this.connections.hasSelection)) this.plugin.pendingConnections = this.connections;
 		this.connections.attach(() => {});
 		this.connectionsEl = null;
 		this.fragmentModal?.close();
@@ -249,6 +249,19 @@ export class ChatView extends ItemView implements HoverParent {
 		this.contextProgress = null;
 		this.contextLabelEl = null;
 		this.contextTitleEl = null;
+		// Finish an atomic note write before deciding whether selection would be lost.
+		if (writing) await this.connections.finishWriting();
+		if (this.plugin.isUnloading) { this.connections.dispose(); return; }
+		// Reopening while the write settled has already retained this search.
+		if (writing && this.plugin.pendingConnections !== this.connections) return;
+		if (this.connections.hasSelection) this.confirmDiscard("connections-close", () => {
+			this.connections.clear(true);
+			if (this.plugin.pendingConnections === this.connections) this.plugin.pendingConnections = undefined;
+		}, () => { void this.plugin.reopenConnections(); });
+		else {
+			this.connections.clear();
+			if (this.plugin.pendingConnections === this.connections) this.plugin.pendingConnections = undefined;
+		}
 	}
 
 	isGenerating(): boolean { return this.thinking || this.connections.active; }
@@ -265,6 +278,11 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	clearConversation(): void {
+		if (this.connections.hasSelection && !this.connections.writing) {
+			this.connections.canReplace();
+			this.confirmDiscard("clear-conversation", () => { this.connections.clear(true); this.clearConversation(); });
+			return;
+		}
 		if (!this.connections.clear()) return;
 		this.hoverPopover?.unload();
 		this.hoverPopover = null;
@@ -274,6 +292,16 @@ export class ChatView extends ItemView implements HoverParent {
 		this.followingMessages = true;
 		this.updateContextIndicators();
 		void this.renderMessages();
+	}
+
+	private confirmDiscard(action: "clear-conversation" | "connections-close", discard: () => void, keep: () => void = () => {}): void {
+		if (this.discardModal) return;
+		const result = this.connections.result;
+		this.discardModal = this.plugin.confirmConnectionDiscard(action, confirmed => {
+			this.discardModal = undefined;
+			if (this.plugin.isUnloading || this.connections.result !== result) return;
+			if (confirmed && !this.connections.writing) discard(); else keep();
+		});
 	}
 
 	private renderConnections(): void {
@@ -295,6 +323,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.connections.canRestart) {
 			setStatusTone(root.createDiv({ text: this.t("connections-restart-warning") }), "warning");
 			new ButtonComponent(root).setButtonText(this.t("connections-restart")).setDisabled(this.connections.writing).onClick(() => { void this.connections.restartConfirmed(); }).buttonEl.addClass("ai-helper-connections-restart", "mod-warning");
+			new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.dismissRestart()).buttonEl.addClass("ai-helper-connections-dismiss");
 		}
 		if (this.connections.active || this.connections.canContinue) {
 			const actions = root.createDiv({ cls: "ai-helper-connections-actions" });

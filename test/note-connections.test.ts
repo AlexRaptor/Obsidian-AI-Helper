@@ -4,7 +4,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
 import { ChatView } from "../src/chat-view";
 import { DEFAULT_SETTINGS } from "../src/settings";
-import { Menu, Notice, deferred, type TestElement } from "./helpers/obsidian";
+import { Menu, Modal, Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); Notice.messages.length = 0; });
@@ -165,7 +165,7 @@ it.each(['clear', 'close', 'new'])( 'не возвращает поздний р
 	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
 	if (action === 'clear') env.chat.clearConversation();
 	else if (action === 'close') await env.chat.onClose();
-	else await env.run();
+	else { env.root.find('ai-helper-connections-cancel').click(); await env.run(); }
 	pending.resolve(answer('c1', 'Старое объяснение не должно появиться в панели.')); await new Promise(resolve => setTimeout(resolve, 25));
 	expect(env.root.getText()).not.toContain('Старое объяснение');
 	const lease = env.plugin.conversationModel.tryAcquire(); expect(lease).toBeDefined(); lease!.release();
@@ -598,6 +598,9 @@ it('поздний ответ отменённой порции не завер�
 	await new Promise(resolve => setTimeout(resolve, 25));
 	expect(cards(env.root)).toHaveLength(1); expect(env.root.getText()).toContain('Поиск полезных связей');
 	expect(env.root.find('ai-helper-connections-more').disabled).toBe(true);
+	env.root.find('ai-helper-input').value = 'Черновик во время новой порции'; env.root.find('ai-helper-send').click();
+	expect(Notice.messages.at(-1)).toContain('Дождитесь завершения');
+	expect(env.root.find('ai-helper-input').value).toBe('Черновик во время новой порции'); expect(env.chat.getMessages()).toEqual([]);
 	current.resolve(answer('c2')); await vi.waitFor(() => expect(cards(env.root)).toHaveLength(2));
 	expect(env.root.getText()).not.toContain('Старый результат'); await env.chat.onClose();
 });
@@ -981,4 +984,125 @@ it.each(['событие редактора', 'проверка перед за�
 	expect(env.files.get('Заметки/Мысль.md')).toBe(mode === 'событие хранилища' ? edited : saved);
 	expect(secondView.editor.getValue()).toBe(edited);
 	expect(env.files.get('Заметки/Мысль.md')).not.toContain('[[Примеры/Продолжение]]'); await env.chat.onClose();
+});
+
+
+it('отменяет предупреждение нового поиска без потери выбранной карточки', async () => {
+	const env = await setup(); await env.run();
+	env.root.find('ai-helper-connection-select').click();
+	env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Выбор будет потерян'));
+	env.root.find('ai-helper-connections-dismiss').click();
+	expect(env.root.getText()).not.toContain('Выбор будет потерян');
+	expect(env.root.getText()).toContain('Снять выбор'); expect(env.requests).toHaveLength(1);
+	await env.chat.onClose();
+});
+
+
+it('подтверждает очистку диалога с выбранными связями, а отмена сохраняет выбор', async () => {
+	const env = await setup(); await env.run(); env.root.find('ai-helper-connection-select').click();
+	env.root.find('ai-helper-clear-btn').click();
+	let modal = Modal.opened.at(-1)!; expect(modal).toBeDefined();
+	modal.contentEl.find('ai-helper-discard-cancel').click();
+	expect(env.root.getText()).toContain('Снять выбор');
+	env.root.find('ai-helper-clear-btn').click();
+	modal = Modal.opened.at(-1)!; modal.contentEl.find('ai-helper-discard-confirm').click();
+	expect(env.root.getText()).not.toContain('Сходство фрагмента'); expect(env.chat.getMessages()).toEqual([]);
+	await env.chat.onClose();
+});
+
+
+it('повторная команда во время зависшего поиска отклоняется и сохраняет черновик', async () => {
+	const pending = deferred<Response>(); const env = await setup({ completion: () => pending.promise });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.root.find('ai-helper-input').value = 'Не потерять вопрос';
+	env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(Notice.messages.at(-1)).toContain('Дождитесь завершения'));
+	expect(env.requests).toHaveLength(1); expect(env.root.find('ai-helper-input').value).toBe('Не потерять вопрос');
+	expect(env.root.getText()).toContain('Поиск полезных связей');
+	env.root.find('ai-helper-connections-cancel').click(); pending.resolve(answer('c1')); await env.chat.onClose();
+});
+
+
+it.each(['подтвердить', 'отменить'])('закрытие панели с выбором: %s решение', async decision => {
+	const env = await setup(); await env.run(); env.root.find('ai-helper-connection-select').click();
+	await env.chat.onClose();
+	const modal = Modal.opened.at(-1)!; expect(modal.titleEl.getText()).toBe('Закрыть панель');
+	modal.contentEl.find(decision === 'подтвердить' ? 'ai-helper-discard-confirm' : 'ai-helper-discard-cancel').click();
+	const reopened = new ChatView({} as WorkspaceLeaf, env.plugin); Object.assign(reopened, { app: env.app }); await reopened.onOpen();
+	const text = (reopened.contentEl as unknown as TestElement).getText();
+	if (decision === 'подтвердить') expect(text).not.toContain('Сходство фрагмента');
+	else expect(text).toContain('Снять выбор');
+	expect(env.files.get('Заметки/Мысль.md')).toBe('Сохранённая версия.'); await reopened.onClose();
+});
+
+it('команда скрытия сохраняет несколько порций, выбор и отметку добавленной связи', async () => {
+	const env = await setup({ settings: { connectionSuggestionCount: '1' }, notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/А.md': 'Проверяйте знания через неделю.' } });
+	const dock = { collapsed: false, collapse() { this.collapsed = true; } };
+	Object.assign(env.app.workspace, { rightSplit: dock });
+	vi.spyOn(env.app.workspace, 'revealLeaf').mockImplementation(async () => { dock.collapsed = false; });
+	await env.run(); env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	env.root.find('ai-helper-connections-more').click(); await vi.waitFor(() => expect(cards(env.root)).toHaveLength(2));
+	env.root.find('ai-helper-connection-select').click();
+	const before = env.root.getText();
+	await env.commands.get('toggle-view')!(); expect(dock.collapsed).toBe(true);
+	await env.commands.get('toggle-view')!(); expect(dock.collapsed).toBe(false);
+	expect(env.root.getText()).toBe(before); expect(env.root.getText()).toContain('Добавлено'); expect(env.root.getText()).toContain('Снять выбор');
+	expect(env.requests).toHaveLength(2); await env.chat.onClose();
+});
+
+it('перевод отклоняется во время поиска без потери черновика', async () => {
+	const pending = deferred<Response>(); const env = await setup({ completion: () => pending.promise });
+	Object.assign(env.app.workspace, { getActiveFile: () => env.editor.file });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.root.find('ai-helper-input').value = 'Сохранить черновик';
+	env.commands.get('translate-current-note')!();
+	expect(Notice.messages.at(-1)).toContain('Дождитесь завершения'); expect(env.requests).toHaveLength(1);
+	expect(env.root.find('ai-helper-input').value).toBe('Сохранить черновик');
+	env.root.find('ai-helper-connections-cancel').click(); pending.resolve(answer('c1')); await env.chat.onClose();
+});
+
+it('выгрузка прекращает поиск и не восстанавливает выбор при новом открытии', async () => {
+	const pending = deferred<Response>(); let count = 0;
+	const env = await setup({ settings: { connectionSuggestionCount: '1' }, notes: { 'Примеры/А.md': 'Проверяйте знания.' }, completion: async body => ++count === 1 ? answer(JSON.parse(body.messages.at(-1).content).candidate.id) : pending.promise });
+	await env.run(); env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-more').click();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+	env.plugin.onunload(); pending.resolve(answer('c2', 'Позднее объяснение после выгрузки не должно восстановиться.'));
+	await new Promise(resolve => setTimeout(resolve, 25));
+	await env.chat.onClose(); const reopened = new ChatView({} as WorkspaceLeaf, env.plugin); Object.assign(reopened, { app: env.app }); await reopened.onOpen();
+	expect((reopened.contentEl as unknown as TestElement).getText()).not.toContain('Сходство фрагмента'); await reopened.onClose();
+});
+
+it.each(['успех', 'ошибка'])('закрытие во время записи завершает решение после записи: %s', async outcome => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run(); env.root.find('ai-helper-connection-select').click();
+	const pending = deferred<void>(); const process = vi.mocked(env.app.vault.process).getMockImplementation()!;
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => { await pending.promise; if (outcome === 'ошибка') throw new Error('Нет доступа'); return process(file, update); });
+	env.root.find('ai-helper-connections-add').click(); await vi.waitFor(() => expect(env.app.vault.process).toHaveBeenCalledTimes(1));
+	const closed = env.chat.onClose(); pending.resolve(); await closed;
+	await vi.waitFor(() => expect(env.app.vault.process).toHaveBeenCalledTimes(1));
+	if (outcome === 'ошибка') {
+		await vi.waitFor(() => expect(Modal.opened.at(-1)?.titleEl.getText()).toBe('Закрыть панель'));
+		Modal.opened.at(-1)!.contentEl.find('ai-helper-discard-cancel').click();
+	}
+	const reopened = new ChatView({} as WorkspaceLeaf, env.plugin); Object.assign(reopened, { app: env.app }); await reopened.onOpen();
+	const text = (reopened.contentEl as unknown as TestElement).getText();
+	if (outcome === 'успех') { expect(text).not.toContain('Сходство фрагмента'); expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Практика]]'); }
+	else expect(text).toContain('Снять выбор');
+	await reopened.onClose();
+});
+
+it('закрытие отменяет ожидающее чтение перед подтверждённым перезапуском', async () => {
+	const env = await setup(); await env.run(); env.root.find('ai-helper-connection-select').click();
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.root.getText()).toContain('Выбор будет потерян'));
+	vi.spyOn(env.app.workspace, 'getActiveViewOfType').mockReturnValue(null);
+	const chatLeaves = env.app.workspace.getLeavesOfType('ai-helper-chat');
+	vi.spyOn(env.app.workspace, 'getLeavesOfType').mockImplementation(type => type === 'ai-helper-chat' ? chatLeaves : []);
+	const pending = deferred<string>(); vi.mocked(env.app.vault.read).mockImplementationOnce(() => pending.promise);
+	env.root.find('ai-helper-connections-restart').click(); await env.chat.onClose();
+	pending.resolve(sourceText); await new Promise(resolve => setTimeout(resolve, 25));
+	expect(env.requests).toHaveLength(1);
+	Modal.opened.at(-1)!.contentEl.find('ai-helper-discard-cancel').click();
+	const reopened = new ChatView({} as WorkspaceLeaf, env.plugin); Object.assign(reopened, { app: env.app }); await reopened.onOpen();
+	expect((reopened.contentEl as unknown as TestElement).getText()).toContain('Снять выбор'); await reopened.onClose();
 });

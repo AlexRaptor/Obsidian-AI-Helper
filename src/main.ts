@@ -1,3 +1,4 @@
+import { ConnectionDiscardModal } from "./connection-discard-modal";
 import { isValidConnectionCount } from "./settings";
 import type { NoteConnections } from "./note-connections";
 import { ConversationModel } from "./conversation-model";
@@ -28,6 +29,7 @@ import { FolderDescriptions, isValidFolderDescriptionName } from "./folder-descr
 
 export class AiHelperPlugin extends Plugin {
 	pendingConnections?: NoteConnections;
+	private connectionDiscardModals = new Set<ConnectionDiscardModal>();
 	conversationModel = new ConversationModel(() => this.noteSearch);
 	translation = new NoteTranslation(this);
 	private translationModal?: TranslationModal;
@@ -237,8 +239,12 @@ export class AiHelperPlugin extends Plugin {
 
 	onunload(): void {
 		this.unloading = true;
+		for (const modal of this.connectionDiscardModals) modal.close();
+		this.connectionDiscardModals.clear();
 		this.translation.dispose();
-		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) if (leaf.view instanceof ChatView) leaf.view.connections.cancel();
+		this.pendingConnections?.dispose();
+		this.pendingConnections = undefined;
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) if (leaf.view instanceof ChatView) leaf.view.connections.dispose();
 		this.conversationModel.dispose();
 		this.translationModal?.close();
 		this.indexStorageListeners.clear();
@@ -494,6 +500,7 @@ export class AiHelperPlugin extends Plugin {
 
 	async findNoteConnections(file: TFile, text: string, folders?: readonly string[]): Promise<void> {
 		if (this.unloading) return;
+		if (this.conversationModel.busy) { showStatusNotice(this.t("translation-busy"), "warning"); return; }
 		const launch = ++this.connectionLaunch;
 		let view = this.getChatView();
 		if (view) await this.app.workspace.revealLeaf(view.leaf);
@@ -502,6 +509,23 @@ export class AiHelperPlugin extends Plugin {
 			if (leaf.view instanceof ChatView) view = leaf.view;
 		}
 		if (!this.unloading && launch === this.connectionLaunch) await view?.connections.start(file, text, folders);
+	}
+
+	confirmConnectionDiscard(action: "clear-conversation" | "connections-close", done: (discard: boolean) => void): ConnectionDiscardModal {
+		const modal = new ConnectionDiscardModal(this.app, key => this.t(key), action, confirmed => {
+			this.connectionDiscardModals.delete(modal);
+			done(confirmed);
+		});
+		this.connectionDiscardModals.add(modal);
+		modal.open();
+		return modal;
+	}
+
+	get isUnloading(): boolean { return this.unloading; }
+
+	async reopenConnections(): Promise<void> {
+		if (this.unloading) return;
+		await this.app.workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
 	}
 
 	async newConversation(): Promise<void> {
@@ -528,7 +552,10 @@ export class AiHelperPlugin extends Plugin {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(VIEW_TYPE_CHAT)[0];
 		if (existing) {
-			existing.detach();
+			const root = existing.getRoot?.();
+			const dock = root && root === workspace.leftSplit ? workspace.leftSplit : root === workspace.rightSplit || !root ? workspace.rightSplit : undefined;
+			if (!dock || dock.collapsed) await workspace.revealLeaf(existing);
+			else dock.collapse();
 			return;
 		}
 		await workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });

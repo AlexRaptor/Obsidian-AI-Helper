@@ -6,6 +6,8 @@ export class ConversationModel {
 	private disposed = false;
 	constructor(private noteSearch: () => NoteSearch | undefined) {}
 
+	get busy(): boolean { return this.disposed || !!this.current; }
+
 	tryAcquire(): { ready: Promise<void>; release(): void } | undefined {
 		if (this.disposed || this.current) return undefined;
 		// Reserve before notifying index subscribers: they may synchronously start work.
