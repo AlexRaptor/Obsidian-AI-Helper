@@ -816,7 +816,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		isAllowed(path: string): boolean { return /\.md$/i.test(path) && allowed(path); },
 		/** A fixed pool of 24 notes, with up to 3 fragments each. No chat threshold or source budget. */
-		async connectionCandidates(source: { path: string; text: string }, excluded: ReadonlySet<string>, signal: AbortSignal, folders?: readonly string[]): Promise<{ groups: NoteSource[][]; partial: boolean }> {
+		async connectionCandidates(source: { path: string; text: string; queries?: string[] }, excluded: ReadonlySet<string>, signal: AbortSignal, folders?: readonly string[]): Promise<{ groups: NoteSource[][]; partial: boolean; fragmented?: boolean }> {
 			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
 			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			const version = revision;
@@ -845,9 +845,10 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
 			const currentPaths = new Set(current.map(({ note }) => note.path));
 			const partial = progress.state !== "complete" || candidatePaths.some(path => !currentPaths.has(path));
-			const [query] = await embed([source.text], signal);
+			const queries = await embed(source.queries ?? [source.text], signal);
 			check(version, signal);
 			const groups: NoteSource[][] = [];
+			let fragmented = false;
 			for (const { note, raw } of current) {
 				check(version, signal);
 				const clean = relatedNotesBlocks(raw).text;
@@ -864,15 +865,18 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 					}
 				}
 				const sources = fragments.map(fragment => {
-					if (query.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
-					const similarity = query.reduce((sum, value, i) => sum + value * fragment.vector[i], 0) / (Math.hypot(...query) * Math.hypot(...fragment.vector));
+					const similarity = Math.max(...queries.map(query => {
+						if (query.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
+						return query.reduce((sum, value, i) => sum + value * fragment.vector[i], 0) / (Math.hypot(...query) * Math.hypot(...fragment.vector));
+					}));
 					return { path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, similarity, partial };
 				}).sort((a, b) => b.similarity - a.similarity || a.text.localeCompare(b.text, "en"));
+				if (sources.length > 3) fragmented = true;
 				if (sources.length) groups.push(sources.slice(0, 3));
 				await new Promise<void>(resolve => setTimeout(resolve, 0));
 			}
 			check(version, signal);
-			return { groups: groups.sort((a, b) => b[0].similarity - a[0].similarity || a[0].path.localeCompare(b[0].path, "en")).slice(0, 24), partial };
+			return { groups: groups.sort((a, b) => b[0].similarity - a[0].similarity || a[0].path.localeCompare(b[0].path, "en")).slice(0, 24), partial, fragmented };
 		},
 		async validateSource(source: NoteSource): Promise<void> {
 			const version = revision;

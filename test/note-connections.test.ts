@@ -8,7 +8,7 @@ import { Menu, Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); Notice.messages.length = 0; });
-async function setup(options: { source?: string; notes?: Record<string, string>; settings?: Record<string, unknown>; index?: boolean; metadata?: () => Promise<Response>; completion?: (body: any) => Promise<Response> } = {}) {
+async function setup(options: { source?: string; notes?: Record<string, string>; settings?: Record<string, unknown>; index?: boolean; vector?: (text: string) => number[]; metadata?: () => Promise<Response>; completion?: (body: any) => Promise<Response> } = {}) {
 	vi.stubGlobal("indexedDB", new IDBFactory());
 	const files = new Map(Object.entries({ "Заметки/Мысль.md": "Сохранённая версия.", "Примеры/Практика.md": "# Практика\nИнтервальное повторение: проверяйте знания через день и через неделю.", ...options.notes }));
 	const entries = new Map([...files.keys()].map(path => [path, Object.assign(new TFile(), { path, basename: path.split('/').at(-1)!.slice(0, -3), extension: "md" })]));
@@ -18,7 +18,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	const events = new Map<string, (...args: any[]) => void>();
 	const commands = new Map<string, () => void>(); const requests: any[] = []; const embeddings: string[][] = [];
 	const network = vi.fn(async (url: string, init?: RequestInit) => {
-		if (url.endsWith('/embeddings')) { const body = JSON.parse(String(init?.body)); embeddings.push(body.input); return Response.json({ data: body.input.map((_text: string, index: number) => ({ index, embedding: _text.includes('Активное') ? [1, 0] : [0.1, 1] })) }); }
+		if (url.endsWith('/embeddings')) { const body = JSON.parse(String(init?.body)); embeddings.push(body.input); return Response.json({ data: body.input.map((_text: string, index: number) => ({ index, embedding: options.vector ? options.vector(_text) : _text.includes('Активное') ? [1, 0] : [0.1, 1] })) }); }
 		if (!url.endsWith('/chat/completions')) return options.metadata?.() ?? Response.json({ data: [] });
 		const body = JSON.parse(String(init?.body)); requests.push(body);
 		return options.completion ? options.completion(body) : answer(JSON.parse(body.messages.at(-1).content).candidate.id);
@@ -40,7 +40,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	if (options.index !== false) for (const path of files.keys()) { try { await plugin.noteSearch.index(path); } catch {} }
 	requests.length = 0; embeddings.length = 0; vi.mocked(app.vault.read).mockClear();
 	const root = chat.contentEl as unknown as TestElement;
-	return { plugin, chat, root, events, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента')); } };
+	return { plugin, chat, root, events, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента:')); } };
 }
 function answer(id: string, explanation = 'Практика дополняет активное вспоминание расписанием повторений через день и неделю.', finish = 'stop') { return Response.json({ choices: [{ message: { content: JSON.stringify({ candidate: id, explanation }) }, finish_reason: finish }] }); }
 
@@ -85,7 +85,7 @@ it.each([
 	{ source: 'Активное вспоминание.', settings: { excludedFolders: ['Заметки'] }, index: true, expected: 'исключ' },
 	{ source: 'Активное вспоминание.', settings: { folderDescriptionName: 'Мысль.md' }, index: true, expected: 'исключ' },
 	{ source: 'Активное вспоминание.', settings: {}, index: false, expected: 'индекс' },
-	{ source: 'Активное вспоминание. '.repeat(1000), settings: { contextWindow: '4000' }, index: true, expected: 'текст не сокращался' },
+	{ source: 'Активное вспоминание. '.repeat(1000), settings: { contextWindow: '4000' }, index: true, expected: 'не помещаются в бюджет' },
 ])('отказывает до запроса модели диалога: $expected', async options => {
 	const env = await setup(options); env.commands.get('find-note-connections')!();
 	await vi.waitFor(() => expect(env.root.getText().toLowerCase()).toContain(options.expected.toLowerCase()));
@@ -428,7 +428,7 @@ function connectionMenu(env: Awaited<ReturnType<typeof setup>>, selection: (TFil
 it('меню одной папки ограничивает кандидатов рекурсивно, сохраняя текущую заметку вне области', async () => {
 	const env = await setup({ notes: { 'Примеры/Вложенная/Повторение.md': 'Дополнительная проверка знаний.', 'Примеры-другие/Секрет.md': 'НЕЛЬЗЯ ПЕРЕДАВАТЬ' } });
 	const item = connectionMenu(env, [folder('Примеры')], false); expect(item).toBeDefined(); item!.callback();
-	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
 	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path).sort()).toEqual(['Примеры/Вложенная/Повторение.md', 'Примеры/Практика.md']);
 	expect(env.requests.every(body => JSON.parse(body.messages.at(-1).content).source.path === 'Заметки/Мысль.md')).toBe(true);
 	expect(env.root.getText()).toContain('Заметки/Мысль.md');
@@ -444,7 +444,7 @@ it('меню нескольких папок объединяет вложенн
 	const env = await setup({ notes: { 'Примеры/Вложенная/Повторение.md': 'Проверка знаний через неделю.', 'Примеры/Закрыто/Секрет.md': 'ИСКЛЮЧЁННЫЙ ТЕКСТ', 'Дополнения/План.md': 'Расписание закрепления изученного.', 'Закрыто/Секрет.md': 'ИСКЛЮЧЁННЫЙ ТЕКСТ' }, settings: { excludedFolders: ['Примеры/Закрыто', 'Закрыто'] } });
 	const item = connectionMenu(env, [folder('Примеры'), folder('Примеры/Вложенная'), folder('Дополнения'), folder('Закрыто')]);
 	expect(item).toBeDefined(); item!.callback();
-	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
 	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path).sort()).toEqual(['Дополнения/План.md', 'Примеры/Вложенная/Повторение.md', 'Примеры/Практика.md']);
 	expect(env.root.getText()).toContain('Дополнения/План.md'); expect(env.root.getText()).not.toContain('Секрет');
 	expect(vi.mocked(env.app.vault.read).mock.calls.some(([file]) => file.path.includes('Закрыто'))).toBe(false);
@@ -471,7 +471,7 @@ it('область с непроиндексированной заметкой 
 	env.files.set('Примеры/Новая.md', 'Новый материал вне индекса.');
 	env.entries.set('Примеры/Новая.md', Object.assign(new TFile(), { path: 'Примеры/Новая.md', extension: 'md' }));
 	connectionMenu(env, [folder('Примеры')])!.callback();
-	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
 	expect(env.root.getText()).toContain('Индекс неполный');
 	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path)).toEqual(['Примеры/Практика.md']);
 	await env.chat.onClose();
@@ -480,7 +480,7 @@ it('область с непроиндексированной заметкой 
 it('после поиска в папке команда снова ищет по всему хранилищу', async () => {
 	const env = await setup({ notes: { 'Другие/План.md': 'Расписание повторений.' } });
 	connectionMenu(env, [folder('Примеры')])!.callback();
-	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
 	expect(env.requests).toHaveLength(1); env.requests.length = 0;
 	env.commands.get('find-note-connections')!();
 	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
@@ -494,7 +494,7 @@ it('запуск из проводника использует запомнен
 	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source } });
 	vi.spyOn(env.app.workspace, 'getActiveViewOfType').mockReturnValue(null);
 	connectionMenu(env, [folder('Примеры')])!.callback();
-	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
 	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
 	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
 	expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Практика]]');
@@ -614,4 +614,63 @@ it('фиксирует размер при запуске и допускает 
 	await vi.waitFor(() => expect(env.chat.getMessages().at(-1)?.content).toBe('Можно обсудить повторение.'));
 	env.root.find('ai-helper-connections-more').click(); await vi.waitFor(() => expect(cards(env.root)).toHaveLength(2));
 	expect(env.root.getText()).toContain('Больше предложений в этом поиске нет'); await env.chat.onClose();
+});
+
+
+it('анализирует разные части большой заметки и релевантный конец кандидата, предупреждает и сохраняет связь', async () => {
+	const block = '<!-- ai-helper:related-notes:start -->\n## Связанные заметки\n- [[Материалы/План]] — ПРЕЖНЕЕ ОБЪЯСНЕНИЕ\n<!-- ai-helper:related-notes:end -->';
+	const source = '# Начало\nПЛАНИРОВАНИЕ ПРОЕКТА.\n' + 'Распределяем задачи команды. '.repeat(500) + '\n## АРХИТЕКТУРА СИСТЕМЫ\nСередина.\n' + 'Обсуждаем структуру приложения. '.repeat(500) + '\n## Итог\nАктивное вспоминание: проверяем изученное через неделю.\n' + block;
+	const candidate = '# Архив\n' + 'История садоводства и полива. '.repeat(700) + '\n## Практика повторения\nАктивное вспоминание дополняется проверкой через день и неделю.\n' + block;
+	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source, 'Примеры/Практика.md': candidate, 'Материалы/План.md': 'УЖЕ СВЯЗАННЫЙ ПЛАН' }, vector: text => text.includes('Активное') ? [1, 0] : text.includes('садоводства') ? [-1, 0] : [0, 1] });
+	await env.run();
+	expect(env.root.getText()).toContain('Анализ выполнен по фрагментам');
+	expect(env.requests).toHaveLength(1);
+	expect(JSON.stringify(env.requests)).not.toContain('ПРЕЖНЕЕ ОБЪЯСНЕНИЕ');
+	expect(JSON.stringify(env.requests)).not.toContain('УЖЕ СВЯЗАННЫЙ ПЛАН');
+	expect(JSON.stringify(env.embeddings)).not.toContain('ПРЕЖНЕЕ ОБЪЯСНЕНИЕ');
+	const sent = JSON.parse(env.requests[0].messages.at(-1).content);
+	expect(JSON.stringify(sent.source)).toContain('ПЛАНИРОВАНИЕ ПРОЕКТА');
+	expect(JSON.stringify(sent.source)).toContain('АРХИТЕКТУРА СИСТЕМЫ');
+	expect(JSON.stringify(sent.source)).toContain('Активное вспоминание');
+	expect(JSON.stringify(sent.candidate.fragments)).toContain('проверкой через день и неделю');
+	for (const fragment of sent.candidate.fragments) expect(env.root.getText()).toContain(fragment.text);
+	expect(env.root.getText()).toContain('1,000');
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Практика]]'));
+	expect(env.files.get('Примеры/Практика.md')).toBe(candidate);
+	await env.chat.onClose();
+});
+
+
+it('отказывает до сетевого анализа, когда даже фрагменты с инструкциями и резервом ответа не помещаются', async () => {
+	const env = await setup({ source: '# Начало\n' + 'Планируем задачи. '.repeat(1000) + '\n## Конец\nАктивное вспоминание.', settings: { contextWindow: '12000', maxTokens: '10000' } });
+	env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('не помещаются в бюджет'));
+	expect(env.root.getText()).toContain('модель не изменена');
+	expect(env.requests).toHaveLength(0); expect(env.embeddings).toHaveLength(0);
+	expect(env.plugin.settings.model).toBe('диалог'); expect(env.chat.getMessages()).toEqual([]);
+	await env.chat.onClose();
+});
+
+it('предупреждает о фрагментах большого кандидата при небольшой исходной заметке', async () => {
+	const env = await setup({ notes: { 'Примеры/Практика.md': '# История\n' + 'Старые записи экспериментов. '.repeat(800) + '\n## Повторение\nАктивное вспоминание: контроль знаний через неделю.' }, vector: text => text.includes('Активное') ? [1, 0] : [0, 1] });
+	await env.run();
+	expect(env.root.getText()).toContain('Анализ выполнен по фрагментам');
+	const data = JSON.parse(env.requests[0].messages.at(-1).content);
+	expect(data.source.text).toBe(sourceText);
+	expect(data.candidate.fragments[0].text).toContain('контроль знаний через неделю');
+	expect(env.root.getText()).toContain(data.candidate.fragments[0].text);
+	await env.chat.onClose();
+});
+
+
+it('сохраняет длинную иерархию заголовков при анализе большой заметки', async () => {
+	const heading = 'Подробное описание результатов эксперимента '.repeat(30).trim();
+	const env = await setup({ source: '# Исследование\n## ' + heading + '\n' + 'Проверяем знания через неделю. '.repeat(500) });
+	await env.run();
+	const data = JSON.parse(env.requests[0].messages.at(-1).content);
+	expect(data.source.fragments.every((part: any) => part.headings.includes(heading))).toBe(true);
+	expect(JSON.stringify(data.source.fragments)).toContain('Проверяем знания через неделю');
+	expect(env.root.getText()).toContain('Анализ выполнен по фрагментам');
+	await env.chat.onClose();
 });

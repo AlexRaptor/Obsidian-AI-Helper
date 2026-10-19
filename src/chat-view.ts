@@ -297,6 +297,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.connections.exhausted) root.createDiv({ text: this.t("connections-exhausted") });
 		if (this.connections.summary) setStatusTone(root.createDiv({ text: this.connections.summary }), "success");
 		if (result.suggestions.length) new ButtonComponent(root).setButtonText(this.t("connections-add")).setDisabled(this.connections.writing || this.connections.active || !result.suggestions.some(item => item.selected && !item.added)).onClick(() => { void this.connections.addSelected(); }).buttonEl.addClass("ai-helper-connections-add", "mod-cta");
+		if (result.fragmented) setStatusTone(root.createDiv({ text: this.t("connections-fragmented") }), "warning");
 		if (result.partial) setStatusTone(root.createDiv({ text: this.t("search-partial") }), "warning");
 		if (result.suggestions.length) root.createDiv({ text: this.t("connections-similarity-help") });
 		for (const suggestion of result.suggestions) {
