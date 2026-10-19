@@ -50,6 +50,7 @@ export class AiHelperPlugin extends Plugin {
 	private changingIndexStorage = false;
 	private indexStorageListeners = new Set<() => void>();
 	private unloading = false;
+	private connectionLaunch = 0;
 	private indexRestore: Promise<void> = Promise.resolve();
 	private settingsTab?: AiHelperSettingsTab;
 	noteSearchConnection = createNoteSearchConnection(this.serverClient);
@@ -75,6 +76,14 @@ export class AiHelperPlugin extends Plugin {
 		await this.loadSettings();
 		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();
+		this.addCommand({ id: "find-note-connections", name: this.t("connections-command"), callback: () => {
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			const file = view?.file;
+			if (!view || !file || file.extension !== "md") { showStatusNotice(this.t("search-note"), "warning"); return; }
+			// Capture before opening the chat changes the active leaf.
+			const text = view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
+			void this.findNoteConnections(file, text).catch(() => showStatusNotice(this.t("search-failed"), "error"));
+		} });
 		this.addCommand({ id: "translate-current-note", name: this.t("translation-command"), callback: () => this.translateNote() });
 		this.addCommand({ id: "retry-open-translation", name: this.t("translation-retry-open"), callback: () => {
 			if (this.unloading || !this.translation.canRetryOpen) return;
@@ -231,6 +240,7 @@ export class AiHelperPlugin extends Plugin {
 	onunload(): void {
 		this.unloading = true;
 		this.translation.dispose();
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) if (leaf.view instanceof ChatView) leaf.view.connections.cancel();
 		this.conversationModel.dispose();
 		this.translationModal?.close();
 		this.indexStorageListeners.clear();
@@ -472,6 +482,18 @@ export class AiHelperPlugin extends Plugin {
 		if (active) return active;
 		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT).find(leaf => leaf.view instanceof ChatView);
 		return leaf?.view instanceof ChatView ? leaf.view : undefined;
+	}
+
+	async findNoteConnections(file: TFile, text: string): Promise<void> {
+		if (this.unloading) return;
+		const launch = ++this.connectionLaunch;
+		let view = this.getChatView();
+		if (view) await this.app.workspace.revealLeaf(view.leaf);
+		else {
+			const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
+			if (leaf.view instanceof ChatView) view = leaf.view;
+		}
+		if (!this.unloading && launch === this.connectionLaunch) await view?.connections.start(file, text);
 	}
 
 	async newConversation(): Promise<void> {

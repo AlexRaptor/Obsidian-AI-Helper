@@ -14,6 +14,20 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"connections-command": "Find connections for current note",
+	"connections-title": "Connections for",
+	"connections-language": "English",
+	"connections-running": "Finding useful connections…",
+	"connections-cancelled": "Connection search cancelled.",
+	"connections-empty-source": "The source note has no text after related notes blocks are removed.",
+	"connections-model": "The conversation model is unavailable. Check the model server and selected model.",
+	"connections-budget": "The complete note and candidate material do not fit the context budget. Analysis of large notes is not available yet; no text was shortened.",
+	"connections-invalid": "The model returned an invalid or incomplete connection response. No suggestions were published.",
+	"connections-ready": "Connection suggestions",
+	"connections-none": "No useful connections found in the available candidates.",
+	"connections-similarity": "Fragment similarity",
+	"connections-similarity-help": "Similarity measures the fragment, not the usefulness of the connection.",
+
 	"translation-debug-mode": "Debug mode",
 	"translation-debug-mode-desc": "For new translations, keep the model response in memory so it can be copied for troubleshooting. Cleared on Finish, cancellation, a new translation or plugin unloading.",
 	"translation-copy-response": "Copy model response",
@@ -420,6 +434,20 @@ export const en = {
 } as const;
 
 export const ru = {
+	"connections-command": "Найти связи для текущей заметки",
+	"connections-title": "Связи для заметки",
+	"connections-language": "Русский",
+	"connections-running": "Поиск полезных связей…",
+	"connections-cancelled": "Поиск связей отменён.",
+	"connections-empty-source": "В исходной заметке нет текста после исключения блоков связанных заметок.",
+	"connections-model": "Модель диалога недоступна. Проверьте модель-сервер и выбранную модель.",
+	"connections-budget": "Полный текст заметки и материал кандидата не помещаются в бюджет контекста. Анализ больших заметок пока недоступен; текст не сокращался.",
+	"connections-invalid": "Модель вернула некорректный или незавершённый ответ. Предложения не опубликованы.",
+	"connections-ready": "Предложения связей",
+	"connections-none": "В доступном наборе кандидатов полезных связей не найдено.",
+	"connections-similarity": "Сходство фрагмента",
+	"connections-similarity-help": "Сходство характеризует фрагмент, а не полезность связи.",
+
 	"translation-debug-mode": "Режим отладки",
 	"translation-debug-mode-desc": "Для новых переводов хранить ответ модели в памяти, чтобы его можно было скопировать для разбора ошибок. Ответ удаляется по кнопке «Завершить», при отмене, новом переводе или выгрузке плагина.",
 	"translation-copy-response": "Копировать ответ модели",

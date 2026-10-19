@@ -1,3 +1,4 @@
+import { NoteConnections } from "./note-connections";
 import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType, type EventRef, type TFile } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
 import { isEmbeddingConfigured } from "./note-search";
@@ -39,6 +40,8 @@ export class ChatView extends ItemView implements HoverParent {
 	hoverPopover: HoverPopover | null = null;
 	plugin: AiHelperPlugin;
 	conversation = new Conversation();
+	readonly connections: NoteConnections;
+	private connectionsEl: HTMLElement | null = null;
 	private searchEnabled = false;
 	private searchType: "notes" | "folders" | "mixed" = "notes";
 	private searchTypeSelect: DropdownComponent | null = null;
@@ -76,6 +79,7 @@ export class ChatView extends ItemView implements HoverParent {
 	constructor(leaf: WorkspaceLeaf, plugin: AiHelperPlugin) {
 		super(leaf);
 		this.plugin = plugin;
+		this.connections = new NoteConnections(plugin, () => this.renderConnections());
 		this.messageInput = new MessageInput(key => this.t(key), () => { void this.handleSend(); }, () => this.stopGeneration(), () => {
 			return this.app.workspace?.getActiveViewOfType?.(MarkdownView)?.file ?? this.plugin.currentNote ?? null;
 		}, () => this.app.vault.getMarkdownFiles?.() ?? [], () => readSelectedFragment(this.app, this.plugin.currentMarkdownView), this.openFragment);
@@ -182,9 +186,10 @@ export class ChatView extends ItemView implements HoverParent {
 		await this.renderMessages();
 	}
 
-	async refreshSimilarityAppearance(): Promise<void> { await this.renderMessages(); }
+	async refreshSimilarityAppearance(): Promise<void> { this.renderConnections(); await this.renderMessages(); }
 
 	async refreshLocale(): Promise<void> {
+		this.renderConnections();
 		this.updateIndexStatus();
 		this.updateSearchType();
 		this.contextTitleEl?.setText(this.t("header-context"));
@@ -208,6 +213,8 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	async onClose(): Promise<void> {
+		this.connections.clear();
+		this.connectionsEl = null;
 		this.fragmentModal?.close();
 		this.fragmentModal = undefined;
 		this.detachVaultEvents();
@@ -236,9 +243,10 @@ export class ChatView extends ItemView implements HoverParent {
 		this.contextTitleEl = null;
 	}
 
-	isGenerating(): boolean { return this.thinking; }
+	isGenerating(): boolean { return this.thinking || this.connections.active; }
 
 	stopGeneration(): void {
+		this.connections.cancel();
 		if (!this.thinking) return;
 		this.cancelRequest();
 		void this.renderMessages();
@@ -249,6 +257,7 @@ export class ChatView extends ItemView implements HoverParent {
 	}
 
 	clearConversation(): void {
+		this.connections.clear();
 		this.hoverPopover?.unload();
 		this.hoverPopover = null;
 		this.cancelRequest(false);
@@ -257,6 +266,37 @@ export class ChatView extends ItemView implements HoverParent {
 		this.followingMessages = true;
 		this.updateContextIndicators();
 		void this.renderMessages();
+	}
+
+	private renderConnections(): void {
+		const root = this.connectionsEl;
+		if (!root) return;
+		root.empty();
+		const result = this.connections.result;
+		root.hidden = !result;
+		if (!result) return;
+		root.createEl("h3", { text: `${this.t("connections-title")}: ${result.path}` });
+		const status = root.createDiv({ text: this.t(result.status) });
+		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : "warning");
+		if (this.connections.active) new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
+		if (result.partial) setStatusTone(root.createDiv({ text: this.t("search-partial") }), "warning");
+		if (result.suggestions.length) root.createDiv({ text: this.t("connections-similarity-help") });
+		for (const suggestion of result.suggestions) {
+			const card = root.createDiv({ cls: "ai-helper-connection" });
+			const link = card.createEl("a", { cls: "internal-link ai-helper-connection-link", text: suggestion.source.path, attr: { href: suggestion.source.path, "data-href": suggestion.source.path } });
+			link.addEventListener("click", event => {
+				event.preventDefault();
+				void this.plugin.noteSearch.open(suggestion.source, Keymap.isModEvent(event)).catch(error => showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "warning"));
+			});
+			card.createDiv({ text: suggestion.explanation });
+			for (const fragment of suggestion.fragments) {
+				const details = card.createEl("details", { cls: "ai-helper-source" });
+				const summary = details.createEl("summary", { text: `${this.t("search-fragment")}${fragment.headings.length ? `: ${fragment.headings.join(" → ")}` : ""} — ` });
+				const similarity = summary.createSpan({ text: `${this.t("connections-similarity")}: ${fragment.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
+				similarity.style.color = similarityColor(fragment.similarity, normalizeSimilarityAppearance(this.plugin.settings.similarityAppearance));
+				details.createEl("pre", { text: fragment.text });
+			}
+		}
 	}
 
 	private buildStructure(): void {
@@ -316,6 +356,8 @@ export class ChatView extends ItemView implements HoverParent {
 			void this.plugin.noteSearch.pause().catch(() => showStatusNotice(this.t("search-storage"), "error"));
 		});
 		this.indexReason = this.indexStatusEl.createDiv({ cls: "ai-helper-index-reason", attr: { "aria-live": "polite" } });
+		this.connectionsEl = container.createDiv({ cls: "ai-helper-connections" });
+		this.renderConnections();
 		this.messagesEl = container.createDiv({ cls: "ai-helper-messages" });
 
 		this.messageInput.mount(container);

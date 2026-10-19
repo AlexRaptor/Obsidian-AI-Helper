@@ -1,3 +1,4 @@
+import { relatedNotesBlocks } from "./related-notes-markdown";
 import type { DataAdapter, PaneType } from "obsidian";
 import type { ServerClient } from "./server-client";
 import { isEmbeddingConfigured, type EmbeddingConnection } from "./note-search";
@@ -807,6 +808,57 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			for (const source of selected) await this.validateSource(source);
 			check(version, signal);
 			return selected;
+		},
+		isAllowed(path: string): boolean { return /\.md$/i.test(path) && allowed(path); },
+		/** A fixed pool of 24 notes, with up to 3 fragments each. No chat threshold or source budget. */
+		async connectionCandidates(text: string, excluded: ReadonlySet<string>, signal: AbortSignal): Promise<NoteSource[][]> {
+			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
+			const version = revision;
+			await settleWrites();
+			const saved = await store.read();
+			const identity = await fingerprint();
+			check(version, signal);
+			const notes = saved.notes.filter(validNote).filter(note => allowed(note.path) && !pending.has(note.path) && note.fingerprint === identity);
+			if (progress.state === "idle") restoreProgress(saved.progress, identity);
+			if (!notes.some(note => note.fragments.length)) throw new NoteSearchError("search-rebuild");
+			const eligible = notes.filter(note => !excluded.has(note.path));
+			if (!eligible.length) return [];
+			const current: { note: IndexedNote; raw: string }[] = [];
+			for (const note of eligible) {
+				check(version, signal);
+				const raw = await environment.read(note.path);
+				check(version, signal);
+				if (raw !== null && await hash(raw) === note.contentHash) current.push({ note, raw });
+			}
+			if (!current.length) throw new NoteSearchError("search-rebuild");
+			const [query] = await embed([text], signal);
+			check(version, signal);
+			const groups: NoteSource[][] = [];
+			for (const { note, raw } of current) {
+				check(version, signal);
+				const clean = relatedNotesBlocks(raw).text;
+				if (!clean.trim()) continue;
+				let fragments = note.fragments;
+				// Old generated explanations must influence neither ranking nor model context.
+				// Only already indexed, current, permitted notes reach this refresh.
+				if (clean !== raw) {
+					const parts = [...noteFragments(note.path, clean, environment.metadata?.(note.path, clean) ?? {}, fragmentOptions)];
+					fragments = [];
+					for (const part of parts) {
+						const [vector] = await embed([part.text], signal);
+						check(version, signal); fragments.push({ ...part, vector });
+					}
+				}
+				const sources = fragments.map(fragment => {
+					if (query.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
+					const similarity = query.reduce((sum, value, i) => sum + value * fragment.vector[i], 0) / (Math.hypot(...query) * Math.hypot(...fragment.vector));
+					return { path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, similarity, partial: progress.state !== "complete" || current.length !== eligible.length };
+				}).sort((a, b) => b.similarity - a.similarity || a.text.localeCompare(b.text, "en"));
+				if (sources.length) groups.push(sources.slice(0, 3));
+				await new Promise<void>(resolve => setTimeout(resolve, 0));
+			}
+			check(version, signal);
+			return groups.sort((a, b) => b[0].similarity - a[0].similarity || a[0].path.localeCompare(b[0].path, "en")).slice(0, 24);
 		},
 		async validateSource(source: NoteSource): Promise<void> {
 			const version = revision;
