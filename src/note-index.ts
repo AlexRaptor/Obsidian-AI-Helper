@@ -67,6 +67,8 @@ async function hash(text: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export { hash as noteContentHash };
+
 // Derived data is validated before use, including records from earlier plugin versions.
 function validNote(value: unknown): value is IndexedNote {
 	if (!value || typeof value !== "object") return false;

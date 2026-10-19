@@ -1,15 +1,17 @@
+import { readNoteSnapshot } from "./note-attachments";
 import { noteFragments } from "./note-fragments";
 import type { AiHelperSettings } from "./settings";
-import { MarkdownView, type TFile } from "obsidian";
+import { MarkdownView, type TFile, type PaneType } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { appendRelatedNotes, linkedNotePaths, relatedNotesBlocks } from "./related-notes-markdown";
-import { inConnectionScope, NoteSearchError, type NoteSource } from "./note-index";
+import { inConnectionScope, noteContentHash, NoteSearchError, type NoteSource } from "./note-index";
 import type { LocaleKey } from "./i18n";
 import { effectiveContextWindow } from "./context-window";
 import { conservativePromptTokens } from "./prompt-tokens";
 import { connectionUrl, type ChatMessage } from "./server-client";
 
-export interface ConnectionSuggestion { source: NoteSource; fragments: NoteSource[]; explanation: string; selected?: boolean; rejected?: boolean; added?: boolean }
+export interface CandidateSnapshot { file: TFile; text: string; }
+export interface ConnectionSuggestion { snapshot: CandidateSnapshot; skipped?: LocaleKey; source: NoteSource; fragments: NoteSource[]; explanation: string; selected?: boolean; rejected?: boolean; added?: boolean }
 export interface ConnectionResult {
 	file: TFile;
 	path: string;
@@ -41,13 +43,67 @@ export class NoteConnections {
 	result?: ConnectionResult;
 	writing = false;
 	summary?: string;
-	private search?: { result: ConnectionResult; settings: AiHelperSettings; folders?: readonly string[]; groups?: NoteSource[][]; cursor: number };
+	private search?: { result: ConnectionResult; settings: AiHelperSettings; folders?: readonly string[]; groups?: NoteSource[][]; files: Map<string, TFile>; snapshots: Map<string, CandidateSnapshot>; cursor: number };
 	get canContinue(): boolean { return !!this.search && (!this.search.groups || this.search.cursor < this.search.groups.length); }
 	get exhausted(): boolean { return !!this.search?.groups && this.search.cursor === this.search.groups.length; }
+	private attemptedWrite?: { result: ConnectionResult; text: string };
+	private restart?: { file: TFile; folders?: readonly string[] };
+	get canRestart(): boolean { return !!this.restart; }
+	async restartConfirmed(): Promise<void> {
+		const next = this.restart;
+		if (!next || this.writing) return;
+		try {
+			const snapshot = await readNoteSnapshot(this.plugin.app, next.file);
+			if (this.restart !== next || this.writing) return;
+			if (this.plugin.app.vault.getFileByPath(next.file.path) !== next.file) throw new Error('unavailable');
+			for (const item of this.result?.suggestions ?? []) item.selected = false;
+			this.restart = undefined;
+			await this.start(next.file, snapshot.markdown, next.folders);
+		} catch {
+			if (this.restart === next && this.result) { this.result.status = 'connections-restart-unavailable'; this.changed(); }
+		}
+	}
+
 	private request?: AbortController;
 	private release?: () => void;
 	get active(): boolean { return !!this.request; }
 	constructor(private plugin: AiHelperPlugin, private changed: () => void) {}
+	private watching = false;
+	private fileRevisions = new WeakMap<object, number>();
+	private watchFiles(): void {
+		if (this.watching) return;
+		this.watching = true;
+		const { plugin } = this;
+		const refresh = () => { if (this.result) { this.result.path = this.result.file.path; this.changed(); } };
+		if (plugin.app.vault?.on) plugin.registerEvent(plugin.app.vault.on('rename', refresh));
+		if (plugin.app.vault?.on) plugin.registerEvent(plugin.app.vault.on('delete', () => {
+			if (this.result && plugin.app.vault.getFileByPath(this.result.file.path) !== this.result.file) this.invalidateSource();
+			refresh();
+		}));
+		if (plugin.app.vault?.on) plugin.registerEvent(plugin.app.vault.on('modify', file => {
+			this.fileRevisions.set(file, (this.fileRevisions.get(file) ?? 0) + 1);
+			const result = this.result;
+			if (file !== result?.file || this.writing) return;
+			void plugin.app.vault.read(result.file).then(text => {
+				if (this.result !== result || this.writing) return;
+				try { this.sourceCheck(result, text); } catch { this.invalidateSource(); }
+			}).catch(() => { if (this.result === result) this.invalidateSource(); });
+		}));
+		if (plugin.app.workspace.on) plugin.registerEvent(plugin.app.workspace.on('editor-change', (_editor, view) => {
+			const result = this.result;
+			if (!result || view.file !== result.file || this.writing) return;
+			try { this.sourceCheck(result, _editor.getValue()); } catch { this.invalidateSource(); }
+		}));
+	}
+	private invalidateSource(): void {
+		if (!this.result) return;
+		this.result.stale = true; this.result.status = 'connections-source-changed'; this.changed();
+	}
+	async openSnapshot(snapshot: CandidateSnapshot, source: NoteSource, newLeaf: boolean | PaneType): Promise<void> {
+		if (await this.snapshotReason(snapshot)) throw new NoteSearchError('search-rebuild');
+		const heading = source.headings.at(-1);
+		await this.plugin.app.workspace.openLinkText(snapshot.file.path + (heading ? `#${heading}` : ''), '', newLeaf);
+	}
 
 	cancel(): void {
 		this.request?.abort(); this.request = undefined;
@@ -64,7 +120,7 @@ export class NoteConnections {
 	}
 	clear(): boolean {
 		if (!this.canReplace()) return false;
-		this.cancel(); this.search = undefined; this.result = undefined; this.summary = undefined; this.changed(); return true;
+		this.cancel(); this.search = undefined; this.restart = undefined; this.attemptedWrite = undefined; this.result = undefined; this.summary = undefined; this.changed(); return true;
 	}
 
 
@@ -75,6 +131,41 @@ export class NoteConnections {
 		this.changed();
 	}
 
+	private views(file: TFile): MarkdownView[] {
+		const { workspace } = this.plugin.app;
+		return [...new Set([workspace.getActiveViewOfType(MarkdownView), ...workspace.getLeavesOfType('markdown').map(leaf => leaf.view)])]
+			.filter((view): view is MarkdownView => view instanceof MarkdownView && view.file === file);
+	}
+	private editorsMatch(file: TFile, text: string): boolean {
+		return this.views(file).every(view => (view.getMode() === 'source' ? view.editor.getValue() : view.getViewData()) === text);
+	}
+	private sourceCheck(result: ConnectionResult, text: string): void {
+		const { file } = result;
+		result.path = file.path;
+		// A rejected process promise can still have persisted exactly our own text.
+		// Recognizing that text permits a deduplicated retry without claiming success.
+		if (!result.stale && this.attemptedWrite?.result === result && text === this.attemptedWrite.text && this.editorsMatch(file, text)) {
+			result.text = text; this.attemptedWrite = undefined;
+		}
+		if (result.stale || this.plugin.app.vault.getFileByPath(file.path) !== file || text !== result.text || !this.editorsMatch(file, text) || !this.plugin.noteSearch.isAllowed(file.path)) {
+			result.stale = true; throw new Error('source-changed');
+		}
+	}
+	private candidateReason(snapshot?: CandidateSnapshot): LocaleKey | undefined {
+		if (!snapshot || this.plugin.app.vault.getFileByPath(snapshot.file.path) !== snapshot.file) return 'connections-target-deleted';
+		if (!this.plugin.noteSearch.isAllowed(snapshot.file.path)) return 'connections-target-excluded';
+		if (!this.editorsMatch(snapshot.file, snapshot.text)) return 'connections-target-changed';
+	}
+
+	private async snapshotReason(snapshot: CandidateSnapshot): Promise<LocaleKey | undefined> {
+		const reason = this.candidateReason(snapshot);
+		if (reason) return reason;
+		try {
+			const text = await this.plugin.app.vault.read(snapshot.file);
+			return this.candidateReason(snapshot) ?? (text !== snapshot.text ? 'connections-target-changed' : undefined);
+		} catch { return this.candidateReason(snapshot) ?? 'connections-target-unavailable'; }
+	}
+
 	async addSelected(): Promise<void> {
 		const result = this.result;
 		if (!result || this.writing || this.active) return;
@@ -83,63 +174,74 @@ export class NoteConnections {
 		if (!selected.length) return;
 		this.writing = true; this.summary = undefined; this.changed();
 		try {
-			const { vault, workspace, metadataCache } = this.plugin.app;
-			const versions: { file: TFile; path: string; mtime: number | undefined; size: number | undefined; text: string }[] = [];
+			const { vault, metadataCache } = this.plugin.app;
+			if (vault.getFileByPath(result.file.path) !== result.file) this.sourceCheck(result, result.text);
+			this.sourceCheck(result, await vault.read(result.file));
+			const versions = new Map<ConnectionSuggestion, { mtime: number; size: number; revision: number }>();
 			for (const item of selected) {
-				const file = vault.getFileByPath(item.source.path);
-				if (!file) throw new Error('target-changed');
-				const mtime = file.stat?.mtime, size = file.stat?.size;
-				const text = await vault.read(file);
-				await this.plugin.noteSearch.validateSource(item.source);
-				versions.push({ file, path: file.path, mtime, size, text });
+				item.skipped = this.candidateReason(item.snapshot);
+				if (item.skipped) continue;
+				const snapshot = item.snapshot;
+				const { file } = snapshot;
+				const version = { mtime: file.stat?.mtime, size: file.stat?.size, revision: this.fileRevisions.get(file) ?? 0 };
+				item.skipped = await this.snapshotReason(snapshot);
+				if (!item.skipped) versions.set(item, version);
 			}
-			const current = await vault.read(result.file);
-			const check = (text: string) => {
-				if (vault.getFileByPath(result.path) !== result.file || result.file.path !== result.path || text !== result.text) throw new Error('source-changed');
-				const views = workspace.getLeavesOfType('markdown').map(leaf => leaf.view);
-				const active = workspace.getActiveViewOfType(MarkdownView);
-				if (active) views.push(active);
-				for (const view of views) if (view instanceof MarkdownView && view.file === result.file && view.editor.getValue() !== text) throw new Error('source-changed');
-				if (!this.plugin.noteSearch.isAllowed(result.path)) throw new Error('source-changed');
-				for (const version of versions) {
-					if (vault.getFileByPath(version.path) !== version.file || version.file.path !== version.path || version.file.stat?.mtime !== version.mtime || version.file.stat?.size !== version.size || !this.plugin.noteSearch.isAllowed(version.path)) throw new Error('target-changed');
-					for (const view of views) if (view instanceof MarkdownView && view.file === version.file && view.editor.getValue() !== version.text) throw new Error('target-changed');
+			let additions: ConnectionSuggestion[] = [];
+			const update = (text: string) => {
+				// Source conflicts take priority even when every candidate was skipped.
+				this.sourceCheck(result, text);
+				const linked = linkedNotePaths(text, destination => metadataCache.getFirstLinkpathDest(destination, result.file.path)?.path);
+				additions = [];
+				for (const item of selected) {
+					const version = versions.get(item), snapshot = item.snapshot;
+					if (!version || !snapshot) continue;
+					const { file } = snapshot;
+					item.skipped = this.candidateReason(snapshot);
+					if (!item.skipped && (file.stat?.mtime !== version.mtime || file.stat?.size !== version.size || (this.fileRevisions.get(file) ?? 0) !== version.revision)) item.skipped = 'connections-target-changed';
+					if (!item.skipped && linked.has(file.path)) item.skipped = 'connections-duplicates';
+					if (!item.skipped) additions.push(item);
 				}
+				return additions.length ? appendRelatedNotes(text, additions.map(item => `- ${this.plugin.app.fileManager.generateMarkdownLink(item.snapshot.file, result.file.path)} — ${item.explanation}`), this.plugin.t('connections-heading')) : text;
 			};
-			check(current);
-			const linked = linkedNotePaths(current, destination => metadataCache.getFirstLinkpathDest(destination, result.path)?.path);
-			const additions = selected.filter(item => !linked.has(item.source.path));
-			const lines = additions.map(item => {
-				const file = vault.getFileByPath(item.source.path);
-				if (!file) throw new Error('target-changed');
-				return `- ${this.plugin.app.fileManager.generateMarkdownLink(file, result.path)} — ${item.explanation}`;
-			});
-			const next = appendRelatedNotes(current, lines, this.plugin.t('connections-heading'));
-			if (additions.length) await vault.process(result.file, text => { check(text); return next; });
-			result.text = additions.length ? next : current;
-			result.status = 'connections-ready';
+			const current = await vault.read(result.file);
+			const next = update(current);
+			if (additions.length) {
+				result.text = await vault.process(result.file, text => {
+					const next = update(text);
+					this.attemptedWrite = { result, text: next }; return next;
+				});
+				this.attemptedWrite = undefined;
+			}
+			else result.text = next;
+			result.path = result.file.path; result.status = 'connections-ready';
 			for (const item of additions) { item.added = true; item.selected = false; }
 			this.summary = this.plugin.t('connections-saved').replace('{count}', String(additions.length));
-			if (additions.length !== selected.length) this.summary += ' ' + this.plugin.t('connections-duplicates');
+			if (selected.some(item => item.skipped === 'connections-duplicates')) this.summary += ' ' + this.plugin.t('connections-duplicates');
 		} catch (error) {
-			if (error instanceof Error && error.message === 'source-changed') result.stale = true;
-			result.status = error instanceof Error && error.message === 'malformed-related-notes' ? 'connections-block-error' : error instanceof Error && error.message === 'source-changed' ? 'connections-source-changed' : error instanceof Error && error.message === 'target-changed' || error instanceof NoteSearchError ? 'connections-target-changed' : 'connections-write-error';
+			result.status = error instanceof Error && error.message === 'malformed-related-notes' ? 'connections-block-error' : error instanceof Error && error.message === 'source-changed' ? 'connections-source-changed' : 'connections-write-error';
 		} finally { this.writing = false; this.changed(); }
 	}
 
 	async start(file: TFile, raw: string, folders?: readonly string[]): Promise<void> {
-		if (!this.canReplace()) return;
+		if (!this.canReplace()) {
+			if (!this.writing) { this.restart = { file, folders }; this.changed(); }
+			return;
+		}
+		this.restart = undefined;
+		this.attemptedWrite = undefined;
+		this.watchFiles();
 		this.summary = undefined;
 		// A new search can replace this operation, but cannot cancel another model owner.
 		this.cancel();
 		const result: ConnectionResult = { file, path: file.path, text: raw, status: 'connections-running', partial: false, suggestions: [] };
 		this.result = result;
-		this.search = { result, settings: { ...this.plugin.settings }, folders: folders ? [...folders] : undefined, cursor: 0 };
+		this.search = { result, settings: { ...this.plugin.settings }, folders: folders ? [...folders] : undefined, files: new Map(this.plugin.app.vault.getMarkdownFiles().map(file => [file.path, file])), snapshots: new Map(), cursor: 0 };
 		await this.more();
 	}
 
 	async more(): Promise<void> {
-		if (this.active || this.writing || !this.canContinue) return;
+		if (this.active || this.writing || !this.canContinue || this.result?.stale) return;
 		const search = this.search!;
 		const { result, settings, folders } = search;
 		const { file } = result;
@@ -198,7 +300,19 @@ export class NoteConnections {
 				let fragments = groups[index];
 				if (!live()) return;
 				if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError('search-excluded');
-				for (const source of fragments) await this.plugin.noteSearch.validateSource(source);
+				const originalPath = fragments[0].path;
+				let snapshot = search.snapshots.get(originalPath);
+				if (!snapshot) {
+					const candidateFile = search.files.get(originalPath);
+					if (candidateFile && this.plugin.app.vault.getFileByPath(candidateFile.path) === candidateFile) {
+						let text: string;
+						try { text = await this.plugin.app.vault.read(candidateFile); } catch { cursor++; continue; }
+						if (await noteContentHash(text) === fragments[0].contentHash) {
+							snapshot = { file: candidateFile, text }; search.snapshots.set(originalPath, snapshot);
+						}
+					}
+				}
+				if (!snapshot || await this.snapshotReason(snapshot)) { cursor++; continue; }
 				if (!live()) return;
 				const id = `c${index + 1}`;
 				const candidateMessages = () => messagesFor({ id, path: fragments[0].path, fragments: fragments.map(({ headings, text }) => ({ headings, text })) });
@@ -223,21 +337,22 @@ export class NoteConnections {
 					(record.explanation !== null && (typeof record.explanation !== 'string' || record.explanation.trim().length < 10 || record.explanation.length > 600 || /[\[\]<>`*_\r\n]|(?:https?:|obsidian:|www\.)/i.test(record.explanation)))) {
 					result.status = 'connections-invalid'; return;
 				}
-				for (const source of fragments) await this.plugin.noteSearch.validateSource(source);
+				const skipped = await this.snapshotReason(snapshot);
 				if (!live()) return;
-				if (record.explanation !== null) suggestions.push({ source: fragments[0], fragments, explanation: (record.explanation as string).trim() });
+				if (record.explanation !== null) suggestions.push({ snapshot, skipped, source: fragments[0], fragments, explanation: (record.explanation as string).trim() });
 				cursor++;
 				if (suggestions.length === Number(settings.connectionSuggestionCount)) break;
 			}
-			// Publish the completed portion atomically, with a final exclusion/version check.
+			// Publish analyzed snapshots, then lock writing if the source changed.
 			if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError('search-excluded');
-			for (const suggestion of suggestions) await this.plugin.noteSearch.validateSource(suggestion.source);
 			if (!live()) return;
 			result.suggestions.push(...suggestions);
 			search.cursor = cursor;
 			result.status = result.suggestions.length ? 'connections-ready' : 'connections-none';
+			this.sourceCheck(result, result.text);
+			this.sourceCheck(result, (await readNoteSnapshot(this.plugin.app, result.file)).markdown);
 		} catch (error) {
-			if (this.result === result && !request.signal.aborted) result.status = error instanceof NoteSearchError ? error.code : 'search-failed';
+			if (this.result === result && !request.signal.aborted) result.status = result.stale ? 'connections-source-changed' : error instanceof NoteSearchError ? error.code : 'search-failed';
 		} finally {
 			lease?.release();
 			if (this.request === request) { this.request = undefined; this.release = undefined; }

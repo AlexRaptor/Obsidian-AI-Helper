@@ -15,6 +15,8 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	const file = entries.get("Заметки/Мысль.md")!;
 	let text = options.source ?? "# Обучение\nАктивное вспоминание помогает удерживать знания.";
 	const editor = Object.assign(Object.create(MarkdownView.prototype), { file, getMode: () => "source", editor: { getValue: () => text } });
+	const vaultEvents = new Map<string, ((...args: any[]) => void)[]>();
+	const emitVault = (name: string, ...args: any[]) => vaultEvents.get(name)?.forEach(callback => callback(...args));
 	const events = new Map<string, (...args: any[]) => void>();
 	const commands = new Map<string, () => void>(); const requests: any[] = []; const embeddings: string[][] = [];
 	const network = vi.fn(async (url: string, init?: RequestInit) => {
@@ -26,7 +28,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	vi.stubGlobal('fetch', network);
 	const adapter = new FileSystemAdapter(); adapter.getBasePath = () => '/связи';
 	let chat: ChatView;
-	const app = { fileManager: { generateMarkdownLink: (file: TFile) => '[[' + file.path.replace(/\.md$/, '') + ']]' }, vault: { adapter, on: () => ({}), offref() {}, getMarkdownFiles: () => [...entries.values()], getFiles: () => [...entries.values()], getFileByPath: (path: string) => entries.get(path) ?? null, read: vi.fn(async (file: TFile) => files.get(file.path)!), process: vi.fn(async (file: TFile, update: (text: string) => string) => { const next = update(files.get(file.path)!); files.set(file.path, next); if (editor.file === file) text = next; return next; }) }, metadataCache: { getFirstLinkpathDest: (name: string, from: string) => {
+	const app = { fileManager: { generateMarkdownLink: (file: TFile) => '[[' + file.path.replace(/\.md$/, '') + ']]' }, vault: { adapter, on: (name: string, callback: (...args: any[]) => void) => { vaultEvents.set(name, [...(vaultEvents.get(name) ?? []), callback]); return {}; }, offref() {}, getMarkdownFiles: () => [...entries.values()], getFiles: () => [...entries.values()], getFileByPath: (path: string) => entries.get(path) ?? null, read: vi.fn(async (file: TFile) => files.get(file.path)!), process: vi.fn(async (file: TFile, update: (text: string) => string) => { const next = update(files.get(file.path)!); files.set(file.path, next); if (editor.file === file) text = next; return next; }) }, metadataCache: { getFirstLinkpathDest: (name: string, from: string) => {
 		const parts = from.split('/').slice(0, -1);
 		for (const part of name.split('/')) { if (part === '..') parts.pop(); else if (part !== '.') parts.push(part); }
 		const local = parts.join('/');
@@ -40,7 +42,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	if (options.index !== false) for (const path of files.keys()) { try { await plugin.noteSearch.index(path); } catch {} }
 	requests.length = 0; embeddings.length = 0; vi.mocked(app.vault.read).mockClear();
 	const root = chat.contentEl as unknown as TestElement;
-	return { plugin, chat, root, events, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента:')); } };
+	return { plugin, chat, root, events, emitVault, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента:')); } };
 }
 function answer(id: string, explanation = 'Практика дополняет активное вспоминание расписанием повторений через день и неделю.', finish = 'stop') { return Response.json({ choices: [{ message: { content: JSON.stringify({ candidate: id, explanation }) }, finish_reason: finish }] }); }
 
@@ -672,5 +674,251 @@ it('сохраняет длинную иерархию заголовков пр
 	expect(data.source.fragments.every((part: any) => part.headings.includes(heading))).toBe(true);
 	expect(JSON.stringify(data.source.fragments)).toContain('Проверяем знания через неделю');
 	expect(env.root.getText()).toContain('Анализ выполнен по фрагментам');
+	await env.chat.onClose();
+});
+
+function moveNote(env: Awaited<ReturnType<typeof setup>>, from: string, to: string) {
+	const file = env.entries.get(from)!;
+	env.entries.delete(from); env.entries.set(to, file);
+	env.files.set(to, env.files.get(from)!); env.files.delete(from);
+	Object.assign(file, { path: to, basename: to.split('/').at(-1)!.slice(0, -3) });
+}
+
+it('сохраняет выбранную связь после перемещения обеих заметок без повторного анализа', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	env.root.find('ai-helper-connection-select').click();
+	moveNote(env, 'Заметки/Мысль.md', 'Архив/Идея.md');
+	moveNote(env, 'Примеры/Практика.md', 'Методы/Повторение.md');
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Архив/Идея.md')).toContain('[[Методы/Повторение]]');
+	expect(env.files.has('Заметки/Мысль.md')).toBe(false); expect(env.requests).toHaveLength(1);
+	await env.chat.onClose();
+});
+
+it('после правки исходника сохраняет выбор для просмотра и предлагает явный новый поиск со сбросом отметок', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	env.root.find('ai-helper-connection-select').click();
+	env.setText(sourceText + '\nНовая мысль.'); env.files.set('Заметки/Мысль.md', sourceText + '\nНовая мысль.');
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Запустите новый поиск'));
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Выбор будет потерян'));
+	env.root.find('ai-helper-connections-restart').click();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+	await vi.waitFor(() => expect(env.chat.isGenerating()).toBe(false));
+	expect(env.root.getText()).not.toContain('Снять выбор');
+	expect(JSON.stringify(env.requests[1])).toContain('Новая мысль');
+	await env.chat.onClose();
+});
+
+it.each(['изменён', 'удалён', 'заменён'])('пропускает кандидата (%s), сохраняя остальные выбранные связи', async kind => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Продолжение практики вспоминания.' } }); await env.run();
+	const cards = env.root.find('ai-helper-connections').children.filter(child => child.classes.has('ai-helper-connection'));
+	for (const card of cards) card.find('ai-helper-connection-select').click();
+	if (kind === 'изменён') env.files.set('Примеры/Практика.md', 'Другая практика.');
+	if (kind === 'удалён') { env.entries.delete('Примеры/Практика.md'); env.files.delete('Примеры/Практика.md'); }
+	if (kind === 'заменён') env.entries.set('Примеры/Практика.md', Object.assign(new TFile(), { path: 'Примеры/Практика.md', extension: 'md' }));
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.root.getText()).toContain('Пропущено:');
+	expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Продолжение]]');
+	expect(env.files.get('Заметки/Мысль.md')).not.toContain('[[Примеры/Практика]]');
+	await env.chat.onClose();
+});
+
+it('правка исходника во время запроса оставляет карточки, но блокирует добавление', async () => {
+	const pending = deferred<Response>();
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText }, completion: () => pending.promise });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.setText(sourceText + '\nПравка во время анализа.'); pending.resolve(answer('c1'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
+	env.root.find('ai-helper-connection-select').click();
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	expect(env.root.getText()).toContain('Запустите новый поиск');
+	await env.chat.onClose();
+});
+
+it.each(['перемещение', 'изменение', 'удаление', 'замена'])('событие кандидата во время запроса: %s не подменяет основу объяснения', async kind => {
+	const pending = deferred<Response>();
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText }, completion: () => pending.promise });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	const original = env.files.get('Примеры/Практика.md')!;
+	if (kind === 'перемещение') moveNote(env, 'Примеры/Практика.md', 'Архив/Повторение.md');
+	if (kind === 'изменение') env.files.set('Примеры/Практика.md', 'Новый материал, который модель не видела.');
+	if (kind === 'удаление') env.entries.delete('Примеры/Практика.md');
+	if (kind === 'замена') env.entries.set('Примеры/Практика.md', Object.assign(new TFile(), { path: 'Примеры/Практика.md', extension: 'md' }));
+	pending.resolve(answer('c1'));
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента:'));
+	expect(JSON.stringify(env.requests)).toContain('Интервальное повторение');
+	expect(JSON.stringify(env.requests)).not.toContain('Новый материал');
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain(`Добавлено связей: ${kind === 'перемещение' ? 1 : 0}`));
+	if (kind === 'перемещение') {
+		expect(env.files.get('Заметки/Мысль.md')).toContain('[[Архив/Повторение]]');
+		expect(env.files.get('Архив/Повторение.md')).toBe(original);
+	} else { expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText); expect(env.root.getText()).toContain('Пропущено:'); }
+	await env.chat.onClose();
+});
+
+it('переименование кандидата внутри блокировки записи использует его актуальную ссылку', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	const process = vi.mocked(env.app.vault.process).getMockImplementation()!;
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => {
+		moveNote(env, 'Примеры/Практика.md', 'Примеры/Метод.md'); return process(file, update);
+	});
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Метод]]');
+	await env.chat.onClose();
+});
+
+
+it.each(['переименование', 'перемещение', 'удаление', 'замена'])('исходная заметка во время запроса: %s сохраняет идентичность операции', async kind => {
+	const pending = deferred<Response>();
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText }, completion: () => pending.promise });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	const file = env.entries.get('Заметки/Мысль.md')!;
+	if (kind === 'переименование' || kind === 'перемещение') {
+		moveNote(env, file.path, kind === 'переименование' ? 'Заметки/Идея.md' : 'Архив/Мысль.md');
+		env.emitVault('rename', file, 'Заметки/Мысль.md');
+	} else {
+		env.entries.delete(file.path); env.emitVault('delete', file);
+		if (kind === 'замена') env.entries.set(file.path, Object.assign(new TFile(), { path: file.path, extension: 'md' }));
+	}
+	pending.resolve(answer('c1')); await vi.waitFor(() => expect(env.chat.isGenerating()).toBe(false));
+	env.root.find('ai-helper-connection-select').click();
+	if (kind === 'удаление' || kind === 'замена') {
+		expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+		expect(env.app.vault.process).not.toHaveBeenCalled();
+	} else {
+		env.root.find('ai-helper-connections-add').click();
+		await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+		expect(env.files.get(file.path)).toContain('[[Примеры/Практика]]');
+	}
+	await env.chat.onClose();
+});
+
+it('событие редактора немедленно блокирует сохранение и восстановление прежнего текста не снимает блокировку', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	env.root.find('ai-helper-connection-select').click();
+	env.setText(sourceText + '\nПравка в редакторе.'); env.events.get('editor-change')!(env.editor.editor, env.editor);
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	env.setText(sourceText); env.events.get('editor-change')!(env.editor.editor, env.editor);
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	expect(env.root.getText()).toContain('Снять выбор'); await env.chat.onClose();
+});
+
+it('правка исходника внутри записи блокирует весь набор даже при устаревшем кандидате', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Пример продолжения вспоминания.' } }); await env.run();
+	const cards = env.root.find('ai-helper-connections').children.filter(child => child.classes.has('ai-helper-connection'));
+	for (const card of cards) card.find('ai-helper-connection-select').click();
+	const file = env.editor.file;
+	const process = vi.mocked(env.app.vault.process).getMockImplementation()!;
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => {
+		env.files.set('Примеры/Практика.md', 'Изменённый кандидат.');
+		Object.assign(env.entries.get('Примеры/Практика.md')!, { stat: { mtime: 5, size: 70 } });
+		env.setText(sourceText + '\nНе терять эту правку.');
+		return process(file, update);
+	});
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Запустите новый поиск'));
+	expect(env.files.get(file.path)).toBe(sourceText); expect(env.editor.editor.getValue()).toContain('Не терять');
+	expect(env.root.getText()).not.toContain('Добавлено связей:'); await env.chat.onClose();
+});
+
+it('актуальный редактор кандидата важнее сохранённого текста и кэша метаданных', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	const candidate = env.entries.get('Примеры/Практика.md')!;
+	const view = Object.assign(Object.create(MarkdownView.prototype), { file: candidate, getMode: () => 'source', editor: { getValue: () => 'Несохранённая правка кандидата.' } });
+	const leaves = env.app.workspace.getLeavesOfType.bind(env.app.workspace);
+	vi.spyOn(env.app.workspace, 'getLeavesOfType').mockImplementation(type => type === 'markdown' ? [...leaves(type), { view } as WorkspaceLeaf] : leaves(type));
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 0'));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText);
+	expect(env.root.getText()).toContain('содержимое кандидата изменилось'); await env.chat.onClose();
+});
+
+it('потеря подтверждения после записи позволяет безопасный повтор без дублей и ложного успеха', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	const process = vi.mocked(env.app.vault.process).getMockImplementation()!;
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => { await process(file, update); throw new Error('Подтверждение записи потеряно.'); });
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Не удалось добавить связи'));
+	expect(env.root.getText()).not.toContain('Добавлено связей:'); expect(() => env.root.find('ai-helper-connection-added')).toThrow('Element not found');
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('ссылка уже существует'));
+	expect(env.files.get('Заметки/Мысль.md')!.match(/\[\[Примеры\/Практика\]\]/g)).toHaveLength(1);
+	expect(env.root.getText()).not.toContain('Запустите новый поиск'); await env.chat.onClose();
+});
+
+it('подтверждение нового поиска читает редактор заново до сброса выбора', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Выбор будет потерян'));
+	env.setText(sourceText + '\nПоследняя правка после предупреждения.');
+	env.root.find('ai-helper-connections-restart').click();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+	await vi.waitFor(() => expect(env.chat.isGenerating()).toBe(false));
+	expect(JSON.stringify(env.requests[1])).toContain('Последняя правка после предупреждения');
+	expect(env.root.getText()).not.toContain('Запустите новый поиск'); expect(env.root.getText()).not.toContain('Снять выбор');
+	await env.chat.onClose();
+});
+
+it('исчезновение кандидата во время чтения не отменяет сохранение остальных выбранных', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Продолжение активного вспоминания.' } }); await env.run();
+	for (const card of env.root.find('ai-helper-connections').children.filter(child => child.classes.has('ai-helper-connection'))) card.find('ai-helper-connection-select').click();
+	const read = vi.mocked(env.app.vault.read).getMockImplementation()!;
+	vi.mocked(env.app.vault.read).mockImplementation(async file => {
+		if (file.path === 'Примеры/Практика.md') { env.entries.delete(file.path); throw new Error('Файл исчез во время чтения.'); }
+		return read(file);
+	});
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Продолжение]]');
+	expect(env.files.get('Заметки/Мысль.md')).not.toContain('[[Примеры/Практика]]');
+	expect(env.root.getText()).toContain('кандидат удалён'); await env.chat.onClose();
+});
+
+it('удаление кандидата при чтении после ответа модели сохраняет всю остальную порцию', async () => {
+	let removeOnRead = false;
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Продолжение активного вспоминания.' }, completion: async body => {
+		const candidate = JSON.parse(body.messages.at(-1).content).candidate;
+		if (candidate.path === 'Примеры/Практика.md') removeOnRead = true;
+		return answer(candidate.id);
+	} });
+	const read = vi.mocked(env.app.vault.read).getMockImplementation()!;
+	vi.mocked(env.app.vault.read).mockImplementation(async file => {
+		if (removeOnRead && file.path === 'Примеры/Практика.md') { env.entries.delete(file.path); throw new Error('Файл удалён при чтении.'); }
+		return read(file);
+	});
+	await env.run(); expect(env.requests).toHaveLength(2); expect(env.root.getText()).toContain('кандидат удалён');
+	for (const card of env.root.find('ai-helper-connections').children.filter(child => child.classes.has('ai-helper-connection'))) card.find('ai-helper-connection-select').click();
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Продолжение]]'); await env.chat.onClose();
+});
+
+it('недоступность исходника при подтверждении нового поиска сохраняет прежние карточки и выбор', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Выбор будет потерян'));
+	env.entries.delete('Заметки/Мысль.md'); env.root.find('ai-helper-connections-restart').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Не удалось прочитать заметку для нового поиска'));
+	expect(env.root.getText()).toContain('Снять выбор'); expect(env.requests).toHaveLength(1); await env.chat.onClose();
+});
+
+it('событие изменения кандидата между проверкой и записью учитывается даже при прежнем размере и времени файла', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText } }); await env.run();
+	const process = vi.mocked(env.app.vault.process).getMockImplementation()!;
+	vi.mocked(env.app.vault.process).mockImplementationOnce(async (file, update) => {
+		const target = env.entries.get('Примеры/Практика.md')!;
+		env.files.set(target.path, 'Правка с прежними метаданными файла.'); env.emitVault('modify', target);
+		return process(file, update);
+	});
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 0'));
+	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText); expect(env.root.getText()).toContain('содержимое кандидата изменилось');
 	await env.chat.onClose();
 });

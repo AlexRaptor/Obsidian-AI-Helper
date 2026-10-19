@@ -1,4 +1,4 @@
-import { NoteConnections, type ConnectionResult } from "./note-connections";
+import { NoteConnections, type CandidateSnapshot, type ConnectionResult } from "./note-connections";
 import { MarkdownView, ButtonComponent, DropdownComponent, Component, ItemView, MarkdownRenderer, Menu, Keymap, ProgressBarComponent, setIcon, setTooltip, WorkspaceLeaf, type HoverParent, type HoverPopover, type PaneType, type EventRef, type TFile } from "obsidian";
 import { showStatusNotice, setStatusTone, indexStatusTone } from "./ui-status";
 import { isEmbeddingConfigured } from "./note-search";
@@ -289,21 +289,26 @@ export class ChatView extends ItemView implements HoverParent {
 			this.followingMessages = false;
 			this.messagesEl.scrollTop = 0;
 		}
-		root.createEl("h3", { text: `${this.t("connections-title")}: ${result.path}` });
+		root.createEl("h3", { text: `${this.t("connections-title")}: ${result.file.path}` });
 		const status = root.createDiv({ text: this.t(result.status) });
 		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : ["connections-model", "connections-invalid", "search-failed", "search-storage", "search-query-failed"].includes(result.status) ? "error" : "warning");
+		if (this.connections.canRestart) {
+			setStatusTone(root.createDiv({ text: this.t("connections-restart-warning") }), "warning");
+			new ButtonComponent(root).setButtonText(this.t("connections-restart")).setDisabled(this.connections.writing).onClick(() => { void this.connections.restartConfirmed(); }).buttonEl.addClass("ai-helper-connections-restart", "mod-warning");
+		}
 		if (this.connections.active) new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
-		if (this.connections.canContinue) new ButtonComponent(root).setButtonText(this.t("connections-more")).setDisabled(this.connections.active || this.connections.writing).onClick(() => { void this.connections.more(); }).buttonEl.addClass("ai-helper-connections-more");
+		if (this.connections.canContinue) new ButtonComponent(root).setButtonText(this.t("connections-more")).setDisabled(!!result.stale || this.connections.active || this.connections.writing).onClick(() => { void this.connections.more(); }).buttonEl.addClass("ai-helper-connections-more");
 		if (this.connections.exhausted) root.createDiv({ text: this.t("connections-exhausted") });
 		if (this.connections.summary) setStatusTone(root.createDiv({ text: this.connections.summary }), "success");
-		if (result.suggestions.length) new ButtonComponent(root).setButtonText(this.t("connections-add")).setDisabled(this.connections.writing || this.connections.active || !result.suggestions.some(item => item.selected && !item.added)).onClick(() => { void this.connections.addSelected(); }).buttonEl.addClass("ai-helper-connections-add", "mod-cta");
+		if (result.suggestions.length) new ButtonComponent(root).setButtonText(this.t("connections-add")).setDisabled(result.stale || this.connections.writing || this.connections.active || !result.suggestions.some(item => item.selected && !item.added)).onClick(() => { void this.connections.addSelected(); }).buttonEl.addClass("ai-helper-connections-add", "mod-cta");
 		if (result.fragmented) setStatusTone(root.createDiv({ text: this.t("connections-fragmented") }), "warning");
 		if (result.partial) setStatusTone(root.createDiv({ text: this.t("search-partial") }), "warning");
 		if (result.suggestions.length) root.createDiv({ text: this.t("connections-similarity-help") });
 		for (const suggestion of result.suggestions) {
 			const card = root.createDiv({ cls: "ai-helper-connection" });
-			this.renderConnectionLink(card, suggestion.source, suggestion.source.path, "ai-helper-connection-link");
+			this.renderConnectionLink(card, suggestion.source, suggestion.snapshot.file.path, "ai-helper-connection-link", suggestion.snapshot);
 			card.createDiv({ text: suggestion.explanation });
+			if (suggestion.skipped) setStatusTone(card.createDiv({ text: this.t(suggestion.skipped) }), "warning");
 			if (suggestion.added) card.createSpan({ cls: "ai-helper-connection-added", text: this.t("connections-added") });
 			else {
 				new ButtonComponent(card).setButtonText(this.t(suggestion.selected ? "connections-unselect" : "connections-select")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion)).buttonEl.addClass("ai-helper-connection-select");
@@ -314,19 +319,19 @@ export class ChatView extends ItemView implements HoverParent {
 				const summary = details.createEl("summary", { cls: "ai-helper-source-summary", text: this.t("search-fragment") });
 				const similarity = summary.createSpan({ cls: "ai-helper-source-similarity", text: `${this.t("connections-similarity")}: ${fragment.similarity.toLocaleString(getLanguage(), { minimumFractionDigits: 3, maximumFractionDigits: 3 })}` });
 				similarity.style.color = similarityColor(fragment.similarity, normalizeSimilarityAppearance(this.plugin.settings.similarityAppearance));
-				this.renderConnectionLink(summary, fragment, `[${index + 1}] ${fragment.path}${fragment.headings.length ? " → " + fragment.headings.join(" → ") : ""}`, "ai-helper-source-link");
+				this.renderConnectionLink(summary, fragment, `[${index + 1}] ${suggestion.snapshot.file.path}${fragment.headings.length ? " → " + fragment.headings.join(" → ") : ""}`, "ai-helper-source-link", suggestion.snapshot);
 				details.createEl("pre", { text: fragment.text });
 			}
 		}
 	}
 
 
-	private renderConnectionLink(parent: HTMLElement, source: NoteSource, text: string, cls: string): void {
-		const linktext = source.path + (source.headings.length ? `#${source.headings[source.headings.length - 1]}` : "");
+	private renderConnectionLink(parent: HTMLElement, source: NoteSource, text: string, cls: string, snapshot: CandidateSnapshot): void {
+		const linktext = snapshot.file.path + (source.headings.length ? `#${source.headings[source.headings.length - 1]}` : "");
 		const link = parent.createEl("a", { cls: `internal-link ${cls}`, text, attr: { href: linktext, "data-href": linktext } });
 		link.addEventListener("click", event => {
 			event.preventDefault(); event.stopPropagation();
-			void this.plugin.noteSearch.open(source, Keymap.isModEvent(event)).catch(error => showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "warning"));
+			void this.connections.openSnapshot(snapshot, source, Keymap.isModEvent(event)).catch(error => showStatusNotice(this.t(error instanceof NoteSearchError ? error.code : "search-failed"), "warning"));
 		});
 	}
 
