@@ -296,8 +296,11 @@ export class ChatView extends ItemView implements HoverParent {
 			setStatusTone(root.createDiv({ text: this.t("connections-restart-warning") }), "warning");
 			new ButtonComponent(root).setButtonText(this.t("connections-restart")).setDisabled(this.connections.writing).onClick(() => { void this.connections.restartConfirmed(); }).buttonEl.addClass("ai-helper-connections-restart", "mod-warning");
 		}
-		if (this.connections.active) new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
-		if (this.connections.canContinue) new ButtonComponent(root).setButtonText(this.t("connections-more")).setDisabled(!!result.stale || this.connections.active || this.connections.writing).onClick(() => { void this.connections.more(); }).buttonEl.addClass("ai-helper-connections-more");
+		if (this.connections.active || this.connections.canContinue) {
+			const actions = root.createDiv({ cls: "ai-helper-connections-actions" });
+			if (this.connections.active) new ButtonComponent(actions).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
+			if (this.connections.canContinue) new ButtonComponent(actions).setButtonText(this.t("connections-more")).setDisabled(!!result.stale || this.connections.active || this.connections.writing).onClick(() => { void this.connections.more(); }).buttonEl.addClass("ai-helper-connections-more");
+		}
 		if (this.connections.exhausted) root.createDiv({ text: this.t("connections-exhausted") });
 		if (this.connections.summary) setStatusTone(root.createDiv({ text: this.connections.summary }), "success");
 		if (result.suggestions.length) new ButtonComponent(root).setButtonText(this.t("connections-add")).setDisabled(result.stale || this.connections.writing || this.connections.active || !result.suggestions.some(item => item.selected && !item.added)).onClick(() => { void this.connections.addSelected(); }).buttonEl.addClass("ai-helper-connections-add", "mod-cta");
