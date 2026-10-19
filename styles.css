@@ -674,7 +674,7 @@ body:has(.ai-helper :focus-within) .markdown-source-view.mod-cm6 .cm-editor:not(
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--size-4-2);
-	margin-top: var(--size-4-2);
+	margin-block: var(--size-4-2);
 }
 
 .ai-helper-connections pre {
