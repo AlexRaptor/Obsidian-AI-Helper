@@ -811,7 +811,8 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		isAllowed(path: string): boolean { return /\.md$/i.test(path) && allowed(path); },
 		/** A fixed pool of 24 notes, with up to 3 fragments each. No chat threshold or source budget. */
-		async connectionCandidates(text: string, excluded: ReadonlySet<string>, signal: AbortSignal): Promise<NoteSource[][]> {
+		async connectionCandidates(source: { path: string; text: string }, excluded: ReadonlySet<string>, signal: AbortSignal): Promise<NoteSource[][]> {
+			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
 			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			const version = revision;
 			await settleWrites();
@@ -831,7 +832,9 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 				if (raw !== null && await hash(raw) === note.contentHash) current.push({ note, raw });
 			}
 			if (!current.length) throw new NoteSearchError("search-rebuild");
-			const [query] = await embed([text], signal);
+			check(version, signal);
+			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
+			const [query] = await embed([source.text], signal);
 			check(version, signal);
 			const groups: NoteSource[][] = [];
 			for (const { note, raw } of current) {

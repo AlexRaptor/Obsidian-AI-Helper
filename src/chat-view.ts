@@ -277,7 +277,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (!result) return;
 		root.createEl("h3", { text: `${this.t("connections-title")}: ${result.path}` });
 		const status = root.createDiv({ text: this.t(result.status) });
-		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : "warning");
+		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : ["connections-model", "connections-invalid", "search-failed", "search-storage", "search-query-failed"].includes(result.status) ? "error" : "warning");
 		if (this.connections.active) new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
 		if (result.partial) setStatusTone(root.createDiv({ text: this.t("search-partial") }), "warning");
 		if (result.suggestions.length) root.createDiv({ text: this.t("connections-similarity-help") });

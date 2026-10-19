@@ -11,3 +11,6 @@ docs/testing/note-mentions/*-vault-reset-*/
 
 # Сгенерированное хранилище ручной проверки перевода
 docs/testing/note-translation/translation-vault/
+
+# Локальное хранилище ручной проверки поиска связей
+docs/testing/note-connections/native-panel-vault/

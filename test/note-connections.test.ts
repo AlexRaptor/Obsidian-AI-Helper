@@ -8,7 +8,7 @@ import { Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); Notice.messages.length = 0; });
-async function setup(options: { source?: string; notes?: Record<string, string>; settings?: Record<string, unknown>; index?: boolean; completion?: (body: any) => Promise<Response> } = {}) {
+async function setup(options: { source?: string; notes?: Record<string, string>; settings?: Record<string, unknown>; index?: boolean; metadata?: () => Promise<Response>; completion?: (body: any) => Promise<Response> } = {}) {
 	vi.stubGlobal("indexedDB", new IDBFactory());
 	const files = new Map(Object.entries({ "Заметки/Мысль.md": "Сохранённая версия.", "Примеры/Практика.md": "# Практика\nИнтервальное повторение: проверяйте знания через день и через неделю.", ...options.notes }));
 	const entries = new Map([...files.keys()].map(path => [path, Object.assign(new TFile(), { path, basename: path.split('/').at(-1)!.slice(0, -3), extension: "md" })]));
@@ -18,7 +18,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	const commands = new Map<string, () => void>(); const requests: any[] = []; const embeddings: string[][] = [];
 	const network = vi.fn(async (url: string, init?: RequestInit) => {
 		if (url.endsWith('/embeddings')) { const body = JSON.parse(String(init?.body)); embeddings.push(body.input); return Response.json({ data: body.input.map((_text: string, index: number) => ({ index, embedding: _text.includes('Активное') ? [1, 0] : [0.1, 1] })) }); }
-		if (!url.endsWith('/chat/completions')) return Response.json({ data: [] });
+		if (!url.endsWith('/chat/completions')) return options.metadata?.() ?? Response.json({ data: [] });
 		const body = JSON.parse(String(init?.body)); requests.push(body);
 		return options.completion ? options.completion(body) : answer(JSON.parse(body.messages.at(-1).content).candidate.id);
 	});
@@ -202,3 +202,31 @@ it('различает вложенные подписи Markdown-ссылок �
 	await env.run(); expect(env.requests).toHaveLength(1); expect(JSON.stringify(env.requests)).not.toContain('СВЯЗАННЫЙ МАТЕРИАЛ С ВЛОЖЕННОЙ ПОДПИСЬЮ');
 	expect(env.root.getText()).toContain('Примеры/Практика.md'); await env.chat.onClose();
 });
+
+it('учитывает ссылки во вложенных списках, сохраняя отличие от отступленного кода', async () => {
+	const env = await setup({ source: 'Активное вспоминание.\n\n    [[Примеры/Практика]]\n\n- Раздел\n    - [[Архив/Связанная]]', notes: { 'Архив/Связанная.md': 'СВЯЗАННЫЙ ВЛОЖЕННЫЙ МАТЕРИАЛ' } });
+	await env.run(); expect(env.requests).toHaveLength(1); expect(JSON.stringify(env.requests)).not.toContain('СВЯЗАННЫЙ ВЛОЖЕННЫЙ МАТЕРИАЛ');
+	expect(env.root.getText()).toContain('Примеры/Практика.md'); await env.chat.onClose();
+});
+
+it('не передаёт текст исходной заметки после её исключения во время подготовки', async () => {
+	const metadata = deferred<Response>(); const env = await setup({ metadata: () => metadata.promise });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.chat.isGenerating()).toBe(true));
+	env.plugin.noteSearch.configure({ ...env.plugin.settings, excludedFolders: ['Заметки'] });
+	metadata.resolve(Response.json({ data: [{ id: 'диалог', max_model_len: 32000 }] }));
+	await vi.waitFor(() => expect(env.chat.isGenerating()).toBe(false));
+	expect(env.embeddings).toHaveLength(0); expect(env.requests).toHaveLength(0); expect(env.root.getText()).toContain('исключ');
+	await env.chat.onClose();
+});
+
+it.each(['- ~~~md\n  [[Примеры/Практика]]\n  ~~~', '> ~~~md\n> [[Примеры/Практика]]\n> ~~~'])(
+	'не принимает за связь пример кода в контейнере Markdown: %s', async example => {
+		const env = await setup({ source: 'Активное вспоминание.\n\n' + example });
+		await env.run(); expect(env.requests).toHaveLength(1); expect(env.root.getText()).toContain('Примеры/Практика.md'); await env.chat.onClose();
+	});
+
+it.each(['> ~~~md\n> [[Примеры/Практика]]', '- ~~~md\n  [[Примеры/Практика]]'])(
+	'завершает незакрытый код на границе контейнера: %s', async example => {
+		const env = await setup({ source: 'Активное вспоминание.\n\n' + example + '\n\n[[Архив/Связанная]]', notes: { 'Архив/Связанная.md': 'СВЯЗАННЫЙ МАТЕРИАЛ ПОСЛЕ КОНТЕЙНЕРА' } });
+		await env.run(); expect(env.requests).toHaveLength(1); expect(JSON.stringify(env.requests)).not.toContain('СВЯЗАННЫЙ МАТЕРИАЛ ПОСЛЕ КОНТЕЙНЕРА'); await env.chat.onClose();
+	});

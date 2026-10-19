@@ -68,7 +68,8 @@ export class NoteConnections {
 			if (!fits(messagesFor({ id: '', path: '', fragments: [] }))) { result.status = 'connections-budget'; return; }
 			const excluded = linkedNotePaths(raw, destination => this.plugin.app.metadataCache.getFirstLinkpathDest(destination, result.path)?.path);
 			excluded.add(result.path);
-			const groups = await this.plugin.noteSearch.connectionCandidates(text, excluded, request.signal);
+			if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError("search-excluded");
+			const groups = await this.plugin.noteSearch.connectionCandidates({ path: result.file.path, text }, excluded, request.signal);
 			if (!live()) return;
 			result.partial = this.plugin.noteSearch.progress.state !== "complete" || groups.some(group => group.some(source => source.partial)); this.changed();
 			const suggestions: ConnectionSuggestion[] = [];

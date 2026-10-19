@@ -5,15 +5,36 @@ export const RELATED_NOTES_END = '<!-- ai-helper:related-notes:end -->';
 /** Preserve offsets while hiding fenced/indented code and inline code examples. */
 function withoutCode(text: string): string {
 	const blank = (value: string) => value.replace(/[^\r\n]/g, ' ');
-	let fence: { character: string; length: number } | undefined;
+	let fence: { character: string; length: number; quotes: number; indentation: number } | undefined;
+	const lists: number[] = [];
+	let paragraph = false;
 	return text.split(/(?<=\n)/).map(line => {
-		const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)/);
+		if (!line.trim()) { paragraph = false; return line; }
+		const prefix = line.match(/^(?: {0,3}>[ \t]?)+/)?.[0] ?? '';
+		const quotes = (prefix.match(/>/g) ?? []).length;
+		if (fence && quotes < fence.quotes) fence = undefined;
+		const quoted = fence ? line.replace(new RegExp(`^(?: {0,3}>[ \\t]?){${fence.quotes}}`), '') : line.slice(prefix.length);
+		const expanded = quoted.replace(/^\t+/, tabs => ' '.repeat(tabs.length * 4));
+		const indent = expanded.match(/^ */)![0].length;
+		if (fence && indent < fence.indentation) fence = undefined;
+		while (lists.length && indent < lists[lists.length - 1]) lists.pop();
+		const base = lists[lists.length - 1] ?? 0;
+		const body = expanded.slice(base);
+		const match = body.match(/^ {0,3}(`{3,}|~{3,})(.*)/);
 		if (fence) {
 			if (match && match[1][0] === fence.character && match[1].length >= fence.length && !match[2].trim()) fence = undefined;
 			return blank(line);
 		}
-		if (match) { fence = { character: match[1][0], length: match[1].length }; return blank(line); }
-		if (/^(?: {4}|\t)/.test(line)) return blank(line);
+		if (match) { fence = { character: match[1][0], length: match[1].length, quotes, indentation: base }; paragraph = false; return blank(line); }
+		const item = body.match(/^ {0,3}(?:[-+*]|\d+[.)])[ \t]+(?=\S)/);
+		if (item) {
+			lists.push(base + item[0].length);
+			const opening = body.slice(item[0].length).match(/^(`{3,}|~{3,})/);
+			if (opening) { fence = { character: opening[1][0], length: opening[1].length, quotes, indentation: lists[lists.length - 1] }; paragraph = false; return blank(line); }
+			paragraph = true; return line;
+		}
+		if (indent >= base + 4 && !paragraph) return blank(line);
+		paragraph = !/^ {0,3}(?:#{1,6} |>|---+$|\*\*\*+$)/.test(body);
 		return line;
 	}).join('').replace(/(`+)([\s\S]*?)\1(?!`)/g, blank);
 }
