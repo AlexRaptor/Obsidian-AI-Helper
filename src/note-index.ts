@@ -6,6 +6,11 @@ import { lexicalRelevance, repeatedFragment } from "./note-ranking";
 
 import { noteFragments, DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions, type FragmentOptions, type NoteFragment } from "./note-fragments";
 
+/** Folder paths come from public Obsidian file/menu objects. */
+export function inConnectionScope(path: string, folders?: readonly string[]): boolean {
+	return folders === undefined || folders.some(folder => folder === "/" || folder === "" || path.startsWith(folder + "/"));
+}
+
 export interface NoteSource { path: string; text: string; headings: string[]; contentHash: string; similarity: number; partial?: boolean; }
 export const DEFAULT_SOURCE_BUDGET_BYTES = 12000;
 export function sourceBudgetBytes(value: unknown): number | undefined {
@@ -811,7 +816,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		},
 		isAllowed(path: string): boolean { return /\.md$/i.test(path) && allowed(path); },
 		/** A fixed pool of 24 notes, with up to 3 fragments each. No chat threshold or source budget. */
-		async connectionCandidates(source: { path: string; text: string }, excluded: ReadonlySet<string>, signal: AbortSignal): Promise<NoteSource[][]> {
+		async connectionCandidates(source: { path: string; text: string }, excluded: ReadonlySet<string>, signal: AbortSignal, folders?: readonly string[]): Promise<{ groups: NoteSource[][]; partial: boolean }> {
 			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
 			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			const version = revision;
@@ -822,8 +827,12 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const notes = saved.notes.filter(validNote).filter(note => allowed(note.path) && !pending.has(note.path) && note.fingerprint === identity);
 			if (progress.state === "idle") restoreProgress(saved.progress, identity);
 			if (!notes.some(note => note.fragments.length)) throw new NoteSearchError("search-rebuild");
-			const eligible = notes.filter(note => !excluded.has(note.path));
-			if (!eligible.length) return [];
+			const eligible = notes.filter(note => !excluded.has(note.path) && inConnectionScope(note.path, folders));
+			const candidatePaths = (environment.list?.() ?? notes.map(note => note.path)).filter(path => allowed(path) && !excluded.has(path) && inConnectionScope(path, folders));
+			if (!eligible.length) {
+				if (candidatePaths.length) throw new NoteSearchError("search-rebuild");
+				return { groups: [], partial: progress.state !== "complete" };
+			}
 			const current: { note: IndexedNote; raw: string }[] = [];
 			for (const note of eligible) {
 				check(version, signal);
@@ -834,6 +843,8 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			if (!current.length) throw new NoteSearchError("search-rebuild");
 			check(version, signal);
 			if (!allowed(source.path)) throw new NoteSearchError("search-excluded");
+			const currentPaths = new Set(current.map(({ note }) => note.path));
+			const partial = progress.state !== "complete" || candidatePaths.some(path => !currentPaths.has(path));
 			const [query] = await embed([source.text], signal);
 			check(version, signal);
 			const groups: NoteSource[][] = [];
@@ -855,13 +866,13 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 				const sources = fragments.map(fragment => {
 					if (query.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
 					const similarity = query.reduce((sum, value, i) => sum + value * fragment.vector[i], 0) / (Math.hypot(...query) * Math.hypot(...fragment.vector));
-					return { path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, similarity, partial: progress.state !== "complete" || current.length !== eligible.length };
+					return { path: note.path, text: fragment.text, headings: fragment.headings, contentHash: note.contentHash, similarity, partial };
 				}).sort((a, b) => b.similarity - a.similarity || a.text.localeCompare(b.text, "en"));
 				if (sources.length) groups.push(sources.slice(0, 3));
 				await new Promise<void>(resolve => setTimeout(resolve, 0));
 			}
 			check(version, signal);
-			return groups.sort((a, b) => b[0].similarity - a[0].similarity || a[0].path.localeCompare(b[0].path, "en")).slice(0, 24);
+			return { groups: groups.sort((a, b) => b[0].similarity - a[0].similarity || a[0].path.localeCompare(b[0].path, "en")).slice(0, 24), partial };
 		},
 		async validateSource(source: NoteSource): Promise<void> {
 			const version = revision;

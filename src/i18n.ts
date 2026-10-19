@@ -15,6 +15,8 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 
 export const en = {
 	"connections-command": "Find connections for current note",
+	"connections-folder-command": "Find connections for current note in selected folders",
+	"connections-empty-scope": "The selected folders contain no eligible candidate notes after indexing exclusions.",
 	"connections-title": "Connections for",
 	"connections-language": "English",
 	"connections-target-changed": "A candidate note changed, moved, was deleted or excluded. Run a new search; your selection is preserved.",
@@ -450,6 +452,8 @@ export const en = {
 
 export const ru = {
 	"connections-command": "Найти связи для текущей заметки",
+	"connections-folder-command": "Найти связи для текущей заметки в выбранных папках",
+	"connections-empty-scope": "В выбранных папках нет допустимых заметок-кандидатов после исключений индексации.",
 	"connections-title": "Связи для заметки",
 	"connections-language": "Русский",
 	"connections-target-changed": "Найденная заметка изменилась, перемещена, удалена или исключена. Запустите новый поиск; выбор сохранён.",

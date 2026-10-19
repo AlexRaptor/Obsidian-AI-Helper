@@ -1,7 +1,7 @@
 import { MarkdownView, type TFile } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { appendRelatedNotes, linkedNotePaths, relatedNotesBlocks } from "./related-notes-markdown";
-import { NoteSearchError, type NoteSource } from "./note-index";
+import { inConnectionScope, NoteSearchError, type NoteSource } from "./note-index";
 import type { LocaleKey } from "./i18n";
 import { effectiveContextWindow } from "./context-window";
 import { conservativePromptTokens } from "./prompt-tokens";
@@ -107,7 +107,7 @@ export class NoteConnections {
 		} finally { this.writing = false; this.changed(); }
 	}
 
-	async start(file: TFile, raw: string): Promise<void> {
+	async start(file: TFile, raw: string, folders?: readonly string[]): Promise<void> {
 		if (!this.canReplace()) return;
 		this.summary = undefined;
 		// A new search can replace this operation, but cannot cancel another model owner.
@@ -122,6 +122,7 @@ export class NoteConnections {
 			if (!this.plugin.noteSearch.isAllowed(file.path)) throw new NoteSearchError('search-excluded');
 			const text = relatedNotesBlocks(raw).text.trim();
 			if (!text) { result.status = 'connections-empty-source'; return; }
+			if (folders && !this.plugin.app.vault.getMarkdownFiles().some(candidate => candidate.path !== file.path && inConnectionScope(candidate.path, folders) && this.plugin.noteSearch.isAllowed(candidate.path))) { result.status = 'connections-empty-scope'; return; }
 			const settings = { ...this.plugin.settings };
 			if (!connectionUrl(settings.serverUrl) || !settings.model.trim()) { result.status = 'connections-model'; return; }
 			lease = this.plugin.conversationModel.tryAcquire();
@@ -144,9 +145,9 @@ export class NoteConnections {
 			const excluded = linkedNotePaths(raw, destination => this.plugin.app.metadataCache.getFirstLinkpathDest(destination, result.path)?.path);
 			excluded.add(result.path);
 			if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError("search-excluded");
-			const groups = await this.plugin.noteSearch.connectionCandidates({ path: result.file.path, text }, excluded, request.signal);
+			const { groups, partial } = await this.plugin.noteSearch.connectionCandidates({ path: result.file.path, text }, excluded, request.signal, folders);
 			if (!live()) return;
-			result.partial = this.plugin.noteSearch.progress.state !== "complete" || groups.some(group => group.some(source => source.partial)); this.changed();
+			result.partial = partial; this.changed();
 			const suggestions: ConnectionSuggestion[] = [];
 			for (const [index, fragments] of groups.entries()) {
 				if (!live()) return;

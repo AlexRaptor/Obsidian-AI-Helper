@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { type App, type PluginManifest, type WorkspaceLeaf, FileSystemAdapter, MarkdownView, TFile } from "obsidian";
+import { type App, type PluginManifest, type WorkspaceLeaf, FileSystemAdapter, MarkdownView, TFile, TFolder } from "obsidian";
 import { IDBFactory } from "fake-indexeddb";
 import { AiHelperPlugin } from "../src/main";
 import { ChatView } from "../src/chat-view";
 import { DEFAULT_SETTINGS } from "../src/settings";
-import { Notice, deferred, type TestElement } from "./helpers/obsidian";
+import { Menu, Notice, deferred, type TestElement } from "./helpers/obsidian";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 const plugins: AiHelperPlugin[] = [];
 afterEach(() => { plugins.forEach(plugin => plugin.onunload()); plugins.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); Notice.messages.length = 0; });
@@ -15,6 +15,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	const file = entries.get("Заметки/Мысль.md")!;
 	let text = options.source ?? "# Обучение\nАктивное вспоминание помогает удерживать знания.";
 	const editor = Object.assign(Object.create(MarkdownView.prototype), { file, getMode: () => "source", editor: { getValue: () => text } });
+	const events = new Map<string, (...args: any[]) => void>();
 	const commands = new Map<string, () => void>(); const requests: any[] = []; const embeddings: string[][] = [];
 	const network = vi.fn(async (url: string, init?: RequestInit) => {
 		if (url.endsWith('/embeddings')) { const body = JSON.parse(String(init?.body)); embeddings.push(body.input); return Response.json({ data: body.input.map((_text: string, index: number) => ({ index, embedding: _text.includes('Активное') ? [1, 0] : [0.1, 1] })) }); }
@@ -30,7 +31,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 		for (const part of name.split('/')) { if (part === '..') parts.pop(); else if (part !== '.') parts.push(part); }
 		const local = parts.join('/');
 		return entries.get(local) ?? entries.get(local + '.md') ?? entries.get(name) ?? entries.get(name + '.md') ?? [...entries.values()].find(file => file.basename === name);
-	} }, workspace: { getActiveViewOfType: (type: unknown) => type === MarkdownView ? editor : null, getLeavesOfType: (type: string) => type === 'markdown' ? [{ view: editor }] : type === 'ai-helper-chat' && chat ? [{ view: chat }] : [], on: () => ({}), onLayoutReady() {}, detachLeavesOfType() {}, ensureSideLeaf: async () => ({ view: chat }), revealLeaf: async () => {}, openLinkText: vi.fn(async () => {}) } } as unknown as App;
+	} }, workspace: { getActiveViewOfType: (type: unknown) => type === MarkdownView ? editor : null, getLeavesOfType: (type: string) => type === 'markdown' ? [{ view: editor }] : type === 'ai-helper-chat' && chat ? [{ view: chat }] : [], on: (name: string, callback: (...args: any[]) => void) => { events.set(name, callback); return {}; }, onLayoutReady() {}, detachLeavesOfType() {}, ensureSideLeaf: async () => ({ view: chat }), revealLeaf: async () => {}, openLinkText: vi.fn(async () => {}) } } as unknown as App;
 	const plugin = new AiHelperPlugin(app, { id: 'obsidian-ai-helper' } as PluginManifest); plugins.push(plugin);
 	vi.spyOn(plugin, 'loadData').mockResolvedValue({ ...DEFAULT_SETTINGS, language: 'ru', serverUrl: 'http://server/v1', model: 'диалог', embeddingServerUrl: 'http://server/v1', embeddingModel: 'смысл', contextWindow: '32000', autoUpdateNotes: false, systemPrompt: 'СЕКРЕТ ОБЫЧНОГО ДИАЛОГА', ...options.settings });
 	vi.spyOn(plugin, 'addCommand').mockImplementation((command: any) => { commands.set(command.id, command.callback); return command; });
@@ -39,7 +40,7 @@ async function setup(options: { source?: string; notes?: Record<string, string>;
 	if (options.index !== false) for (const path of files.keys()) { try { await plugin.noteSearch.index(path); } catch {} }
 	requests.length = 0; embeddings.length = 0; vi.mocked(app.vault.read).mockClear();
 	const root = chat.contentEl as unknown as TestElement;
-	return { plugin, chat, root, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента')); } };
+	return { plugin, chat, root, events, requests, embeddings, files, entries, app, editor, commands, setText: (value: string) => { text = value; }, run: async () => { expect(commands.has('find-note-connections')).toBe(true); commands.get('find-note-connections')!(); await vi.waitFor(() => expect(root.getText()).toContain('Сходство фрагмента')); } };
 }
 function answer(id: string, explanation = 'Практика дополняет активное вспоминание расписанием повторений через день и неделю.', finish = 'stop') { return Response.json({ choices: [{ message: { content: JSON.stringify({ candidate: id, explanation }) }, finish_reason: finish }] }); }
 
@@ -415,4 +416,108 @@ it('показывает новый поиск над прежним диало�
 	await env.run(); expect(viewport.scrollTop).toBe(0);
 	viewport.scrollTop = 120; env.root.find('ai-helper-connection-select').click(); expect(viewport.scrollTop).toBe(120);
 	await env.chat.onClose();
+});
+
+const folder = (path: string) => Object.assign(new TFolder(), { path });
+function connectionMenu(env: Awaited<ReturnType<typeof setup>>, selection: (TFile | TFolder)[], multiple = true) {
+	const menu = new Menu();
+	env.events.get(multiple ? 'files-menu' : 'file-menu')!(menu, multiple ? selection : selection[0], 'file-explorer');
+	return menu.items.find(item => item.title === 'Найти связи для текущей заметки в выбранных папках');
+}
+
+it('меню одной папки ограничивает кандидатов рекурсивно, сохраняя текущую заметку вне области', async () => {
+	const env = await setup({ notes: { 'Примеры/Вложенная/Повторение.md': 'Дополнительная проверка знаний.', 'Примеры-другие/Секрет.md': 'НЕЛЬЗЯ ПЕРЕДАВАТЬ' } });
+	const item = connectionMenu(env, [folder('Примеры')], false); expect(item).toBeDefined(); item!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path).sort()).toEqual(['Примеры/Вложенная/Повторение.md', 'Примеры/Практика.md']);
+	expect(env.requests.every(body => JSON.parse(body.messages.at(-1).content).source.path === 'Заметки/Мысль.md')).toBe(true);
+	expect(env.root.getText()).toContain('Заметки/Мысль.md');
+	expect(env.root.getText()).toContain('Примеры/Вложенная/Повторение.md');
+	expect(env.root.getText()).not.toContain('Секрет');
+	expect(vi.mocked(env.app.vault.read).mock.calls.map(([file]) => file.path)).not.toContain('Примеры-другие/Секрет.md');
+	expect(JSON.stringify(env.embeddings)).not.toContain('НЕЛЬЗЯ ПЕРЕДАВАТЬ');
+	await env.chat.onClose();
+});
+
+
+it('меню нескольких папок объединяет вложенные области без повторов и соблюдает исключения', async () => {
+	const env = await setup({ notes: { 'Примеры/Вложенная/Повторение.md': 'Проверка знаний через неделю.', 'Примеры/Закрыто/Секрет.md': 'ИСКЛЮЧЁННЫЙ ТЕКСТ', 'Дополнения/План.md': 'Расписание закрепления изученного.', 'Закрыто/Секрет.md': 'ИСКЛЮЧЁННЫЙ ТЕКСТ' }, settings: { excludedFolders: ['Примеры/Закрыто', 'Закрыто'] } });
+	const item = connectionMenu(env, [folder('Примеры'), folder('Примеры/Вложенная'), folder('Дополнения'), folder('Закрыто')]);
+	expect(item).toBeDefined(); item!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path).sort()).toEqual(['Дополнения/План.md', 'Примеры/Вложенная/Повторение.md', 'Примеры/Практика.md']);
+	expect(env.root.getText()).toContain('Дополнения/План.md'); expect(env.root.getText()).not.toContain('Секрет');
+	expect(vi.mocked(env.app.vault.read).mock.calls.some(([file]) => file.path.includes('Закрыто'))).toBe(false);
+	expect(JSON.stringify([env.requests, env.embeddings])).not.toContain('ИСКЛЮЧЁННЫЙ ТЕКСТ');
+	await env.chat.onClose();
+});
+
+it.each(['Пустая', 'Закрыто', 'Заметки'])('пустая допустимая область %s объясняется до обращений к модели', async path => {
+	const env = await setup({ notes: { 'Закрыто/Секрет.md': 'Исключённый материал.' }, settings: { excludedFolders: ['Закрыто'] } });
+	connectionMenu(env, [folder(path)])!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('нет допустимых заметок-кандидатов'));
+	expect(env.requests).toHaveLength(0); expect(env.embeddings).toHaveLength(0);
+	expect(env.app.vault.read).not.toHaveBeenCalled(); await env.chat.onClose();
+});
+
+it('не предлагает действие для смешанного выбора, одних файлов и пустого выбора', async () => {
+	const env = await setup();
+	for (const selection of [[folder('Примеры'), env.entries.get('Заметки/Мысль.md')!], [env.entries.get('Заметки/Мысль.md')!], []]) expect(connectionMenu(env, selection)).toBeUndefined();
+	await env.chat.onClose();
+});
+
+it('область с непроиндексированной заметкой не выдаётся за полный поиск при полном сохранённом индексе', async () => {
+	const env = await setup(); await env.plugin.noteSearch.indexVault();
+	env.files.set('Примеры/Новая.md', 'Новый материал вне индекса.');
+	env.entries.set('Примеры/Новая.md', Object.assign(new TFile(), { path: 'Примеры/Новая.md', extension: 'md' }));
+	connectionMenu(env, [folder('Примеры')])!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	expect(env.root.getText()).toContain('Индекс неполный');
+	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path)).toEqual(['Примеры/Практика.md']);
+	await env.chat.onClose();
+});
+
+it('после поиска в папке команда снова ищет по всему хранилищу', async () => {
+	const env = await setup({ notes: { 'Другие/План.md': 'Расписание повторений.' } });
+	connectionMenu(env, [folder('Примеры')])!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	expect(env.requests).toHaveLength(1); env.requests.length = 0;
+	env.commands.get('find-note-connections')!();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2));
+	await vi.waitFor(() => expect(env.chat.isGenerating()).toBe(false));
+	expect(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path).sort()).toEqual(['Другие/План.md', 'Примеры/Практика.md']);
+	await env.chat.onClose();
+});
+
+it('запуск из проводника использует запомненный редактор и сохраняет связь в исходную заметку', async () => {
+	const source = '# Обучение\nАктивное вспоминание помогает запоминать.';
+	const env = await setup({ source, notes: { 'Заметки/Мысль.md': source } });
+	vi.spyOn(env.app.workspace, 'getActiveViewOfType').mockReturnValue(null);
+	connectionMenu(env, [folder('Примеры')])!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Сходство фрагмента'));
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Практика]]');
+	expect(env.files.get('Примеры/Практика.md')).not.toContain('ai-helper:related-notes');
+	await env.chat.onClose();
+});
+
+it('при отсутствии индекса в выбранной области не анализирует индекс других папок', async () => {
+	const env = await setup();
+	env.files.set('Новая/Кандидат.md', 'Неиндексированное дополнение.');
+	env.entries.set('Новая/Кандидат.md', Object.assign(new TFile(), { path: 'Новая/Кандидат.md', extension: 'md' }));
+	connectionMenu(env, [folder('Новая')])!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain(env.plugin.t('search-rebuild')));
+	expect(env.requests).toHaveLength(0); expect(env.embeddings).toHaveLength(0);
+	expect(env.app.vault.read).not.toHaveBeenCalled(); await env.chat.onClose();
+});
+
+it('пустые индексированные заметки не скрывают отсутствие индекса остальных кандидатов области', async () => {
+	const env = await setup({ notes: { 'Область/Пустая.md': '' } }); await env.plugin.noteSearch.indexVault();
+	env.files.set('Область/Новая.md', 'Новый материал вне индекса.');
+	env.entries.set('Область/Новая.md', Object.assign(new TFile(), { path: 'Область/Новая.md', extension: 'md' }));
+	connectionMenu(env, [folder('Область')])!.callback();
+	await vi.waitFor(() => expect(env.root.getText()).toContain(env.plugin.t('connections-none')));
+	expect(env.root.getText()).toContain('Индекс неполный');
+	expect(env.requests).toHaveLength(0); await env.chat.onClose();
 });

@@ -79,12 +79,7 @@ export class AiHelperPlugin extends Plugin {
 		this.register(this.contextWindowConnection.subscribe(() => this.updateContextIndicators()));
 		this.applyLanguage();
 		this.addCommand({ id: "find-note-connections", name: this.t("connections-command"), callback: () => {
-			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-			const file = view?.file;
-			if (!view || !file || file.extension !== "md") { showStatusNotice(this.t("search-note"), "warning"); return; }
-			// Capture before opening the chat changes the active leaf.
-			const text = view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
-			void this.findNoteConnections(file, text).catch(() => showStatusNotice(this.t("search-failed"), "error"));
+			this.launchNoteConnections();
 		} });
 		this.addCommand({ id: "translate-current-note", name: this.t("translation-command"), callback: () => this.translateNote() });
 		this.addCommand({ id: "retry-open-translation", name: this.t("translation-retry-open"), callback: () => {
@@ -143,6 +138,7 @@ export class AiHelperPlugin extends Plugin {
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("translation-command")).setIcon("languages").onClick(() => this.translateNote(file)));
 				if (file instanceof TFile && file.extension === "md") menu.addItem(item => item.setTitle(this.t("search-index")).setIcon("refresh-cw").onClick(() => { void this.indexNote(file.path); }));
 				if (file instanceof TFolder) {
+					menu.addItem(item => item.setTitle(this.t("connections-folder-command")).setIcon("links").onClick(() => this.launchNoteConnections([file.path])));
 					menu.addItem(item => item.setTitle(this.t("review-folder")).setIcon("folder-search").onClick(() => {
 						if (!this.unloading) void this.reviewFolder(file).catch(() => showStatusNotice(this.t("review-error"), "error"));
 					}));
@@ -164,6 +160,11 @@ export class AiHelperPlugin extends Plugin {
 				}
 			}));
 		}
+		if (this.app.workspace.on) this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => {
+			if (!files.length || !files.every((file): file is TFolder => file instanceof TFolder)) return;
+			menu.addItem(item => item.setTitle(this.t("connections-folder-command")).setIcon("links").onClick(() => this.launchNoteConnections(files.map(file => file.path))));
+		}));
+
 		const restoreIndex = () => {
 			if (this.unloading) return;
 			vaultReady = true;
@@ -486,7 +487,16 @@ export class AiHelperPlugin extends Plugin {
 		return leaf?.view instanceof ChatView ? leaf.view : undefined;
 	}
 
-	async findNoteConnections(file: TFile, text: string): Promise<void> {
+	private launchNoteConnections(folders?: readonly string[]): void {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView) ?? (folders ? this.currentMarkdownView : null);
+		const file = view?.file;
+		if (!view || !file || file.extension !== "md") { showStatusNotice(this.t("search-note"), "warning"); return; }
+		// Capture before opening the chat changes the active leaf.
+		const text = view.getMode() === "source" ? view.editor.getValue() : view.getViewData();
+		void this.findNoteConnections(file, text, folders).catch(() => showStatusNotice(this.t("search-failed"), "error"));
+	}
+
+	async findNoteConnections(file: TFile, text: string, folders?: readonly string[]): Promise<void> {
 		if (this.unloading) return;
 		const launch = ++this.connectionLaunch;
 		let view = this.getChatView();
@@ -495,7 +505,7 @@ export class AiHelperPlugin extends Plugin {
 			const leaf = await this.app.workspace.ensureSideLeaf(VIEW_TYPE_CHAT, "right", { active: true, reveal: true });
 			if (leaf.view instanceof ChatView) view = leaf.view;
 		}
-		if (!this.unloading && launch === this.connectionLaunch) await view?.connections.start(file, text);
+		if (!this.unloading && launch === this.connectionLaunch) await view?.connections.start(file, text, folders);
 	}
 
 	async newConversation(): Promise<void> {
