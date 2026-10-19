@@ -1045,3 +1045,31 @@ it("настройки имени сохраняют оба правила и п
 	expect(plugin.settings.translationSuffix).toBe(""); expect(plugin.settings.translationNameMode).toBe("suffix");
 	expect(saveSettings).toHaveBeenCalledTimes(4);
 });
+
+it('количество предложений принимает и сохраняет только целые значения от 1 до 20', async () => {
+	setLanguage('ru');
+	const saveSettings = vi.fn(async () => {});
+	const plugin = { settings: { ...DEFAULT_SETTINGS }, modelStatus: 'idle', t, saveSettings } as unknown as AiHelperPlugin;
+	const tab = new AiHelperSettingsTab({} as App, plugin); tab.display();
+	const input = controls.find(control => control.name === 'Количество предложений связей')!.input!;
+	expect(input.value).toBe('5');
+	for (const value of ['1', '20', '5']) {
+		await input.change(value); expect(plugin.settings.connectionSuggestionCount).toBe(value);
+	}
+	for (const value of ['', '0', '21', '-1', '1.5', 'NaN', 'Infinity', '1e1', ' 2 ']) {
+		await input.change(value); expect(plugin.settings.connectionSuggestionCount).toBe('5');
+	}
+	expect(saveSettings).toHaveBeenCalledTimes(3);
+});
+
+it.each([undefined, null, 3, '0', '21', '1.5', '1e1', ''])('загрузка настройки количества предложений восстанавливает 5 вместо %s', async value => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	vi.spyOn(plugin, 'loadData').mockResolvedValue({ connectionSuggestionCount: value });
+	await plugin.loadSettings(); expect(plugin.settings.connectionSuggestionCount).toBe('5');
+});
+
+it.each(['1', '20'])('загрузка сохраняет допустимую границу количества предложений %s', async value => {
+	const plugin = new AiHelperPlugin({} as App, {} as PluginManifest);
+	vi.spyOn(plugin, 'loadData').mockResolvedValue({ connectionSuggestionCount: value });
+	await plugin.loadSettings(); expect(plugin.settings.connectionSuggestionCount).toBe(value);
+});

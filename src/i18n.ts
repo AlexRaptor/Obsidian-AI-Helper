@@ -14,6 +14,11 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"connections-count": "Connection suggestion count",
+	"connections-count-desc": "Useful suggestions per portion, from 1 to 20. Default: 5. Applies to new searches.",
+	"connections-count-invalid": "Enter an integer from 1 to 20.",
+	"connections-more": "Show more",
+	"connections-exhausted": "No more suggestions in this search",
 	"connections-command": "Find connections for current note",
 	"connections-folder-command": "Find connections for current note in selected folders",
 	"connections-empty-scope": "The selected folders contain no eligible candidate notes after indexing exclusions.",
@@ -451,6 +456,11 @@ export const en = {
 } as const;
 
 export const ru = {
+	"connections-count": "Количество предложений связей",
+	"connections-count-desc": "Полезных предложений в порции: от 1 до 20. По умолчанию 5. Применяется к новым поискам.",
+	"connections-count-invalid": "Введите целое число от 1 до 20.",
+	"connections-more": "Показать ещё",
+	"connections-exhausted": "Больше предложений в этом поиске нет",
 	"connections-command": "Найти связи для текущей заметки",
 	"connections-folder-command": "Найти связи для текущей заметки в выбранных папках",
 	"connections-empty-scope": "В выбранных папках нет допустимых заметок-кандидатов после исключений индексации.",

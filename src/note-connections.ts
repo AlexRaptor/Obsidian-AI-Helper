@@ -1,3 +1,4 @@
+import type { AiHelperSettings } from "./settings";
 import { MarkdownView, type TFile } from "obsidian";
 import type { AiHelperPlugin } from "./main";
 import { appendRelatedNotes, linkedNotePaths, relatedNotesBlocks } from "./related-notes-markdown";
@@ -24,6 +25,9 @@ export class NoteConnections {
 	result?: ConnectionResult;
 	writing = false;
 	summary?: string;
+	private search?: { result: ConnectionResult; settings: AiHelperSettings; folders?: readonly string[]; groups?: NoteSource[][]; cursor: number };
+	get canContinue(): boolean { return !!this.search && (!this.search.groups || this.search.cursor < this.search.groups.length); }
+	get exhausted(): boolean { return !!this.search?.groups && this.search.cursor === this.search.groups.length; }
 	private request?: AbortController;
 	private release?: () => void;
 	get active(): boolean { return !!this.request; }
@@ -44,7 +48,7 @@ export class NoteConnections {
 	}
 	clear(): boolean {
 		if (!this.canReplace()) return false;
-		this.cancel(); this.result = undefined; this.summary = undefined; this.changed(); return true;
+		this.cancel(); this.search = undefined; this.result = undefined; this.summary = undefined; this.changed(); return true;
 	}
 
 
@@ -113,7 +117,18 @@ export class NoteConnections {
 		// A new search can replace this operation, but cannot cancel another model owner.
 		this.cancel();
 		const result: ConnectionResult = { file, path: file.path, text: raw, status: 'connections-running', partial: false, suggestions: [] };
-		this.result = result; this.changed();
+		this.result = result;
+		this.search = { result, settings: { ...this.plugin.settings }, folders: folders ? [...folders] : undefined, cursor: 0 };
+		await this.more();
+	}
+
+	async more(): Promise<void> {
+		if (this.active || this.writing || !this.canContinue) return;
+		const search = this.search!;
+		const { result, settings, folders } = search;
+		const { file } = result;
+		const raw = result.text;
+		result.status = 'connections-running'; this.changed();
 		const request = new AbortController();
 		const live = () => this.request === request && !request.signal.aborted;
 		let lease: ReturnType<AiHelperPlugin['conversationModel']['tryAcquire']>;
@@ -123,7 +138,6 @@ export class NoteConnections {
 			const text = relatedNotesBlocks(raw).text.trim();
 			if (!text) { result.status = 'connections-empty-source'; return; }
 			if (folders && !this.plugin.app.vault.getMarkdownFiles().some(candidate => candidate.path !== file.path && inConnectionScope(candidate.path, folders) && this.plugin.noteSearch.isAllowed(candidate.path))) { result.status = 'connections-empty-scope'; return; }
-			const settings = { ...this.plugin.settings };
 			if (!connectionUrl(settings.serverUrl) || !settings.model.trim()) { result.status = 'connections-model'; return; }
 			lease = this.plugin.conversationModel.tryAcquire();
 			if (!lease) { result.status = 'translation-busy'; return; }
@@ -145,11 +159,18 @@ export class NoteConnections {
 			const excluded = linkedNotePaths(raw, destination => this.plugin.app.metadataCache.getFirstLinkpathDest(destination, result.path)?.path);
 			excluded.add(result.path);
 			if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError("search-excluded");
-			const { groups, partial } = await this.plugin.noteSearch.connectionCandidates({ path: result.file.path, text }, excluded, request.signal, folders);
-			if (!live()) return;
-			result.partial = partial; this.changed();
+			if (!search.groups) {
+				const { groups, partial } = await this.plugin.noteSearch.connectionCandidates({ path: result.file.path, text }, excluded, request.signal, folders);
+				if (!live()) return;
+				search.groups = groups;
+				result.partial = partial;
+			}
+			const groups = search.groups;
+			let cursor = search.cursor;
 			const suggestions: ConnectionSuggestion[] = [];
-			for (const [index, fragments] of groups.entries()) {
+			for (; cursor < groups.length;) {
+				const index = cursor;
+				const fragments = groups[index];
 				if (!live()) return;
 				if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError('search-excluded');
 				for (const source of fragments) await this.plugin.noteSearch.validateSource(source);
@@ -175,14 +196,16 @@ export class NoteConnections {
 				for (const source of fragments) await this.plugin.noteSearch.validateSource(source);
 				if (!live()) return;
 				if (record.explanation !== null) suggestions.push({ source: fragments[0], fragments, explanation: (record.explanation as string).trim() });
-				if (suggestions.length === 5) break;
+				cursor++;
+				if (suggestions.length === Number(settings.connectionSuggestionCount)) break;
 			}
 			// Publish the completed portion atomically, with a final exclusion/version check.
 			if (!this.plugin.noteSearch.isAllowed(result.file.path)) throw new NoteSearchError('search-excluded');
 			for (const suggestion of suggestions) await this.plugin.noteSearch.validateSource(suggestion.source);
 			if (!live()) return;
-			result.suggestions = suggestions;
-			result.status = suggestions.length ? 'connections-ready' : 'connections-none';
+			result.suggestions.push(...suggestions);
+			search.cursor = cursor;
+			result.status = result.suggestions.length ? 'connections-ready' : 'connections-none';
 		} catch (error) {
 			if (this.result === result && !request.signal.aborted) result.status = error instanceof NoteSearchError ? error.code : 'search-failed';
 		} finally {

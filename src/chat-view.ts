@@ -293,6 +293,8 @@ export class ChatView extends ItemView implements HoverParent {
 		const status = root.createDiv({ text: this.t(result.status) });
 		setStatusTone(status, result.status === "connections-ready" ? "success" : result.status === "connections-running" ? "info" : ["connections-model", "connections-invalid", "search-failed", "search-storage", "search-query-failed"].includes(result.status) ? "error" : "warning");
 		if (this.connections.active) new ButtonComponent(root).setButtonText(this.t("translation-cancel")).onClick(() => this.connections.cancel()).buttonEl.addClass("ai-helper-connections-cancel");
+		if (this.connections.canContinue) new ButtonComponent(root).setButtonText(this.t("connections-more")).setDisabled(this.connections.active || this.connections.writing).onClick(() => { void this.connections.more(); }).buttonEl.addClass("ai-helper-connections-more");
+		if (this.connections.exhausted) root.createDiv({ text: this.t("connections-exhausted") });
 		if (this.connections.summary) setStatusTone(root.createDiv({ text: this.connections.summary }), "success");
 		if (result.suggestions.length) new ButtonComponent(root).setButtonText(this.t("connections-add")).setDisabled(this.connections.writing || this.connections.active || !result.suggestions.some(item => item.selected && !item.added)).onClick(() => { void this.connections.addSelected(); }).buttonEl.addClass("ai-helper-connections-add", "mod-cta");
 		if (result.partial) setStatusTone(root.createDiv({ text: this.t("search-partial") }), "warning");

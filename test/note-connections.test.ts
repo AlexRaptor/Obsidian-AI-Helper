@@ -521,3 +521,97 @@ it('пустые индексированные заметки не скрыва
 	expect(env.root.getText()).toContain('Индекс неполный');
 	expect(env.requests).toHaveLength(0); await env.chat.onClose();
 });
+
+function cards(root: TestElement): TestElement[] {
+	return [...(root.classes.has('ai-helper-connection') ? [root] : []), ...root.children.flatMap(cards)];
+}
+it('продолжает фиксированный поиск порциями полезных связей и сохраняет накопленный выбор', async () => {
+	const notes = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`Примеры/Приём-${i}.md`, 'Проверяйте знания через неделю.']));
+	let count = 0;
+	const env = await setup({ source: sourceText, notes: { ...notes, 'Заметки/Мысль.md': sourceText }, settings: { connectionSuggestionCount: '2' }, completion: async body => {
+		const id = JSON.parse(body.messages.at(-1).content).candidate.id;
+		return ++count === 2 ? Response.json({ choices: [{ message: { content: JSON.stringify({ candidate: id, explanation: null }) }, finish_reason: 'stop' }] }) : answer(id);
+	} });
+	await env.run(); expect(cards(env.root)).toHaveLength(2); expect(env.requests).toHaveLength(3);
+	cards(env.root)[0].find('ai-helper-connection-select').click();
+	cards(env.root)[1].find('ai-helper-connection-reject').click();
+	env.plugin.settings.connectionSuggestionCount = '20';
+	const embeddingCount = env.embeddings.length;
+	env.root.find('ai-helper-connections-more').click();
+	await vi.waitFor(() => expect(cards(env.root)).toHaveLength(4));
+	expect(cards(env.root)[0].getText()).toContain('Снять выбор'); expect(cards(env.root)[1].getText()).toContain('Вернуть');
+	cards(env.root)[2].find('ai-helper-connection-select').click();
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 2'));
+	expect(env.files.get('Заметки/Мысль.md')!.match(/^- \[\[/gm)).toHaveLength(2);
+	env.root.find('ai-helper-connections-more').click();
+	await vi.waitFor(() => expect(cards(env.root)).toHaveLength(5));
+	expect(env.root.getText()).toContain('Больше предложений в этом поиске нет');
+	expect(env.embeddings).toHaveLength(embeddingCount);
+	expect(new Set(env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path)).size).toBe(6);
+	expect(env.root.getText()).toContain('Добавлено'); await env.chat.onClose();
+});
+
+it.each(['ошибка', 'отмена'] as const)('не публикует незавершённую порцию: %s, повтор не теряет кандидатов', async mode => {
+	const pending = deferred<Response>(); let attempt = 0;
+	const env = await setup({ settings: { connectionSuggestionCount: '2' }, notes: {
+		'Примеры/А.md': 'Активное вспоминание через день.', 'Примеры/Б.md': 'Повторение через неделю.', 'Примеры/В.md': 'Проверка усвоения материала.', 'Примеры/Г.md': 'Продолжение обучения.',
+	}, completion: async body => {
+		const id = JSON.parse(body.messages.at(-1).content).candidate.id;
+		attempt++;
+		if (attempt === 4) return mode === 'отмена' ? pending.promise : Response.json({ error: 'Недоступно' }, { status: 503 });
+		return answer(id);
+	} });
+	await env.run(); cards(env.root)[0].find('ai-helper-connection-select').click();
+	const more = env.root.find('ai-helper-connections-more'); more.click(); more.click();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(4));
+	expect(cards(env.root)).toHaveLength(2);
+	if (mode === 'отмена') env.root.find('ai-helper-connections-cancel').click();
+	else await vi.waitFor(() => expect(env.root.getText()).toContain('Модель диалога недоступна'));
+	expect(cards(env.root)[0].getText()).toContain('Снять выбор');
+	env.root.find('ai-helper-connections-more').click();
+	await vi.waitFor(() => expect(cards(env.root)).toHaveLength(4));
+	pending.resolve(answer('c4', 'Позднее объяснение отменённой порции не должно появиться.'));
+	await new Promise(resolve => setTimeout(resolve, 25));
+	expect(env.root.getText()).not.toContain('Позднее объяснение');
+	expect(cards(env.root)[0].getText()).toContain('Снять выбор');
+	const paths = env.requests.map(body => JSON.parse(body.messages.at(-1).content).candidate.path);
+	expect(paths.slice(2, 4)).toEqual(paths.slice(4, 6));
+	expect(new Set(cards(env.root).map(card => card.find('ai-helper-connection-link').getText())).size).toBe(4);
+	env.root.find('ai-helper-connections-more').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Больше предложений в этом поиске нет'));
+	expect(cards(env.root)).toHaveLength(5); await env.chat.onClose();
+});
+
+it('поздний ответ отменённой порции не завершает новую попытку', async () => {
+	const old = deferred<Response>(), current = deferred<Response>(); let count = 0;
+	const env = await setup({ settings: { connectionSuggestionCount: '1' }, notes: { 'Примеры/А.md': 'Проверка знаний через неделю.' }, completion: async body => {
+		count++; if (count === 2) return old.promise; if (count === 3) return current.promise;
+		return answer(JSON.parse(body.messages.at(-1).content).candidate.id);
+	} });
+	await env.run(); env.root.find('ai-helper-connections-more').click();
+	await vi.waitFor(() => expect(env.requests).toHaveLength(2)); env.root.find('ai-helper-connections-cancel').click();
+	env.root.find('ai-helper-connections-more').click(); await vi.waitFor(() => expect(env.requests).toHaveLength(3));
+	old.resolve(answer('c2', 'Старый результат отменённой попытки не должен появиться.'));
+	await new Promise(resolve => setTimeout(resolve, 25));
+	expect(cards(env.root)).toHaveLength(1); expect(env.root.getText()).toContain('Поиск полезных связей');
+	expect(env.root.find('ai-helper-connections-more').disabled).toBe(true);
+	current.resolve(answer('c2')); await vi.waitFor(() => expect(cards(env.root)).toHaveLength(2));
+	expect(env.root.getText()).not.toContain('Старый результат'); await env.chat.onClose();
+});
+
+it('фиксирует размер при запуске и допускает обычный диалог между порциями', async () => {
+	const first = deferred<Response>(); let count = 0;
+	const env = await setup({ settings: { connectionSuggestionCount: '1' }, notes: { 'Примеры/А.md': 'Проверяйте усвоенное.' }, completion: async body => {
+		if (++count === 1) return first.promise;
+		if (body.messages[0].content === 'СЕКРЕТ ОБЫЧНОГО ДИАЛОГА') return Response.json({ choices: [{ message: { content: 'Можно обсудить повторение.' }, finish_reason: 'stop' }] });
+		return answer(JSON.parse(body.messages.at(-1).content).candidate.id);
+	} });
+	env.commands.get('find-note-connections')!(); await vi.waitFor(() => expect(env.requests).toHaveLength(1));
+	env.plugin.settings.connectionSuggestionCount = '20'; first.resolve(answer('c1'));
+	await vi.waitFor(() => expect(cards(env.root)).toHaveLength(1));
+	env.root.find('ai-helper-input').value = 'Обсудим повторение'; env.root.find('ai-helper-send').click();
+	await vi.waitFor(() => expect(env.chat.getMessages().at(-1)?.content).toBe('Можно обсудить повторение.'));
+	env.root.find('ai-helper-connections-more').click(); await vi.waitFor(() => expect(cards(env.root)).toHaveLength(2));
+	expect(env.root.getText()).toContain('Больше предложений в этом поиске нет'); await env.chat.onClose();
+});

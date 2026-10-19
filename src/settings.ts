@@ -20,7 +20,12 @@ import {
 	type LocaleKey,
 } from "./i18n";
 
+export function isValidConnectionCount(value: unknown): value is string {
+	return typeof value === "string" && /^(?:[1-9]|1[0-9]|20)$/.test(value);
+}
+
 export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
+	connectionSuggestionCount: string;
 	translationFolderMode: string;
 	translationFolder: string;
 	translationLanguage: string;
@@ -52,6 +57,7 @@ export interface AiHelperSettings extends EmbeddingConnection, FragmentOptions {
 
 export const DEFAULT_SETTINGS: AiHelperSettings = {
 	...DEFAULT_FRAGMENT_OPTIONS,
+	connectionSuggestionCount: "5",
 	translationFolderMode: "original",
 	translationFolder: "",
 	translationLanguage: "English",
@@ -167,6 +173,9 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					this.row("search-retry", undefined, setting => { setting.addButton(button => button.setButtonText(this.t("search-retry")).onClick(async () => { try { await this.plugin.noteSearch.resume(true); } catch { /* Status displays the error. */ } })); }),
 				]),
 				this.group("settings-group-search-results", [
+					{ name: this.t("connections-count"), desc: this.t("connections-count-desc"), control: {
+						type: "text", key: "connectionSuggestionCount", validate: value => { if (!isValidConnectionCount(value)) return this.t("connections-count-invalid"); },
+					} },
 					this.row("setting-search-min-similarity", "setting-search-min-similarity-desc", setting => this.renderSimilarity(setting)),
 					{ name: this.t("setting-source-budget"), desc: this.t("setting-source-budget-desc"), control: {
 						type: "text", key: "noteSourceBudget", validate: value => { if (sourceBudgetBytes(value) === undefined) return this.t("setting-source-budget-invalid"); },
@@ -297,6 +306,7 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 			if (typeof value !== "string" || typeof this.getControlValue(key) !== "string") return;
 			let normalized = ["systemPrompt", "translationPrompt", "translationSuffix"].includes(key) ? value : value.trim();
 			if (key === "translationLanguage" && !normalized) return;
+			if (key === "connectionSuggestionCount" && !isValidConnectionCount(value)) return;
 			if (key === "noteSourceBudget" && sourceBudgetBytes(value) === undefined) return;
 			if (key === "responseWait") { const parsed = parseResponseWait(value); if (!parsed.valid) return; normalized = parsed.value; }
 			Object.assign(this.plugin.settings, { [key]: normalized });

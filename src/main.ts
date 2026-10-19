@@ -1,3 +1,4 @@
+import { isValidConnectionCount } from "./settings";
 import type { NoteConnections } from "./note-connections";
 import { ConversationModel } from "./conversation-model";
 import { NoteTranslation } from "./note-translation";
@@ -274,6 +275,7 @@ export class AiHelperPlugin extends Plugin {
 		if (!["local", "file"].includes(this.settings.indexStorageMode)) this.settings.indexStorageMode = "local";
 		if (typeof this.settings.indexStorageGeneration !== "string") this.settings.indexStorageGeneration = "";
 		if (sourceBudgetBytes(this.settings.noteSourceBudget) === undefined) this.settings.noteSourceBudget = DEFAULT_SETTINGS.noteSourceBudget;
+		if (!isValidConnectionCount(this.settings.connectionSuggestionCount)) this.settings.connectionSuggestionCount = DEFAULT_SETTINGS.connectionSuggestionCount;
 		this.settings.similarityAppearance = normalizeSimilarityAppearance(this.settings.similarityAppearance);
 		if (!isValidFragmentOptions(this.settings)) Object.assign(this.settings, DEFAULT_FRAGMENT_OPTIONS);
 		if (!isValidNoteUpdateDelay(this.settings.noteUpdateDelaySeconds)) this.settings.noteUpdateDelaySeconds = DEFAULT_SETTINGS.noteUpdateDelaySeconds;
