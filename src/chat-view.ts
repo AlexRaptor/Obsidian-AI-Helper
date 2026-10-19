@@ -314,8 +314,9 @@ export class ChatView extends ItemView implements HoverParent {
 			if (suggestion.skipped) setStatusTone(card.createDiv({ text: this.t(suggestion.skipped) }), "warning");
 			if (suggestion.added) card.createSpan({ cls: "ai-helper-connection-added", text: this.t("connections-added") });
 			else {
-				new ButtonComponent(card).setButtonText(this.t(suggestion.selected ? "connections-unselect" : "connections-select")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion)).buttonEl.addClass("ai-helper-connection-select");
-				new ButtonComponent(card).setButtonText(this.t(suggestion.rejected ? "connections-restore" : "connections-reject")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion, true)).buttonEl.addClass("ai-helper-connection-reject");
+				const actions = card.createDiv({ cls: "ai-helper-button-group" });
+				new ButtonComponent(actions).setButtonText(this.t(suggestion.selected ? "connections-unselect" : "connections-select")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion)).buttonEl.addClass("ai-helper-connection-select");
+				new ButtonComponent(actions).setButtonText(this.t(suggestion.rejected ? "connections-restore" : "connections-reject")).setDisabled(this.connections.writing).onClick(() => this.connections.select(suggestion, true)).buttonEl.addClass("ai-helper-connection-reject");
 			}
 			for (const [index, fragment] of suggestion.fragments.entries()) {
 				const details = card.createEl("details", { cls: "ai-helper-source" });

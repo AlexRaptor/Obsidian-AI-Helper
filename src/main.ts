@@ -20,7 +20,6 @@ import { DEFAULT_FRAGMENT_OPTIONS, isValidFragmentOptions } from "./note-fragmen
 import { createNoteSearchConnection, isEmbeddingConfigured } from "./note-search";
 import { createNoteSearch, sourceBudgetBytes, NoteSearchError, isValidMinimumSimilarity, isValidNoteUpdateDelay, type NoteSearch, type IndexStorageMode } from "./note-index";
 import { normalizeSimilarityAppearance } from "./similarity-appearance";
-import { StorageProbeModal } from "./storage-probe-modal";
 import { createContextWindowConnection } from "./context-window";
 
 import { chatEditorSelection } from "./editor-selection";
@@ -222,11 +221,6 @@ export class AiHelperPlugin extends Plugin {
 		this.settingsTab = new AiHelperSettingsTab(this.app, this);
 		this.addSettingTab(this.settingsTab);
 		this.addCommand({ id: "retry-note-updates", name: this.t("search-retry"), callback: () => { void this.resumeNoteIndex(); } });
-		this.addCommand({
-			id: "local-storage-probe",
-			name: this.t("probe-title"),
-			callback: () => new StorageProbeModal(this.app).open(),
-		});
 		this.addCommand({
 			id: "index-active-note", name: this.t("search-index"),
 			callback: () => { void this.indexActiveNote(); },

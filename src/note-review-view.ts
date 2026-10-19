@@ -442,10 +442,11 @@ export class NoteReviewView extends ItemView implements HoverParent {
 			item.createEl("h3", { text: source.folderPath });
 			item.createEl("p", { text: explanation });
 			const allowOld = this.stale;
-			const move = item.createEl("button", { cls: this.stale ? "ai-helper-review-move-old" : "ai-helper-review-move", text: this.plugin.t(this.stale ? "review-move-old" : "review-move") });
+			const actions = item.createDiv({ cls: "ai-helper-review-actions" });
+			const move = actions.createEl("button", { cls: this.stale ? "ai-helper-review-move-old" : "ai-helper-review-move", text: this.plugin.t(this.stale ? "review-move-old" : "review-move") });
 			move.disabled = this.moving || !!this.request;
 			move.addEventListener("click", () => { void this.move(candidate, allowOld); });
-			const link = item.createEl("a", { cls: "internal-link ai-helper-review-source", text: source.path, attr: { href: "#", "data-href": source.path } });
+			const link = actions.createEl("a", { cls: "internal-link ai-helper-review-source", text: source.path, attr: { href: "#", "data-href": source.path } });
 			let hovered = false;
 			link.addEventListener("mouseleave", () => { hovered = false; });
 			link.addEventListener("mouseover", event => {

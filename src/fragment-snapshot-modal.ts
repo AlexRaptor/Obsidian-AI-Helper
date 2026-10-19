@@ -26,10 +26,11 @@ export class FragmentSnapshotModal extends Modal {
 		this.contentEl.createEl("p", { cls: "ai-helper-fragment-path", text: this.snapshot.path });
 		this.contentEl.createEl("pre", { cls: "ai-helper-fragment-text", text: this.snapshot.markdown });
 		this.status = this.contentEl.createEl("p", { cls: "ai-helper-fragment-status", attr: { role: "status" } });
-		this.openButton = this.contentEl.createEl("button", { cls: "ai-helper-fragment-open", text: this.t("fragment-view-open"), attr: { type: "button" } });
+		const actions = this.contentEl.createDiv({ cls: "modal-button-container ai-helper-button-group" });
+		this.openButton = actions.createEl("button", { cls: "ai-helper-fragment-open", text: this.t("fragment-view-open"), attr: { type: "button" } });
 		this.openButton.addEventListener("click", () => { void this.openOriginal(); });
 		this.refreshAvailability();
-		this.closeButton = this.contentEl.createEl("button", { cls: "ai-helper-fragment-close", text: this.t("fragment-view-close"), attr: { type: "button" } });
+		this.closeButton = actions.createEl("button", { cls: "ai-helper-fragment-close", text: this.t("fragment-view-close"), attr: { type: "button" } });
 		this.closeButton.addEventListener("click", () => this.close());
 	}
 
