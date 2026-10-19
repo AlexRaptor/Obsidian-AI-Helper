@@ -84,15 +84,18 @@ export class NoteConnections {
 			this.fileRevisions.set(file, (this.fileRevisions.get(file) ?? 0) + 1);
 			const result = this.result;
 			if (file !== result?.file || this.writing) return;
+			const expected = result.text;
 			void plugin.app.vault.read(result.file).then(text => {
 				if (this.result !== result || this.writing) return;
-				try { this.sourceCheck(result, text); } catch { this.invalidateSource(); }
-			}).catch(() => { if (this.result === result) this.invalidateSource(); });
+				// An earlier read can complete after our own write advanced the version.
+				if (result.text !== expected && text === expected) return;
+				try { this.sourceVersionCheck(result, text); } catch { this.invalidateSource(); }
+			}).catch(() => { if (this.result === result && !this.writing && result.text === expected) this.invalidateSource(); });
 		}));
 		if (plugin.app.workspace.on) plugin.registerEvent(plugin.app.workspace.on('editor-change', (_editor, view) => {
 			const result = this.result;
 			if (!result || view.file !== result.file || this.writing) return;
-			try { this.sourceCheck(result, _editor.getValue()); } catch { this.invalidateSource(); }
+			try { this.sourceVersionCheck(result, _editor.getValue()); } catch { this.invalidateSource(); }
 		}));
 	}
 	private invalidateSource(): void {
@@ -139,18 +142,27 @@ export class NoteConnections {
 	private editorsMatch(file: TFile, text: string): boolean {
 		return this.views(file).every(view => (view.getMode() === 'source' ? view.editor.getValue() : view.getViewData()) === text);
 	}
-	private sourceCheck(result: ConnectionResult, text: string): void {
+	// Event notifications describe one buffer at a time; other leaves may still be syncing.
+	private sourceVersionCheck(result: ConnectionResult, text: string): void {
 		const { file } = result;
 		result.path = file.path;
 		// A rejected process promise can still have persisted exactly our own text.
 		// Recognizing that text permits a deduplicated retry without claiming success.
-		if (!result.stale && this.attemptedWrite?.result === result && text === this.attemptedWrite.text && this.editorsMatch(file, text)) {
+		if (!result.stale && this.attemptedWrite?.result === result && text === this.attemptedWrite.text) {
 			result.text = text; this.attemptedWrite = undefined;
 		}
-		if (result.stale || this.plugin.app.vault.getFileByPath(file.path) !== file || text !== result.text || !this.editorsMatch(file, text) || !this.plugin.noteSearch.isAllowed(file.path)) {
+		if (result.stale || this.plugin.app.vault.getFileByPath(file.path) !== file || text !== result.text || !this.plugin.noteSearch.isAllowed(file.path)) {
 			result.stale = true; throw new Error('source-changed');
 		}
 	}
+	// Before writing, every open editor must agree with the checked vault text.
+	private sourceCheck(result: ConnectionResult, text: string): void {
+		this.sourceVersionCheck(result, text);
+		if (!this.editorsMatch(result.file, text)) {
+			result.stale = true; throw new Error('source-changed');
+		}
+	}
+
 	private candidateReason(snapshot?: CandidateSnapshot): LocaleKey | undefined {
 		if (!snapshot || this.plugin.app.vault.getFileByPath(snapshot.file.path) !== snapshot.file) return 'connections-target-deleted';
 		if (!this.plugin.noteSearch.isAllowed(snapshot.file.path)) return 'connections-target-excluded';

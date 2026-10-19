@@ -922,3 +922,63 @@ it('событие изменения кандидата между провер
 	expect(env.files.get('Заметки/Мысль.md')).toBe(sourceText); expect(env.root.getText()).toContain('содержимое кандидата изменилось');
 	await env.chat.onClose();
 });
+
+it.each(['редактор', 'хранилище'])('отложенная синхронизация двух редакторов после собственного добавления позволяет добавить оставшуюся связь: %s', async event => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Продолжение активного вспоминания.' } }); await env.run();
+	moveNote(env, 'Заметки/Мысль.md', 'Работа/Обучение новое.md');
+	const file = env.editor.file;
+	let secondText = sourceText;
+	const secondView = Object.assign(Object.create(MarkdownView.prototype), { file, getMode: () => 'source', editor: { getValue: () => secondText } });
+	const leaves = env.app.workspace.getLeavesOfType.bind(env.app.workspace);
+	vi.spyOn(env.app.workspace, 'getLeavesOfType').mockImplementation(type => type === 'markdown' ? [...leaves(type), { view: secondView } as WorkspaceLeaf] : leaves(type));
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	// Notifications may arrive before the other leaf has synchronized.
+	if (event === 'редактор') env.events.get('editor-change')!(env.editor.editor, env.editor);
+	else { env.emitVault('modify', file); await new Promise(resolve => setTimeout(resolve, 0)); }
+	secondText = env.files.get(file.path)!;
+	env.events.get('editor-change')!(secondView.editor, secondView);
+	env.root.find('ai-helper-connection-select').click();
+	expect(env.root.getText()).not.toContain('Исходная заметка или её редактор изменились');
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(false);
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.files.get(file.path)).toContain('[[Примеры/Продолжение]]'));
+	expect(env.files.get(file.path)!.match(/ai-helper:related-notes:start/g)).toHaveLength(1);
+	expect(env.files.get(file.path)!.match(/\[\[Примеры\/Практика\]\]/g)).toHaveLength(1);
+	await env.chat.onClose();
+});
+
+it('чтение события хранилища, начавшееся до собственного добавления, не блокирует следующую связь', async () => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Продолжение активного вспоминания.' } }); await env.run();
+	const pending = deferred<string>();
+	vi.mocked(env.app.vault.read).mockImplementationOnce(() => pending.promise);
+	env.emitVault('modify', env.editor.file);
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	pending.resolve(sourceText); await new Promise(resolve => setTimeout(resolve, 0));
+	env.root.find('ai-helper-connection-select').click();
+	expect(env.root.getText()).not.toContain('Исходная заметка или её редактор изменились');
+	env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.files.get('Заметки/Мысль.md')).toContain('[[Примеры/Продолжение]]'));
+	await env.chat.onClose();
+});
+
+it.each(['событие редактора', 'проверка перед записью', 'событие хранилища'])('после собственного добавления настоящая правка во второй панели или хранилище блокирует весь остаток: %s', async mode => {
+	const env = await setup({ notes: { 'Заметки/Мысль.md': sourceText, 'Примеры/Продолжение.md': 'Продолжение активного вспоминания.' } }); await env.run();
+	env.root.find('ai-helper-connection-select').click(); env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Добавлено связей: 1'));
+	const saved = env.files.get('Заметки/Мысль.md')!;
+	const edited = saved + '\nПравка пользователя после добавления.';
+	const secondView = Object.assign(Object.create(MarkdownView.prototype), { file: env.editor.file, getMode: () => 'source', editor: { getValue: () => edited } });
+	const leaves = env.app.workspace.getLeavesOfType.bind(env.app.workspace);
+	vi.spyOn(env.app.workspace, 'getLeavesOfType').mockImplementation(type => type === 'markdown' ? [...leaves(type), { view: secondView } as WorkspaceLeaf] : leaves(type));
+	if (mode === 'событие редактора') env.events.get('editor-change')!(secondView.editor, secondView);
+	if (mode === 'событие хранилища') { env.files.set('Заметки/Мысль.md', edited); env.emitVault('modify', env.editor.file); await new Promise(resolve => setTimeout(resolve, 0)); }
+	env.root.find('ai-helper-connection-select').click();
+	if (mode === 'проверка перед записью') env.root.find('ai-helper-connections-add').click();
+	await vi.waitFor(() => expect(env.root.getText()).toContain('Исходная заметка или её редактор изменились'));
+	expect(env.root.find('ai-helper-connections-add').disabled).toBe(true);
+	expect(env.files.get('Заметки/Мысль.md')).toBe(mode === 'событие хранилища' ? edited : saved);
+	expect(secondView.editor.getValue()).toBe(edited);
+	expect(env.files.get('Заметки/Мысль.md')).not.toContain('[[Примеры/Продолжение]]'); await env.chat.onClose();
+});
