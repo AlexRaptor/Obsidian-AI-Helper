@@ -300,7 +300,9 @@ export class ChatNoteAction {
 		if (action.name !== "create_note" && action.name !== "export_chat") throw new Error(this.t("action-invalid"));
 		const { title, content, folder } = action;
 		const name = title.replace(/\.md$/i, "");
-		const parent = folder === undefined ? this.app.fileManager.getNewFileParent(this.activePath).path : folder as string;
+		const destination = folder === undefined ? this.app.fileManager.getNewFileParent(this.activePath).path : folder as string;
+		// Obsidian represents the vault root as "/"; file paths inside it are relative.
+		const parent = destination === "/" ? "" : destination;
 		const valid = (part: string) => !!part && part === part.trim() && !/[\\/:*?"<>|\u0000-\u001f\u007f\[\]#^]/u.test(part) && !/[. ]$/u.test(part)
 			&& !/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/iu.test(part) && new TextEncoder().encode(part).length <= 240;
 		if (!valid(name) || parent && parent.split("/").some(part => !valid(part)) ||

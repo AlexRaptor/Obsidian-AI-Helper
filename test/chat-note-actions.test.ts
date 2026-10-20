@@ -7,6 +7,15 @@ import { setup, json, call } from "./helpers/chat-note-actions";
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 afterEach(() => { vi.restoreAllMocks(); });
 
+it.each(["/", ""])("создаёт заметку в корне хранилища, возвращённом Obsidian как %j", async root => {
+	const s = await setup([json({ tool_calls: [call({ title: "Итог без поиска", content: "Едем поездом, дату ещё не выбрали." })] }, "tool_calls")]);
+	s.parent.mockImplementation(() => s.folder(root));
+	await s.ask("Создай заметку «Итог без поиска». Используй только это поручение: едем поездом, дату ещё не выбрали. Дополнительный поиск не выполняй.");
+	expect(s.texts.get("Итог без поиска.md")).toBe("Едем поездом, дату ещё не выбрали.");
+	expect(s.root.getText()).not.toContain(t("action-path"));
+	await s.view.onClose();
+});
+
 it("создаёт заметку по полному вызову без текста и передаёт фактический результат модели", async () => {
 	const s = await setup([json({ content: null, tool_calls: [call()] }, "tool_calls")]);
 	await s.ask("Сохрани итоговое решение в новую заметку");
