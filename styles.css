@@ -381,6 +381,35 @@
 	justify-content: center;
 }
 
+.ai-helper-input-row .ai-helper-stop {
+	position: relative;
+	overflow: visible;
+}
+
+.ai-helper-stop::after {
+	content: "";
+	position: absolute;
+	inset: -4px;
+	border: 2px solid transparent;
+	border-top-color: var(--interactive-accent);
+	border-right-color: var(--interactive-accent);
+	border-radius: 50%;
+	pointer-events: none;
+	animation: ai-helper-thinking-ring 1.5s linear infinite;
+}
+
+@keyframes ai-helper-thinking-ring {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ai-helper-stop::after {
+		animation: none;
+	}
+}
+
 .ai-helper-stopped {
 	color: var(--color-blue);
 	font-style: italic;
