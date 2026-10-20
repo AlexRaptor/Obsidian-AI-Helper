@@ -140,10 +140,11 @@ export class ChatNoteAction {
 			for (const call of calls) {
 				if (!call.id || ids.has(call.id) || !tools.some(tool => tool.function.name === call.function.name)) throw new Error(this.t("action-invalid"));
 				ids.add(call.id); this.validate(call);
-				const prior = this.journal.calls.get(call.id);
+				const prior = call.function.name === "search_notes" ? undefined : this.journal.calls.get(call.id);
 				if (prior && prior.signature !== this.signature(call, true)) throw new Error(this.t("action-single"));
 			}
-			const steps = calls.map(call => this.logicalStep(call));
+			// Search has no write side effects and must not reserve write-journal identifiers.
+			const steps = calls.map(call => call.function.name === "search_notes" ? `${this.stepId}-search-${round + 1}` : this.logicalStep(call));
 			callsUsed += calls.length;
 			const protocol: ChatMessage[] = [{ role: "assistant", content: response.value.content, tool_calls: calls },
 				...calls.map(call => ({ role: "tool" as const, content: JSON.stringify({ status: "not_executed", message: this.t("action-not-executed") }), tool_call_id: call.id }))];
@@ -158,8 +159,8 @@ export class ChatNoteAction {
 				try {
 					this.check();
 					started = true;
-					const entry = this.journal.steps.get(this.currentStep)!;
-					const duplicate = !!entry.result;
+					const entry = this.journal.steps.get(this.currentStep);
+					const duplicate = !!entry?.result;
 					const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
 					const continuation = !duplicate && (call.function.name === "edit_note" || call.function.name === "insert_note")
 						? this.targets.continuation(String(args.targetId), String(args.expectedVersion)) : undefined;
@@ -175,7 +176,8 @@ export class ChatNoteAction {
 					protocol[index + 1].content = JSON.stringify(result);
 					if (call.function.name !== "read_note" && call.function.name !== "search_notes" && !duplicate) record(result as NoteActionResult);
 				} catch (error) {
-					if (error instanceof NoteWriteUnknown) this.journal.steps.get(this.currentStep)!.verify = error.verify;
+					const entry = this.journal.steps.get(this.currentStep);
+					if (error instanceof NoteWriteUnknown && entry) entry.verify = error.verify;
 					const message = started ? (error instanceof Error ? error.message : String(error)) : `${this.t("action-not-executed")} ${call.function.name}`;
 					const result = error instanceof NoteEditConflict ? error.result : { status: "error" as const, stepId: this.currentStep,
 						message, createdFolders: error instanceof NoteCreationError ? error.createdFolders : [] };

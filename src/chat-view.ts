@@ -878,6 +878,7 @@ export class ChatView extends ItemView implements HoverParent {
 		const model = settings.model;
 
 		let recordedAction = false;
+		let materialSearchAttempted = false;
 		const targets = this.noteTargets ??= new ChatNoteTargets(this.app, key => this.t(key));
 		if (canCreate) targets.captureCursor(this.plugin.currentMarkdownView);
 		const checkAction = () => {
@@ -997,6 +998,7 @@ export class ChatView extends ItemView implements HoverParent {
 		const action = new ChatNoteAction(this.app, activePath,
 			`action-${++this.actionSequence}`, checkAction, key => this.t(key), targets, journal, retry,
 			isEmbeddingConfigured(settings) && this.plugin.noteSearch ? async query => {
+				materialSearchAttempted = true;
 				try {
 					const context = await prepareSearch(query);
 					checkAction();
@@ -1010,7 +1012,7 @@ export class ChatView extends ItemView implements HoverParent {
 			effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value), (result, protocol) => {
 				if (!this.messages.includes(pending)) return;
 				// Discussion leaves the last instruction available; late writes cannot replace a newer journal.
-				if (journal.steps.size && turn >= this.journalTurn) { this.actionJournal = journal; this.journalTurn = turn; }
+				if ((journal.steps.size || materialSearchAttempted) && turn >= this.journalTurn) { this.actionJournal = journal; this.journalTurn = turn; }
 				const fact = result.status === "completed" ? `${this.t(result.operation === "edit" ? "action-edited" : "action-created")} ${result.link}${result.requiresReattachment ? ` ${this.t("action-fragment-result-changed")}` : ""}`
 					: result.status === "conflict" ? result.message : [result.message, result.createdFolders.length ? `${this.t("action-folders")} ${result.createdFolders.join(", ")}` : ""].filter(Boolean).join(" ");
 				if (!recordedAction) this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);

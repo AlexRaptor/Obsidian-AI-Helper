@@ -25,7 +25,7 @@ async function start(responses: Array<Response | Promise<Response>>) {
 	s.add("Материалы.md", "Для поездки купите билет заранее.");
 	noteSearch.configure(s.plugin.settings); await noteSearch.index("Материалы.md"); embeddings.length = 0;
 	s.plugin.noteSearch = noteSearch;
-	return { ...s, embeddings, failSearch() { offline = true; }, unrelatedSearch() { unrelated = true; } };
+	return { ...s, embeddings, failSearch() { offline = true; }, restoreSearch() { offline = false; }, unrelatedSearch() { unrelated = true; } };
 }
 it("по явному поручению находит материалы и создаёт заметку при выключенном переключателе", async () => {
 	const s = await start([search(), json({ tool_calls: [call({ title: "Поездка", content: "Купить билет заранее." })] }, "tool_calls")]);
@@ -154,5 +154,56 @@ it("не записывает подготовленный заранее тек
 	expect(s.create).not.toHaveBeenCalled();
 	expect(s.embeddings).toHaveLength(0);
 	expect(s.root.getText()).toContain(t("action-invalid"));
+	await s.view.onClose();
+});
+
+it.each(["идентификатор вызова", "идентификатор шага"])("поиск не занимает %s последующей правки фрагмента", async mode => {
+	const searchArgs = { query: "подготовка поездки", ...(mode === "идентификатор шага" ? { stepId: "шаг-1" } : {}) };
+	const response = deferred<Response>();
+	const s = await start([json({ tool_calls: [call(searchArgs, "вызов-1", "search_notes")] }, "tool_calls"), response.promise]);
+	const file = s.add("План.md", "Не передавать соседей.\nКупить билет.\nНе изменять конец."), e = editor(s, file);
+	e.select({ line: 1, ch: 0 }, { line: 1, ch: 13 });
+	s.view.app.workspace.getLeavesOfType = (() => [{ view: e.view }]) as any;
+	Object.assign(s.plugin, { currentMarkdownView: e.view });
+	s.input.value = "Найди материалы и дополни только прикреплённый фрагмент @@";
+	s.input.dispatchEvent({ type: "input", inputType: "insertText" } as any); s.input.keydown("Tab"); s.send.click();
+	await vi.waitFor(() => expect(s.requests).toHaveLength(2));
+	const snapshot = JSON.parse(s.requests[0].messages.at(-1).content.split("Note attachments (context data):\n")[1])[0];
+	response.resolve(json({ tool_calls: [call({ targetId: snapshot.targetId, expectedVersion: snapshot.version, kind: "fragment", content: "Купить билет заранее.",
+		...(mode === "идентификатор шага" ? { stepId: "шаг-1" } : {}) }, mode === "идентификатор вызова" ? "вызов-1" : "вызов-2", "edit_note")] }, "tool_calls"));
+	await s.settle();
+	expect(s.root.getText()).not.toContain(t("action-single"));
+	expect(e.text).toBe("Не передавать соседей.\nКупить билет заранее.\nНе изменять конец.");
+	expect(e.transaction).toHaveBeenCalledTimes(1);
+	expect(JSON.stringify(s.requests)).not.toContain("Не передавать соседей.");
+	await s.view.onClose();
+});
+
+it("поиск с повторным идентификатором не снимает защиту выполненного шага записи", async () => {
+	const s = await start([
+		json({ tool_calls: [call({ title: "Первый итог", content: "Первое решение.", stepId: "запись" }, "вызов-1")] }, "tool_calls"),
+		json({ tool_calls: [call({ query: "поездка", stepId: "запись" }, "вызов-1", "search_notes")] }, "tool_calls"),
+		json({ tool_calls: [call({ title: "Второй итог", content: "Второе решение.", stepId: "запись" }, "вызов-1")] }, "tool_calls"),
+	]);
+	await s.ask("Создай первый итог, затем найди материалы о поездке и создай второй итог.");
+	expect(s.texts.get("Входящие/Первый итог.md")).toBe("Первое решение.");
+	expect(s.texts.has("Входящие/Второй итог.md")).toBe(false);
+	expect(s.create).toHaveBeenCalledTimes(1);
+	expect(s.root.getText()).toContain(t("action-single"));
+	await s.view.onClose();
+});
+
+it("повтор после ошибки нового поиска не использует журнал прежнего поручения", async () => {
+	const create = () => json({ tool_calls: [call({ title: "Итог", content: "Купить билет заранее." }, "запись")] }, "tool_calls");
+	const s = await start([create(), json({ content: "Сохранено." }), search(), search(), create(), json({ content: "Сохранено ещё раз." })]);
+	await s.ask("Создай заметку Итог: Купить билет заранее.");
+	s.failSearch();
+	await s.ask("Найди материалы о поездке и создай ещё одну заметку Итог с тем же содержимым.");
+	expect(s.create).toHaveBeenCalledTimes(1);
+	expect(s.root.getText()).toContain(t("search-failed"));
+	s.restoreSearch();
+	await s.ask("Попробуй снова");
+	expect(s.texts.get("Входящие/Итог (2).md")).toBe("Купить билет заранее.");
+	expect(s.create).toHaveBeenCalledTimes(2);
 	await s.view.onClose();
 });
