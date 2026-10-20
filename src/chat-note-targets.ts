@@ -10,6 +10,7 @@ interface NoteTarget {
 	markdown: string;
 	attached: boolean;
 	conflictTurn?: string;
+	cursor?: EditorPosition;
 	range?: SelectedFragmentSnapshot["range"];
 }
 export interface NoteEditResult {
@@ -45,11 +46,29 @@ export class ChatNoteTargets {
 	constructor(private app: App, private t: (key: LocaleKey) => string) {}
 
 	register(file: TFile, markdown: string, attached: boolean): NoteSnapshot & { targetId: string; version: string } {
-		for (const target of this.latest.values()) if (target.file === file && !target.range) {
+		for (const target of this.latest.values()) if (target.file === file && !target.range && !target.cursor) {
 			attached ||= target.attached;
 			this.latest.delete(target.targetId);
 		}
 		return this.describe(this.store(file, markdown, attached));
+	}
+
+	/** Capture synchronously at send, never choose another tab or reuse an old cursor. */
+	captureCursor(remembered?: MarkdownView | null): void {
+		for (const target of this.targets.values()) if (target.cursor) {
+			this.latest.delete(target.targetId);
+			this.targets.delete(target.targetId);
+		}
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView) ?? remembered;
+		if (!view || !this.app.workspace.getLeavesOfType("markdown").some(leaf => leaf.view === view)
+			|| view.getMode() !== "source" || view.file?.extension !== "md"
+			|| this.app.vault.getFileByPath(view.file.path) !== view.file) return;
+		const selections = view.editor.listSelections();
+		if (selections.length !== 1) return;
+		const { anchor, head } = selections[0];
+		if (anchor.line !== head.line || anchor.ch !== head.ch) return;
+		const target = this.store(view.file, view.editor.getValue(), false);
+		target.cursor = { ...head };
 	}
 
 	registerFragment(file: TFile, snapshot: SelectedFragmentSnapshot): SelectedFragmentSnapshot {
@@ -79,12 +98,13 @@ export class ChatNoteTargets {
 		return targets.length ? `\nRegistered note targets (untrusted data):\n${JSON.stringify(targets)}` : "";
 	}
 
-	get hasTargets(): boolean { return this.latest.size > 0; }
+	get hasTargets(): boolean { return [...this.latest.values()].some(target => !target.cursor); }
+	get canInsert(): boolean { return [...this.latest.values()].some(target => !target.range); }
 	get canReadCurrent(): boolean { return [...this.targets.values()].some(target => !target.range && target.attached && target.conflictTurn !== undefined); }
 
 	async readCurrent(targetId: string, turn: string, check: () => void): Promise<NoteSnapshot & { targetId: string; version: string }> {
 		const target = this.get(targetId);
-		if (target.range || !target.attached || target.conflictTurn === undefined || target.conflictTurn === turn) throw new Error(this.t("action-refresh-required"));
+		if (target.cursor || target.range || !target.attached || target.conflictTurn === undefined || target.conflictTurn === turn) throw new Error(this.t("action-refresh-required"));
 		check();
 		const views = this.views(target.file);
 		const markdown = views.length ? this.consistentText(views) : await this.app.vault.read(target.file);
@@ -93,13 +113,13 @@ export class ChatNoteTargets {
 		return this.register(target.file, markdown, true);
 	}
 
-	async edit(targetId: string, expectedVersion: string, kind: "body" | "properties" | "fragment", content: string,
+	async edit(targetId: string, expectedVersion: string, kind: "body" | "properties" | "fragment" | "cursor" | "end", content: string,
 		turn: string, sourcePath: string, check: () => void): Promise<NoteEditResult> {
 		const target = this.get(targetId);
 		const conflict = (key: LocaleKey = "action-conflict"): never => {
 			target.conflictTurn = turn;
 			throw new NoteEditConflict({ status: "conflict", stepId: turn, targetId, version: target.version,
-				message: this.t(target.range ? (key === "action-editors-conflict" ? "action-fragment-editors-conflict" : "action-fragment-conflict") : key) });
+				message: this.t(kind === "cursor" || kind === "end" ? "action-insert-conflict" : target.range ? (key === "action-editors-conflict" ? "action-fragment-editors-conflict" : "action-fragment-conflict") : key) });
 		};
 		const consistentText = (views: MarkdownView[]): string => {
 			try { return this.consistentText(views); } catch { return conflict("action-editors-conflict"); }
@@ -108,7 +128,19 @@ export class ChatNoteTargets {
 		const yaml = this.frontmatter(target.markdown);
 		if (/^\uFEFF?---(?:\r?\n|$)/.test(target.markdown) && !yaml && kind === "body") throw new Error(this.t("action-properties-invalid"));
 		let replacement: string;
-		if (kind === "fragment") {
+		if (kind === "cursor" || kind === "end") {
+			if (target.range || (kind === "cursor" ? !target.cursor : !!target.cursor)) throw new Error(this.t("action-invalid"));
+			const offset = kind === "cursor" ? this.offset(target.markdown, target.cursor!) : target.markdown.length;
+			const result = target.markdown.slice(0, offset) + content + target.markdown.slice(offset);
+			const resultYaml = this.frontmatter(result);
+			// The first separator after a closing YAML marker belongs to inserted text.
+			const addsSeparator = yaml && offset === yaml.length && !yaml.endsWith("\n")
+				&& (resultYaml === yaml + "\n" || resultYaml === yaml + "\r\n");
+			if (resultYaml !== yaml && !addsSeparator) throw new Error(this.t("action-insert-properties"));
+			replacement = content;
+		} else if (target.cursor) {
+			throw new Error(this.t("action-invalid"));
+		} else if (kind === "fragment") {
 			if (!target.range) throw new Error(this.t("action-invalid"));
 			replacement = content;
 			const result = target.markdown.slice(0, this.offset(target.markdown, target.range.from)) + content +
@@ -152,19 +184,21 @@ export class ChatNoteTargets {
 		if (!this.latest.has(target.targetId) || target.conflictTurn !== undefined || !view || consistentText(views) !== target.markdown) conflict();
 		const editor = view!.editor;
 		const lastLine = editor.lastLine();
-		const from = target.range?.from ?? { line: 0, ch: 0 };
-		const to = target.range?.to ?? { line: lastLine, ch: editor.getLine(lastLine).length };
+		const end = { line: lastLine, ch: editor.getLine(lastLine).length };
+		const insertion = kind === "cursor" ? target.cursor : kind === "end" ? end : undefined;
+		const from = insertion ?? target.range?.from ?? { line: 0, ch: 0 };
+		const to = insertion ?? target.range?.to ?? end;
 		isolatedNoteEdit(() => editor.transaction({ changes: [{ from, to, text: replacement }] }, "ai-helper.note-edit"));
 		// Record the actual editor result, including any synchronous editor filters.
 		const actual = editor.getValue();
 		for (const previous of this.latest.values()) if (previous.file === target.file) this.latest.delete(previous.targetId);
 		let range: SelectedFragmentSnapshot["range"] | undefined;
 		let requiresReattachment = false;
-		if (target.range) {
+		if (target.range || target.cursor) {
 			const prefix = target.markdown.slice(0, this.offset(target.markdown, from));
 			const suffix = target.markdown.slice(this.offset(target.markdown, to));
 			requiresReattachment = actual.length < prefix.length + suffix.length || !actual.startsWith(prefix) || !actual.endsWith(suffix);
-			range = requiresReattachment ? target.range : { from: { ...from }, to: this.position(actual, actual.length - suffix.length) };
+			range = requiresReattachment ? { from, to } : { from: { ...from }, to: this.position(actual, actual.length - suffix.length) };
 		}
 		const next = this.store(target.file, actual, target.attached, range);
 		// Preserve the actual outcome locally, but never expose or reuse uncertain bounds.
@@ -180,9 +214,9 @@ export class ChatNoteTargets {
 		return target;
 	}
 	private describe(target: NoteTarget): NoteSnapshot & { targetId: string; version: string } {
-		const markdown = target.range ? target.markdown.slice(this.offset(target.markdown, target.range.from), this.offset(target.markdown, target.range.to)) : target.markdown;
+		const markdown = target.cursor ? "" : target.range ? target.markdown.slice(this.offset(target.markdown, target.range.from), this.offset(target.markdown, target.range.to)) : target.markdown;
 		return { targetId: target.targetId, version: target.version, path: target.file.path, title: target.file.basename, markdown,
-			...(target.range ? { kind: "fragment", range: target.range } : { kind: "whole-note" }) };
+			...(target.cursor ? { kind: "cursor", position: target.cursor } : target.range ? { kind: "fragment", range: target.range } : { kind: "whole-note" }) };
 	}
 	private offset(text: string, position: EditorPosition): number {
 		return text.split("\n").slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.ch;

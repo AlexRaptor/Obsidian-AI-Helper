@@ -850,6 +850,7 @@ export class ChatView extends ItemView implements HoverParent {
 
 		let recordedAction = false;
 		const targets = this.noteTargets ??= new ChatNoteTargets(this.app, key => this.t(key));
+		if (canCreate) targets.captureCursor(this.plugin.currentMarkdownView);
 		const checkAction = () => {
 			if (this.activeRequest !== request || this.plugin.isUnloading) throw new Error(this.t("chat-stopped"));
 		};

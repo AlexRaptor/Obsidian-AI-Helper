@@ -21,6 +21,7 @@ docs/testing/**/__pycache__/
 docs/testing/**/notes-vault/
 docs/testing/chat-note-actions/whole-note-vault/
 docs/testing/chat-note-actions/fragment-vault/
+docs/testing/chat-note-actions/insertion-vault/
 
 # Хранилище ручной проверки безопасного добавления связей
 docs/testing/note-connections-save/editor-sync-vault/
