@@ -257,7 +257,7 @@ export class MessageInput {
 
 	private confirmMention(): void {
 		if (this.fragmentMode && !this.fragment) return;
-		const fragment = this.fragmentMode ? this.fragment : null;
+		let fragment = this.fragmentMode ? this.fragment : null;
 		// Confirm exactly the proposal the user saw; changed selection requires a new @@.
 		if (fragment) {
 			const current = this.selectedFragment();
@@ -268,6 +268,8 @@ export class MessageInput {
 				this.closeSuggestion();
 				return;
 			}
+			// Keep the displayed selection, with its full local base captured NOW.
+			fragment = current;
 		}
 		const file = this.fragmentMode ? this.markdownFiles().find(file => file.path === fragment?.path) : this.candidates[this.selectedIndex];
 		if (!file || (this.fragmentMode && !fragment)) return;

@@ -14,6 +14,10 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"action-fragment-editors-conflict": "Open editors disagree about the note text. Nothing was written. Resolve the differences. Then select and attach the fragment again.",
+	"action-fragment-result-changed": "The editor changed text outside the fragment. The edit was applied, but its result cannot be reused automatically. Select and attach the fragment again.",
+	"action-fragment-conflict": "The note changed since the fragment was attached. Nothing was written. Select and attach the fragment again before giving a new instruction.",
+	"action-fragment-properties": "A fragment edit cannot change the note properties. Nothing was written.",
 	"action-edited": "Note edited:",
 	"action-conflict": "The note changed. Nothing was written. Give a new instruction to use the current whole note, or attach it again.",
 	"action-editors-conflict": "Open editors disagree about the note text. Nothing was written. Resolve the differences and give a new instruction using the current note.",
@@ -462,6 +466,10 @@ export const en = {
 } as const;
 
 export const ru = {
+	"action-fragment-editors-conflict": "Открытые редакторы содержат разные версии заметки. Ничего не записано. Устраните расхождения. Затем заново выделите и прикрепите фрагмент.",
+	"action-fragment-result-changed": "Редактор изменил текст за пределами фрагмента. Правка применена, но её результат нельзя использовать автоматически. Выделите и прикрепите фрагмент заново.",
+	"action-fragment-conflict": "Заметка изменилась после прикрепления фрагмента. Ничего не записано. Выделите и прикрепите фрагмент заново перед новым поручением.",
+	"action-fragment-properties": "Правка фрагмента не может менять свойства заметки. Ничего не записано.",
 	"action-edited": "Изменена заметка:",
 	"action-conflict": "Заметка изменилась. Ничего не записано. Дайте новое поручение взять актуальную целую заметку или прикрепите её заново.",
 	"action-editors-conflict": "Открытые редакторы содержат разные версии заметки. Ничего не записано. Устраните расхождения и дайте новое поручение взять актуальную заметку.",

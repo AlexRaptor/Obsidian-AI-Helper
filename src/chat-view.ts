@@ -6,7 +6,7 @@ import { isEmbeddingConfigured } from "./note-search";
 import type { AiHelperPlugin } from "./main";
 import { getLanguage, type LocaleKey } from "./i18n";
 import { Conversation, type Message, type Role } from "./conversation";
-import { readNoteSnapshot, readSelectedFragment, snapshotMessage, type NoteSnapshot, type SelectedFragmentSnapshot } from "./note-attachments";
+import { readNoteSnapshot, readSelectedFragment, snapshotMessage, fragmentWriteBasis, type NoteSnapshot, type SelectedFragmentSnapshot } from "./note-attachments";
 import { FragmentSnapshotModal } from "./fragment-snapshot-modal";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
@@ -767,7 +767,7 @@ export class ChatView extends ItemView implements HoverParent {
 		if (this.thinking) return;
 		const draft = this.messageInput.getDraft();
 		const text = draftText(draft).trim();
-		const fragmentKeys = new Set<string>();
+		const fragmentKeys = new Map<TFile, Set<string>>();
 		const mentionedFiles = new Set<TFile>();
 		// Deduplicate within this message only, preserving the first mention's order.
 		const attachments = draft.parts.flatMap(part => {
@@ -778,9 +778,11 @@ export class ChatView extends ItemView implements HoverParent {
 				return [part];
 			}
 			const { path, range: { from, to }, markdown } = part.fragment;
-			const key = JSON.stringify([path, from.line, from.ch, to.line, to.ch, markdown]);
-			if (fragmentKeys.has(key)) return [];
-			fragmentKeys.add(key);
+			const key = JSON.stringify([path, from.line, from.ch, to.line, to.ch, markdown, fragmentWriteBasis(part.fragment)?.markdown]);
+			const keys = fragmentKeys.get(part.file) ?? new Set<string>();
+			if (keys.has(key)) return [];
+			keys.add(key);
+			fragmentKeys.set(part.file, keys);
 			return [part];
 		});
 		const files = attachments.flatMap(part => part.fragment ? [] : [part.file]);
@@ -856,7 +858,7 @@ export class ChatView extends ItemView implements HoverParent {
 		const runAction = (streamText = true) => action.run(serverClient, serverUrl, model, requestMessages, streamText ? params : { ...params, onText: undefined },
 			effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value), (result, protocol) => {
 				if (!this.messages.includes(pending)) return;
-				const fact = result.status === "completed" ? `${this.t(result.operation === "edit" ? "action-edited" : "action-created")} ${result.link}`
+				const fact = result.status === "completed" ? `${this.t(result.operation === "edit" ? "action-edited" : "action-created")} ${result.link}${result.requiresReattachment ? ` ${this.t("action-fragment-result-changed")}` : ""}`
 					: result.status === "conflict" ? result.message : `${this.t("action-folders")} ${result.createdFolders.join(", ")}`;
 				this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);
 				this.conversation.addMessage({ role: "model", content: fact, toolMessages: protocol }, turn);
@@ -891,7 +893,7 @@ export class ChatView extends ItemView implements HoverParent {
 								catch { throw this.unavailableNote(file); }
 							}));
 							if (this.activeRequest !== request) return;
-							snapshots = attachments.map(part => part.fragment ?? fileSnapshots[files.indexOf(part.file)]);
+							snapshots = attachments.map(part => part.fragment ? (canCreate ? targets.registerFragment(part.file, part.fragment) : part.fragment) : fileSnapshots[files.indexOf(part.file)]);
 							requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
 							const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
 							if (window === undefined) throw new Error(this.t("mention-window-unknown"));

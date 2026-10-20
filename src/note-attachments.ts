@@ -5,6 +5,13 @@ export interface SelectedFragmentSnapshot extends NoteSnapshot {
 	range: { from: EditorPosition; to: EditorPosition };
 }
 
+const fragmentBases = new WeakMap<SelectedFragmentSnapshot, { file: TFile; markdown: string }>();
+
+/** The complete validation base stays local and is never a snapshot property. */
+export function fragmentWriteBasis(snapshot: SelectedFragmentSnapshot): { file: TFile; markdown: string } | undefined {
+	return fragmentBases.get(snapshot);
+}
+
 export function fragmentLabel(snapshot: SelectedFragmentSnapshot): string {
 	const { from, to } = snapshot.range;
 	const first = from.line + 1;
@@ -29,7 +36,9 @@ export function readSelectedFragment(app: App, remembered?: MarkdownView | null)
 	const to = ordered ? head : anchor;
 	const markdown = view.editor.getRange(from, to);
 	if (!markdown.trim()) return null;
-	return { title: view.file.basename, path: view.file.path, markdown, range: { from: { ...from }, to: { ...to } } };
+	const snapshot: SelectedFragmentSnapshot = { title: view.file.basename, path: view.file.path, markdown, range: { from: { ...from }, to: { ...to } } };
+	fragmentBases.set(snapshot, { file: view.file, markdown: view.editor.getValue() });
+	return snapshot;
 }
 
 /** Read the bound file, preferring its live editor over the saved vault text. */
