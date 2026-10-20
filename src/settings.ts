@@ -204,7 +204,8 @@ export class AiHelperSettingsTab extends PluginSettingTab {
 					return this.renderFolderContextSize(setting);
 				}),
 			] },
-			{ type: "page", name: this.t("translation-title"), items: [
+			{ type: "page", name: this.t("translation-title"), desc: this.t("settings-page-translation-desc"), items: [
+				{ name: "", desc: this.t("settings-page-translation-desc") },
 				this.group("translation-title", [
 					{ name: this.t("translation-language"), desc: this.t("translation-language-desc"), control: { type: "text", key: "translationLanguage", validate: value => { if (!value.trim()) return this.t("translation-config"); } } },
 					this.row("translation-prompt", "translation-prompt-desc", setting => {
