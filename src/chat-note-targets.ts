@@ -50,6 +50,11 @@ export class ChatNoteTargets {
 	private sequence = 0;
 	constructor(private app: App, private t: (key: LocaleKey) => string) {}
 
+	/** Current file paths, independent of the frozen fragment snapshots. */
+	get fragmentPaths(): ReadonlySet<string> {
+		return new Set([...this.targets.values()].filter(target => target.range).map(target => target.file.path));
+	}
+
 	register(file: TFile, markdown: string, attached: boolean): NoteSnapshot & { targetId: string; version: string } {
 		for (const target of this.latest.values()) if (target.file === file && !target.range && !target.cursor) {
 			attached ||= target.attached;

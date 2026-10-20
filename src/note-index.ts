@@ -755,7 +755,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 		async search(question: string, signal?: AbortSignal): Promise<NoteSource | null> {
 			return (await this.searchSources(question, signal))[0] ?? null;
 		},
-		async searchSources(question: string, signal?: AbortSignal, budgetBytes = DEFAULT_SOURCE_BUDGET_BYTES): Promise<NoteSource[]> {
+		async searchSources(question: string, signal?: AbortSignal, budgetBytes = DEFAULT_SOURCE_BUDGET_BYTES, excludedPaths: ReadonlySet<string> = new Set()): Promise<NoteSource[]> {
 			if (!isEmbeddingConfigured(connection)) throw new NoteSearchError("search-setup-required");
 			const version = revision;
 			const threshold = minimumSimilarity;
@@ -789,6 +789,7 @@ export function createNoteSearch(environment: NoteSearchEnvironment) {
 			const queryMagnitude = Math.hypot(...vector);
 			const candidates: Array<{ source: NoteSource; rank: number }> = [];
 			for (const note of current) {
+				if (excludedPaths.has(note.path)) continue;
 				for (const fragment of note.fragments) {
 					if (vector.length !== fragment.vector.length) throw new NoteSearchError("search-rebuild");
 					const similarity = vector.reduce((sum, value, index) => sum + value * fragment.vector[index], 0) / (queryMagnitude * Math.hypot(...fragment.vector));
