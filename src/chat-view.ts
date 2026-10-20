@@ -11,6 +11,7 @@ import { FragmentSnapshotModal } from "./fragment-snapshot-modal";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import { ChatNoteTargets } from "./chat-note-targets";
+import { exportAttachments, type ChatExportMessage } from "./chat-export";
 import { ChatNoteAction, NoteActionJournal } from "./chat-note-actions";
 import type { ChatMessage, ChatCompletionResult, ServerClientResult } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
@@ -31,7 +32,7 @@ function formatNumber(value: number): string {
 	return value.toLocaleString(getLanguage());
 }
 
-type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; sources?: ChatSource[]; folderSearch?: boolean; draft?: DisplayDraft };
+type DisplayMessage = { role: Role; content: string; kind: "text" | "thinking" | "error"; error?: string; stopped?: boolean; sources?: ChatSource[]; folderSearch?: boolean; draft?: DisplayDraft; snapshots?: NoteSnapshot[] };
 type MessageRow = {
 	div: HTMLElement; branch: HTMLElement; body: HTMLElement; content: HTMLElement;
 	revision: number; signature: string; component?: Component;
@@ -811,7 +812,15 @@ export class ChatView extends ItemView implements HoverParent {
 				originalFile: part.file,
 			}),
 		} : undefined;
-		this.messages.push({ role: "user", content: text, kind: "text", draft: displayDraft });
+		const userMessage: DisplayMessage = { role: "user", content: text, kind: "text", draft: displayDraft };
+		this.messages.push(userMessage);
+		const transcript: ChatExportMessage[] = this.messages.filter(message => message.kind !== "thinking").map(message => ({
+			role: message.role, content: message.kind === "error" ? "" : message.content,
+			stopped: message.stopped || message.kind === "text" && !!message.error,
+			error: message.kind === "error" ? message.content : message.error,
+			attachments: message.snapshots ? exportAttachments(message.snapshots) : message.draft?.parts.flatMap(part => typeof part === "string" ? [] :
+				[{ title: part.fragment?.title ?? part.file.basename, path: part.fragment?.path ?? part.file.path, ...(part.fragment ? { markdown: part.fragment.markdown } : {}) }]),
+		}));
 		const pending: DisplayMessage = { role: "model", content: this.t("thinking"), kind: "thinking" };
 		this.messages.push(pending);
 		this.activeMessage = pending;
@@ -861,6 +870,7 @@ export class ChatView extends ItemView implements HoverParent {
 		};
 		const retry = /^(?:пожалуйста[,\s]+|please[,\s]+)?(?:попробуй(?:те)?\s+(?:ещ[её]\s+раз|снова)|повтори(?:те)?|продолжи(?:те)?|ещ[её]\s+раз|try again|retry|continue)(?:$|[\s,.!?])/iu.test(text);
 		const journal = retry && this.actionJournal ? this.actionJournal : new NoteActionJournal();
+		journal.transcript ??= transcript;
 		const action = new ChatNoteAction(this.app, activePath,
 			`action-${++this.actionSequence}`, checkAction, key => this.t(key), targets, journal, retry);
 		const runAction = (streamText = true) => action.run(serverClient, serverUrl, model, requestMessages, streamText ? params : { ...params, onText: undefined },
@@ -904,6 +914,8 @@ export class ChatView extends ItemView implements HoverParent {
 							}));
 							if (this.activeRequest !== request) return;
 							snapshots = attachments.map(part => part.fragment ? (canCreate ? targets.registerFragment(part.file, part.fragment) : part.fragment) : fileSnapshots[files.indexOf(part.file)]);
+							userMessage.snapshots = snapshots;
+							transcript[transcript.length - 1].attachments = exportAttachments(snapshots);
 							requestMessages[requestMessages.length - 1].content = snapshotMessage(text, snapshots);
 							const window = effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value);
 							if (window === undefined) throw new Error(this.t("mention-window-unknown"));

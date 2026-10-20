@@ -13,7 +13,7 @@ it("создаёт заметку по полному вызову без тек
 	expect(s.texts.get("Входящие/Решение.md")).toBe("# Решение\nЕдем поездом.\n\n## Открытые вопросы\nДата отправления.");
 	expect(s.parent).toHaveBeenCalledWith("Проекты/Обсуждение.md");
 	expect(s.root.getText()).toContain("[[Входящие/Решение.md]]");
-	expect(s.requests[0].tools.map((tool: any) => tool.function.name)).toEqual(["create_note"]);
+	expect(s.requests[0].tools.map((tool: any) => tool.function.name)).toEqual(["create_note", "export_chat"]);
 	expect(s.requests[1].messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "вызов-1" });
 	expect(JSON.parse(s.requests[1].messages.at(-1).content)).toMatchObject({ status: "completed", path: "Входящие/Решение.md", stepId: expect.any(String) });
 	await s.view.onClose();

@@ -75,7 +75,7 @@ it("последующая смена выделения не меняет пр�
 it("выделение без явного прикрепления не объявляет инструмент редактирования", async () => {
 	const s = await start([json({ content: "Прикрепите нужный фрагмент через @@." })]);
 	await s.ask("Замени выделенный фрагмент");
-	expect(s.requests[0].tools.map((tool: any) => tool.function.name)).toEqual(["create_note"]);
+	expect(s.requests[0].tools.map((tool: any) => tool.function.name)).toEqual(["create_note", "export_chat"]);
 	expect(s.e.transaction).not.toHaveBeenCalled(); await s.view.onClose();
 });
 

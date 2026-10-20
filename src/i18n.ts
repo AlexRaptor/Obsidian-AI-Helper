@@ -14,6 +14,10 @@ export const LOCALE_NAMES: Record<Locale, string> = {
 };
 
 export const en = {
+	"export-user": "User",
+	"export-model": "Model",
+	"export-attachment": "Attachment",
+	"export-incomplete": "Incomplete response; only received text is included.",
 	"action-fragment-editors-conflict": "Open editors disagree about the note text. Nothing was written. Resolve the differences. Then select and attach the fragment again.",
 	"action-fragment-result-changed": "The editor changed text outside the fragment. The edit was applied, but its result cannot be reused automatically. Select and attach the fragment again.",
 	"action-fragment-conflict": "The note changed since the fragment was attached. Nothing was written. Select and attach the fragment again before giving a new instruction.",
@@ -471,6 +475,10 @@ export const en = {
 } as const;
 
 export const ru = {
+	"export-user": "Пользователь",
+	"export-model": "Модель",
+	"export-attachment": "Вложение",
+	"export-incomplete": "Незавершённый ответ; включён только полученный текст.",
 	"action-fragment-editors-conflict": "Открытые редакторы содержат разные версии заметки. Ничего не записано. Устраните расхождения. Затем заново выделите и прикрепите фрагмент.",
 	"action-fragment-result-changed": "Редактор изменил текст за пределами фрагмента. Правка применена, но её результат нельзя использовать автоматически. Выделите и прикрепите фрагмент заново.",
 	"action-fragment-conflict": "Заметка изменилась после прикрепления фрагмента. Ничего не записано. Выделите и прикрепите фрагмент заново перед новым поручением.",
