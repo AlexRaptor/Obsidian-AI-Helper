@@ -430,11 +430,15 @@ export function createServerClient(fetchImpl: ClientFetch): ServerClient {
 								if (!isRecord(raw) || typeof raw.index !== "number" || !Number.isSafeInteger(raw.index) || raw.index < 0 || raw.index > 31 ||
 									raw.function !== undefined && !isRecord(raw.function)) throw new ClientError("Invalid function delta.", "invalid-stream");
 								const previous = toolDeltas.get(raw.index) ?? { id: "", type: "", function: { name: "", arguments: "" } };
-								for (const field of ["id", "type"] as const) {
-									if (raw[field] !== undefined) {
-										if (typeof raw[field] !== "string") throw new ClientError("Invalid function delta.", "invalid-stream");
-										previous[field] += raw[field];
-									}
+								if (raw.id !== undefined) {
+									if (typeof raw.id !== "string") throw new ClientError("Invalid function delta.", "invalid-stream");
+									previous.id += raw.id;
+								}
+								if (raw.type !== undefined) {
+									if (raw.type !== "function") throw new ClientError("Invalid function delta.", "invalid-stream");
+									// type is metadata, not a streamed text fragment. Some servers
+									// repeat it on argument deltas; keep one validated value.
+									previous.type = raw.type;
 								}
 								if (isRecord(raw.function)) for (const field of ["name", "arguments"] as const) {
 									if (raw.function[field] !== undefined) {

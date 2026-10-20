@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { EditorState } from "@codemirror/state";
 import { history, undo, redo } from "@codemirror/commands";
 import { noteEditHistory } from "../src/note-edit-history";
@@ -355,5 +356,49 @@ it("результат правки и сообщение конфликта д�
 	s.input.value = "Ещё сократи заметку"; s.send.click(); await vi.waitFor(() => expect(s.requests).toHaveLength(3));
 	second.resolve(json({ tool_calls: [edit(next)] }, "tool_calls")); await s.settle();
 	expect(s.root.getText()).toContain("The note changed. Nothing was written.");
+	await s.view.onClose();
+});
+
+
+it("принимает реальный поток qwen с повторным type функции в части аргументов", async () => {
+	const trace = readFileSync(new URL("./fixtures/chat-note-actions/qwen-repeated-tool-type.sse", import.meta.url), "utf8");
+	const response = deferred<Response>();
+	const s = await start([response.promise],
+		"---\nстатус: черновик\n---\n# План\nМы собираемся отправиться в поездку на поезде.\nРучная метка до правки.");
+	attach(s, "Исправь фразу про поездку, остальное сохрани в @План"); s.send.click();
+	await vi.waitFor(() => expect(s.requests).toHaveLength(1));
+	// Rebind only the captured opaque IDs; preserve the server's delta structure.
+	const replay = trace.split("\n").map(line => {
+		if (!line.startsWith("data: {")) return line;
+		const event = JSON.parse(line.slice(6));
+		for (const choice of event.choices ?? []) for (const delta of choice.delta?.tool_calls ?? []) {
+			if (!delta.function?.arguments) continue;
+			const args = JSON.parse(delta.function.arguments);
+			delta.function.arguments = JSON.stringify({ ...args, targetId: target(s).targetId, expectedVersion: target(s).version });
+		}
+		return `data: ${JSON.stringify(event)}`;
+	}).join("\n");
+	response.resolve(new Response(replay, { headers: { "Content-Type": "text/event-stream" } })); await s.settle();
+	expect(s.root.getText()).not.toContain(t("chat-invalid-stream"));
+	expect(s.e.text).toBe("---\nстатус: черновик\n---\n# План\nМы поедем на поезде.\nРучная метка до правки.");
+	expect(s.e.transaction).toHaveBeenCalledTimes(1);
+	await s.view.onClose();
+});
+
+it.each([
+	["смена типа", "function", "other"],
+	["склеенный тип вместо метаданных", "func", "tion"],
+] as const)("отклоняет повреждённый поток: %s", async (_label, firstType, secondType) => {
+	const response = deferred<Response>(); const s = await start([response.promise]);
+	attach(s); s.send.click(); await vi.waitFor(() => expect(s.requests).toHaveLength(1));
+	const args = JSON.stringify({ targetId: target(s).targetId, expectedVersion: target(s).version, kind: "body", content: "Новый текст" });
+	const events = [
+		{ delta: { tool_calls: [{ index: 0, id: "проверка", type: firstType, function: { name: "edit_note", arguments: "" } }] } },
+		{ delta: { tool_calls: [{ index: 0, type: secondType, function: { arguments: args } }] } },
+		{ delta: {}, finish_reason: "tool_calls" },
+	];
+	response.resolve(new Response(events.map(choice => `data: ${JSON.stringify({ choices: [choice] })}\n\n`).join(""), { headers: { "Content-Type": "text/event-stream" } }));
+	await s.settle(); expect(s.e.transaction).not.toHaveBeenCalled(); expect(s.e.text).toBe(original);
+	expect(s.root.getText()).toContain(t("chat-invalid-stream"));
 	await s.view.onClose();
 });

@@ -1,0 +1,6 @@
+data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"757097630","type":"function","function":{"name":"edit_note","arguments":""}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"{\"targetId\":\"note-1\",\"expectedVersion\":\"version-1\",\"kind\":\"body\",\"content\":\"# План\\nМы поедем на поезде.\\nРучная метка до правки.\"}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
