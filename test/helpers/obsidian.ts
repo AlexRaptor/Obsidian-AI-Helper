@@ -93,6 +93,13 @@ export class TestElement {
 		}
 		throw new Error(`Element not found: ${cls}`);
 	}
+	querySelectorAll(selector: string): TestElement[] {
+		const [tag, cls] = selector.split(".");
+		return this.children.flatMap(child => [
+			...(child.tagName.toLowerCase() === tag && (!cls || child.classes.has(cls)) ? [child] : []),
+			...child.querySelectorAll(selector),
+		]);
+	}
 	getText(): string { return this.text + this.children.map((child) => child.getText()).join(""); }
 }
 

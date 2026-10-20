@@ -2,11 +2,35 @@ import { afterEach, expect, it, vi } from "vitest";
 import { setup, json, call } from "./helpers/chat-note-actions";
 import { editor } from "./helpers/chat-note-editor";
 import { setLanguage } from "../src/i18n";
-import { deferred, flushPromises } from "./helpers/obsidian";
+import { MarkdownRenderer, deferred, flushPromises } from "./helpers/obsidian";
 
 vi.mock("obsidian", async () => import("./helpers/obsidian"));
 afterEach(() => { vi.restoreAllMocks(); });
 const saveChat = (args: object = { title: "Переписка" }) => json({ tool_calls: [call(args, "экспорт", "export_chat")] }, "tool_calls");
+
+it("открывает ссылку сохранённого чата и передаёт её в нативный предпросмотр", async () => {
+	const render = MarkdownRenderer.render;
+	vi.spyOn(MarkdownRenderer, "render").mockImplementation(async (app, content, element) => {
+		const match = /\[\[([^\]]+)\]\]/.exec(content);
+		if (!match) return render(app, content, element);
+		element.createEl("a", { cls: "internal-link", text: match[1], attr: { href: match[1], "data-href": match[1] } }).createSpan({ text: " ↗" });
+	});
+	const s = await setup([saveChat()]);
+	const openLinkText = vi.fn(async () => {}), trigger = vi.fn();
+	Object.assign(s.view.app.workspace, { openLinkText, trigger });
+	await s.ask("Сохрани весь чат");
+	const link = s.root.find("internal-link");
+	link.click();
+	expect(openLinkText).toHaveBeenCalledWith("Входящие/Переписка.md", "", false);
+	for (const options of [{ type: "click", ctrlKey: true }, { type: "click", metaKey: true }, { type: "auxclick", button: 1 }]) {
+		link.dispatchEvent({ ...options, preventDefault() {}, stopPropagation() {} } as any);
+		expect(openLinkText).toHaveBeenLastCalledWith("Входящие/Переписка.md", "", true);
+	}
+	const event = { type: "mouseover", stopPropagation() {} };
+	link.dispatchEvent(event);
+	expect(trigger).toHaveBeenCalledWith("hover-link", { event, source: "ai-helper-chat", hoverParent: s.view, targetEl: link, linktext: "Входящие/Переписка.md", sourcePath: "" });
+	await s.view.onClose();
+});
 
 it("сохраняет исходные реплики до команды включительно без пересказа и технического обмена", async () => {
 	const s = await setup([json({ content: "**Поезд**\n\nСамолёт тоже возможен." }), saveChat()]);

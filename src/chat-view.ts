@@ -713,6 +713,21 @@ export class ChatView extends ItemView implements HoverParent {
 				} else if (message.role === "model" && kind === "text") {
 					try { await MarkdownRenderer.render(this.app, content, staging, "", component); }
 					catch { staging.empty(); staging.createEl("pre", { text: content }); }
+					// MarkdownRenderer supplies the anchors; a custom view supplies navigation and hover events.
+					for (const link of Array.from(staging.querySelectorAll<HTMLAnchorElement>("a.internal-link"))) {
+						const linktext = link.getAttribute("data-href") ?? link.getAttribute("href");
+						if (!linktext) continue;
+						const open = (event: MouseEvent) => {
+							event.preventDefault(); event.stopPropagation();
+							void this.app.workspace.openLinkText(linktext, "", Keymap.isModEvent(event));
+						};
+						component.registerDomEvent(link, "click", open);
+						component.registerDomEvent(link, "auxclick", event => { if (event.button === 1) open(event); });
+						component.registerDomEvent(link, "mouseover", event => {
+							event.stopPropagation();
+							this.app.workspace.trigger("hover-link", { event, source: VIEW_TYPE_CHAT, hoverParent: this, targetEl: link, linktext, sourcePath: "" });
+						});
+					}
 				} else if (kind === "error") {
 					staging.createSpan({ cls: "ai-helper-error-prefix", text: this.t("chat-error-prefix") });
 					staging.createSpan({ text: ` ${content}` });
