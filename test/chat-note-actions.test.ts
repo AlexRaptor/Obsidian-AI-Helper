@@ -37,7 +37,7 @@ it("собирает потоковые аргументы целиком; до 
 it("учитывает заданную папку, регистр и конкурентное занятие имени без перезаписи", async () => {
 	const s = await setup([json({ tool_calls: [call({ title: "План.md", folder: "Проекты/Поездка", content: "Новый план" })] }, "tool_calls")]);
 	s.folder("Проекты"); s.add("Проекты/Поездка/план.md", "Старый план");
-	s.create.mockImplementationOnce(async path => { s.add(path, "Конкурентная заметка"); throw new Error("Файл занят"); });
+	s.create.mockImplementationOnce(async path => { s.add(path, "Конкурентная заметка"); throw new Error("EEXIST: файл занят"); });
 	await s.ask("Создай План.md в Проекты/Поездка");
 	expect(s.texts.get("Проекты/Поездка/план.md")).toBe("Старый план");
 	expect(s.texts.get("Проекты/Поездка/План (2).md")).toBe("Конкурентная заметка");
@@ -322,7 +322,7 @@ it.each(["тот же идентификатор с другими аргуме�
 	const s = await setup([json({ tool_calls: [call()] }, "tool_calls"), json({ tool_calls: [repeated] }, "tool_calls")]);
 	await s.ask("Создай заметку");
 	expect(s.texts.size).toBe(1); expect(s.create).toHaveBeenCalledTimes(1);
-	expect(s.root.getText()).toContain(t("action-single"));
+	if (variant !== "новый идентификатор") expect(s.root.getText()).toContain(t("action-single"));
 	await s.view.onClose();
 });
 

@@ -10,6 +10,7 @@ interface NoteTarget {
 	markdown: string;
 	attached: boolean;
 	conflictTurn?: string;
+	previous?: string;
 	cursor?: EditorPosition;
 	range?: SelectedFragmentSnapshot["range"];
 }
@@ -33,6 +34,10 @@ export interface NoteConflictResult {
 	version: string;
 	message: string;
 }
+export class NoteWriteUnknown extends Error {
+	constructor(message: string, readonly verify: () => NoteEditResult | undefined) { super(message); }
+}
+
 export class NoteEditConflict extends Error {
 	constructor(readonly result: NoteConflictResult) { super(result.message); }
 }
@@ -113,6 +118,22 @@ export class ChatNoteTargets {
 		return this.register(target.file, markdown, true);
 	}
 
+	/** A superseded local basis is data for replanning, never permission to retarget a call. */
+	continuation(targetId: string, version: string): NoteSnapshot | undefined {
+		const old = this.targets.get(targetId);
+		if (!old || old.version !== version || old.conflictTurn || this.latest.has(targetId)) return;
+		const next = [...this.latest.values()].find(target => {
+			if (target.file !== old.file || target.conflictTurn) return false;
+			let ancestor = target.previous;
+			while (ancestor) {
+				if (ancestor === old.targetId) return true;
+				ancestor = this.targets.get(ancestor)?.previous;
+			}
+			return false;
+		});
+		return next ? this.describe(next) : undefined;
+	}
+
 	async edit(targetId: string, expectedVersion: string, kind: "body" | "properties" | "fragment" | "cursor" | "end", content: string,
 		turn: string, sourcePath: string, check: () => void): Promise<NoteEditResult> {
 		const target = this.get(targetId);
@@ -188,24 +209,36 @@ export class ChatNoteTargets {
 		const insertion = kind === "cursor" ? target.cursor : kind === "end" ? end : undefined;
 		const from = insertion ?? target.range?.from ?? { line: 0, ch: 0 };
 		const to = insertion ?? target.range?.to ?? end;
-		isolatedNoteEdit(() => editor.transaction({ changes: [{ from, to, text: replacement }] }, "ai-helper.note-edit"));
-		// Record the actual editor result, including any synchronous editor filters.
-		const actual = editor.getValue();
-		for (const previous of this.latest.values()) if (previous.file === target.file) this.latest.delete(previous.targetId);
-		let range: SelectedFragmentSnapshot["range"] | undefined;
-		let requiresReattachment = false;
-		if (target.range || target.cursor) {
-			const prefix = target.markdown.slice(0, this.offset(target.markdown, from));
-			const suffix = target.markdown.slice(this.offset(target.markdown, to));
-			requiresReattachment = actual.length < prefix.length + suffix.length || !actual.startsWith(prefix) || !actual.endsWith(suffix);
-			range = requiresReattachment ? { from, to } : { from: { ...from }, to: this.position(actual, actual.length - suffix.length) };
+		const expected = target.markdown.slice(0, this.offset(target.markdown, from)) + replacement + target.markdown.slice(this.offset(target.markdown, to));
+		const finish = (): NoteEditResult => {
+			// Record the actual editor result, including any synchronous editor filters.
+			const actual = editor.getValue();
+			for (const previous of this.latest.values()) if (previous.file === target.file) this.latest.delete(previous.targetId);
+			let range: SelectedFragmentSnapshot["range"] | undefined;
+			let requiresReattachment = false;
+			if (target.range || target.cursor) {
+				const prefix = target.markdown.slice(0, this.offset(target.markdown, from));
+				const suffix = target.markdown.slice(this.offset(target.markdown, to));
+				requiresReattachment = actual.length < prefix.length + suffix.length || !actual.startsWith(prefix) || !actual.endsWith(suffix);
+				range = requiresReattachment ? { from, to } : { from: { ...from }, to: this.position(actual, actual.length - suffix.length) };
+			}
+			const next = this.store(target.file, actual, target.attached, range);
+			next.previous = target.targetId;
+			// Preserve the actual outcome locally, but never expose or reuse uncertain bounds.
+			if (requiresReattachment) this.latest.delete(next.targetId);
+			return { status: "completed", stepId: turn, targetId: next.targetId, version: next.version,
+				path: target.file.path, name: target.file.basename,
+				link: this.app.fileManager.generateMarkdownLink(target.file, sourcePath), createdFolders: [], operation: "edit", ...(requiresReattachment ? { requiresReattachment: true } : {}) };
+		};
+		try { isolatedNoteEdit(() => editor.transaction({ changes: [{ from, to, text: replacement }] }, "ai-helper.note-edit")); }
+		catch (error) {
+			const actual = editor.getValue();
+			if (actual === expected) return finish();
+			if (actual === target.markdown) throw error;
+			throw new NoteWriteUnknown(this.t("action-unknown"), () =>
+				this.app.vault.getFileByPath(target.file.path) === target.file && editor.getValue() === expected ? finish() : undefined);
 		}
-		const next = this.store(target.file, actual, target.attached, range);
-		// Preserve the actual outcome locally, but never expose or reuse uncertain bounds.
-		if (requiresReattachment) this.latest.delete(next.targetId);
-		return { status: "completed", stepId: turn, targetId: next.targetId, version: next.version,
-			path: target.file.path, name: target.file.basename,
-			link: this.app.fileManager.generateMarkdownLink(target.file, sourcePath), createdFolders: [], operation: "edit", ...(requiresReattachment ? { requiresReattachment: true } : {}) };
+		return finish();
 	}
 
 	private get(targetId: string): NoteTarget {

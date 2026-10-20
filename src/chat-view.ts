@@ -11,7 +11,7 @@ import { FragmentSnapshotModal } from "./fragment-snapshot-modal";
 import { MessageInput, draftText, renderDraft, type DisplayDraft } from "./message-input";
 import { NoteSearchError, NOTE_SEARCH_INSTRUCTION, serializeNoteSources, noteSourceData, sourceBudgetBytes, type NoteSource } from "./note-index";
 import { ChatNoteTargets } from "./chat-note-targets";
-import { ChatNoteAction } from "./chat-note-actions";
+import { ChatNoteAction, NoteActionJournal } from "./chat-note-actions";
 import type { ChatMessage, ChatCompletionResult, ServerClientResult } from "./server-client";
 import { normalizeSimilarityAppearance, similarityColor } from "./similarity-appearance";
 import { effectiveContextWindow } from "./context-window";
@@ -76,6 +76,8 @@ export class ChatView extends ItemView implements HoverParent {
 	private updateTimer: ReturnType<typeof setTimeout> | null = null;
 	private activeRequest: AbortController | null = null;
 	private actionSequence = 0;
+	private actionJournal?: NoteActionJournal;
+	private journalTurn = -1;
 	private noteTargets?: ChatNoteTargets;
 	private releaseChatPriority: (() => void) | null = null;
 	private renderRevision = 0;
@@ -293,6 +295,8 @@ export class ChatView extends ItemView implements HoverParent {
 		this.cancelRequest(false);
 		this.conversation.clear();
 		this.noteTargets = undefined;
+		this.actionJournal = undefined;
+		this.journalTurn = -1;
 		this.messages = [];
 		this.followingMessages = true;
 		this.updateContextIndicators();
@@ -754,6 +758,7 @@ export class ChatView extends ItemView implements HoverParent {
 		this.activeMessage = null;
 		this.clearUpdateTimer();
 		request?.abort();
+		// An in-flight write retains the lease until its actual outcome is recorded.
 		this.releaseChatPriority?.();
 		this.releaseChatPriority = null;
 		this.setThinking(false);
@@ -854,23 +859,27 @@ export class ChatView extends ItemView implements HoverParent {
 		const checkAction = () => {
 			if (this.activeRequest !== request || this.plugin.isUnloading) throw new Error(this.t("chat-stopped"));
 		};
+		const retry = /^(?:пожалуйста[,\s]+|please[,\s]+)?(?:попробуй(?:те)?\s+(?:ещ[её]\s+раз|снова)|повтори(?:те)?|продолжи(?:те)?|ещ[её]\s+раз|try again|retry|continue)(?:$|[\s,.!?])/iu.test(text);
+		const journal = retry && this.actionJournal ? this.actionJournal : new NoteActionJournal();
 		const action = new ChatNoteAction(this.app, activePath,
-			`action-${++this.actionSequence}`, checkAction, key => this.t(key), targets);
+			`action-${++this.actionSequence}`, checkAction, key => this.t(key), targets, journal, retry);
 		const runAction = (streamText = true) => action.run(serverClient, serverUrl, model, requestMessages, streamText ? params : { ...params, onText: undefined },
 			effectiveContextWindow(settings.contextWindow, this.plugin.contextWindowConnection?.value), (result, protocol) => {
 				if (!this.messages.includes(pending)) return;
+				// Discussion leaves the last instruction available; late writes cannot replace a newer journal.
+				if (journal.steps.size && turn >= this.journalTurn) { this.actionJournal = journal; this.journalTurn = turn; }
 				const fact = result.status === "completed" ? `${this.t(result.operation === "edit" ? "action-edited" : "action-created")} ${result.link}${result.requiresReattachment ? ` ${this.t("action-fragment-result-changed")}` : ""}`
-					: result.status === "conflict" ? result.message : `${this.t("action-folders")} ${result.createdFolders.join(", ")}`;
-				this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);
+					: result.status === "conflict" ? result.message : [result.message, result.createdFolders.length ? `${this.t("action-folders")} ${result.createdFolders.join(", ")}` : ""].filter(Boolean).join(" ");
+				if (!recordedAction) this.conversation.addMessage(snapshots.length ? { role: "user", content: text, snapshots } : { role: "user", content: text }, turn);
 				this.conversation.addMessage({ role: "model", content: fact, toolMessages: protocol }, turn);
 				recordedAction = true;
-				if (result.status !== "conflict") this.messages.splice(this.messages.indexOf(pending), 0, { role: "model", content: fact, kind: "text" });
+				if (fact && result.status !== "conflict") this.messages.splice(this.messages.indexOf(pending), 0, { role: "model", content: fact, kind: "text" });
 				void this.renderMessages();
 			});
 		let routed: ServerClientResult<ChatCompletionResult> | undefined;
 
 		const priority = modelLease ?? this.plugin.noteSearch?.acquireChatPriority?.();
-		this.releaseChatPriority = priority?.release ?? null;
+		this.releaseChatPriority = () => { if (!action.isWriting) priority?.release(); };
 		this.setThinking(true);
 		try {
 			await this.renderMessages();
