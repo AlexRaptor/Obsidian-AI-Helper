@@ -39,8 +39,9 @@ it.each(["stop", "broken", "http"])("включает видимую попыт�
 	await s.view.onClose();
 });
 
-it.each([false, true])("экспортирует исторические вложения (полный текст: %s), сохраняя только выделенный фрагмент", async includeAttachments => {
-	const s = await setup([json({ content: "Обсудили заметку." }), json({ content: "Обсудили фрагмент." }), saveChat({ title: "Переписка", includeAttachments })]);
+it.each([false, true])("повторно экспортирует исторические вложения (полный текст: %s), сохраняя только выделенный фрагмент", async includeAttachments => {
+	const s = await setup([json({ content: "Обсудили заметку." }), json({ content: "Обсудили фрагмент." }),
+		saveChat({ title: "Первый экспорт" }), json({ content: "Чат сохранён." }), saveChat({ title: "Переписка", includeAttachments })]);
 	const file = s.add("План.md", "# Исходный полный снимок\nЕдем поездом.");
 	s.input.value = "Обсудим @План";
 	s.input.dispatchEvent({ type: "input", inputType: "insertText" } as any); s.input.keydown("Tab");
@@ -54,6 +55,7 @@ it.each([false, true])("экспортирует исторические вло
 	s.input.dispatchEvent({ type: "input", inputType: "insertText" } as any); s.input.keydown("Tab");
 	e.change("Текст изменён до отправки");
 	s.send.click(); await s.settle();
+	await s.ask("Сохрани весь чат в заметку «Первый экспорт»");
 	s.texts.set(file.path, "Новая версия целой заметки");
 	e.change("Новая версия фрагмента");
 	await s.ask(includeAttachments ? "Сохрани весь чат с полными снимками вложений" : "Сохрани весь чат");
@@ -167,5 +169,24 @@ it("собирает потоковый вызов экспорта целико
 	await flushPromises(); expect(s.texts.size).toBe(0);
 	event({}, "tool_calls"); controller.close(); await s.settle();
 	expect(s.texts.get("Входящие/Переписка.md")).toBe("## Пользователь\n\nСохрани весь чат\n");
+	await s.view.onClose();
+});
+
+it("новая команда после остановленного ответа создаёт отдельный экспорт несмотря на предыдущий сохранённый чат", async () => {
+	let controller!: ReadableStreamDefaultController<Uint8Array>;
+	const stream = new Response(new ReadableStream({ start(value) { controller = value; } }), { headers: { "Content-Type": "text/event-stream" } });
+	const s = await setup([json({ content: "Едем поездом, дата открыта." }), saveChat(), json({ content: "Сохранено." }), stream,
+		saveChat({ title: "С остановкой", folder: "Экспорт" }), json({ content: "Создана новая заметка." })]);
+	await s.ask("Обсудим поездку");
+	await s.ask("Сохрани весь чат в заметку «Переписка»");
+	const first = s.texts.get("Входящие/Переписка.md")!;
+	s.input.value = "Напиши подробный план поездки"; s.send.click(); await flushPromises();
+	controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "Первый день: отправление." } }] })}\n\n`));
+	await flushPromises(); s.send.click();
+	await s.ask("Сохрани весь чат в заметку «С остановкой» в папке «Экспорт».");
+	expect(s.texts.get("Входящие/Переписка.md")).toBe(first);
+	expect(s.texts.get("Экспорт/С остановкой.md")).toContain("Первый день: отправление.");
+	expect(s.texts.get("Экспорт/С остановкой.md")).toContain("Незавершённый ответ");
+	expect(s.root.getText()).toContain("[[Экспорт/С остановкой.md]]");
 	await s.view.onClose();
 });
